@@ -1,0 +1,31 @@
+# =============================================
+# .gitignore - Sistema Escolar EPO 67
+# =============================================
+
+# === macOS ===
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# === Firebase ===
+sistema-escolar-firebase/.firebase/
+sistema-escolar-firebase/node_modules/
+
+# === Editores e IDEs ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === Archivos temporales del sistema ===
+*.tmp
+*.temp
+*.log
+
+# === Backups automáticos (los manuales en _RESPALDOS sí se versionan) ===
+*~backup*
+*.bak

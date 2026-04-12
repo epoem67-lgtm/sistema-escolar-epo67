@@ -1,0 +1,28 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Logo de la escuela - cualquier usuario autenticado puede leer
+    match /school/{allPaths=**} {
+      allow read: if request.auth != null;
+      // Solo admins pueden subir/modificar
+      allow write: if request.auth != null &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+        request.resource.size < 5 * 1024 * 1024 && // Max 5MB
+        request.resource.contentType.matches('image/.*'); // Solo imágenes
+    }
+
+    // Archivos de respaldo y reportes
+    match /reports/{allPaths=**} {
+      allow read: if request.auth != null &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow write: if request.auth != null &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Bloquear todo lo demás
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
