@@ -115,7 +115,9 @@ const App = {
       reports: 'Reportes',
       'users-mgmt': 'Gestión de Usuarios',
       'honor-roll': 'Cuadros de Honor',
-      'grades-admin': 'Calificaciones (Admin)'
+      'grades-admin': 'Consulta Calificaciones',
+      'bitacora': 'Bitácora del Sistema',
+      'captura-progress': 'Monitor de Captura'
     };
     for (const [key, label] of Object.entries(fallbacks)) {
       if (!Router.modules[key]) {
@@ -159,7 +161,7 @@ const Auth = {
           console.log('🏗️ Usuario no encontrado, intentando bootstrap como admin...');
           const adminData = {
             email: firebaseUser.email,
-            displayName: firebaseUser.displayName || 'Administrador',
+            displayName: firebaseUser.displayName || firebaseUser.email.split('@')[0],
             role: 'admin',
             status: 'active',
             createdAt: DB.timestamp(),
@@ -207,16 +209,62 @@ const Auth = {
   },
 
   /**
-   * Login con Google
+   * Estado interno para toggle login/registro
    */
-  async loginWithGoogle() {
+  _isRegisterMode: false,
+
+  /**
+   * Toggle entre modo login y registro
+   */
+  toggleRegister() {
+    this._isRegisterMode = !this._isRegisterMode;
+    const toggle = document.getElementById('toggleAuth');
+    const btn = document.getElementById('btnLogin');
+    if (this._isRegisterMode) {
+      toggle.textContent = '¿Ya tienes cuenta? Inicia sesión';
+      btn.innerHTML = '<span class="material-icons-round" style="font-size:20px;vertical-align:middle;margin-right:6px;">person_add</span> Registrarse';
+    } else {
+      toggle.textContent = '¿No tienes cuenta? Regístrate';
+      btn.innerHTML = '<span class="material-icons-round" style="font-size:20px;vertical-align:middle;margin-right:6px;">login</span> Iniciar Sesión';
+    }
+    document.getElementById('loginError').style.display = 'none';
+  },
+
+  /**
+   * Login o registro con email/password
+   */
+  async loginWithEmail(event) {
+    event.preventDefault();
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+
+    if (!email || !password) {
+      this.showLoginError('Ingresa correo y contraseña');
+      return;
+    }
+
     try {
-      const result = await auth.signInWithPopup(googleProvider);
-      console.log('🔑 Login Google exitoso');
+      if (this._isRegisterMode) {
+        await auth.createUserWithEmailAndPassword(email, password);
+        console.log('🔑 Registro exitoso');
+        DB.audit('crear_usuario', 'usuario', '', { description: `Registro de nuevo usuario: ${email}` });
+      } else {
+        await auth.signInWithEmailAndPassword(email, password);
+        console.log('🔑 Login exitoso');
+        DB.audit('login', 'sesion', '', { description: `Inicio de sesión: ${email}` });
+      }
       // El onAuthStateChanged se encarga del resto
     } catch (error) {
-      console.error('❌ Error en login Google:', error);
-      this.showLoginError(`Error: ${error.message}`);
+      console.error('❌ Error en autenticación:', error);
+      let msg = 'Error de autenticación';
+      if (error.code === 'auth/user-not-found') msg = 'No existe una cuenta con este correo';
+      else if (error.code === 'auth/wrong-password') msg = 'Contraseña incorrecta';
+      else if (error.code === 'auth/email-already-in-use') msg = 'Este correo ya está registrado';
+      else if (error.code === 'auth/weak-password') msg = 'La contraseña debe tener al menos 6 caracteres';
+      else if (error.code === 'auth/invalid-email') msg = 'Correo electrónico inválido';
+      else if (error.code === 'auth/invalid-credential') msg = 'Credenciales inválidas. Verifica tu correo y contraseña';
+      else msg = error.message;
+      this.showLoginError(msg);
     }
   },
 
@@ -225,6 +273,8 @@ const Auth = {
    */
   async logout() {
     try {
+      const logoutEmail = auth.currentUser?.email || '';
+      DB.audit('logout', 'sesion', '', { description: `Cierre de sesión: ${logoutEmail}` });
       await auth.signOut();
       App.currentUser = null;
       Store.invalidateAll();
@@ -273,12 +323,21 @@ const Auth = {
     document.getElementById('userName').textContent = user.displayName || user.email;
     document.getElementById('userRole').textContent = this.getRoleLabel(user.role);
 
+    const avatarEl = document.getElementById('userAvatar');
     if (user.photoURL) {
-      document.getElementById('userAvatar').src = user.photoURL;
+      avatarEl.src = user.photoURL;
+      avatarEl.style.display = '';
     } else {
-      // Avatar por defecto
-      document.getElementById('userAvatar').innerHTML =
-        '<span class="material-icons-round">account_circle</span>';
+      // Ocultar img y mostrar icono por defecto
+      avatarEl.style.display = 'none';
+      // Insertar icono si no existe ya
+      if (!avatarEl.parentElement.querySelector('.avatar-icon')) {
+        const icon = document.createElement('span');
+        icon.className = 'material-icons-round avatar-icon';
+        icon.textContent = 'account_circle';
+        icon.style.cssText = 'font-size:36px; color:var(--color-text-lighter);';
+        avatarEl.parentElement.insertBefore(icon, avatarEl);
+      }
     }
   },
 
@@ -300,6 +359,40 @@ const Router = {
   modules: {},
 
   /**
+   * Control de acceso por rol para cada módulo.
+   * Si un módulo no está aquí, se asume acceso para todos los autenticados.
+   */
+  ACCESS: {
+    // Solo admin
+    'school-config': ['admin'],
+    'teachers': ['admin'],
+    'students': ['admin'],
+    'enrollment': ['admin'],
+    'grades-admin': ['admin', 'orientador', 'maestro'],
+    'partial-close': ['admin'],
+    'honor-roll': ['admin'],
+    'users-mgmt': ['admin'],
+    'import-grades': ['admin'],
+    'import-students': ['admin'],
+    // Admin + orientadores
+    'student-profile': ['admin', 'orientador', 'maestro'],
+    'at-risk': ['admin', 'orientador'],
+    'boletas': ['admin', 'orientador'],
+    'concentrado': ['admin', 'orientador'],
+    'reports-comparative': ['admin', 'orientador'],
+    'reports': ['admin', 'orientador'],
+    // Admin + orientadores + maestros
+    'indicadores': ['admin', 'orientador', 'maestro'],
+    'attendance': ['admin', 'maestro'],
+    // Solo maestros
+    'my-grades': ['admin', 'maestro'],
+    'my-lists': ['maestro'],
+    'my-at-risk': ['maestro'],
+    // Todos
+    'dashboard': ['admin', 'orientador', 'maestro', 'directivo', 'consulta']
+  },
+
+  /**
    * Navega a un módulo
    * @param {string} moduleName - Nombre del módulo
    */
@@ -308,6 +401,15 @@ const Router = {
       // Validar que el módulo existe
       if (!this.modules[moduleName]) {
         console.error(`❌ Módulo no encontrado: ${moduleName}`);
+        return;
+      }
+
+      // Verificar acceso por rol
+      const role = App.currentUser?.role;
+      const allowedRoles = this.ACCESS[moduleName];
+      if (allowedRoles && !allowedRoles.includes(role)) {
+        console.warn(`⛔ Acceso denegado a ${moduleName} para rol ${role}`);
+        Toast.show('No tienes acceso a este módulo', 'warning');
         return;
       }
 
@@ -375,7 +477,84 @@ const Modal = {
     this.open(title, bodyHTML, footerHTML);
   },
 
-  _confirmCallback: null
+  _confirmCallback: null,
+
+  /**
+   * Confirmación por escritura — el usuario debe escribir una palabra exacta para confirmar.
+   * Evita accidentes con acciones destructivas.
+   * @param {string} title       - Título del modal
+   * @param {string} message     - Mensaje descriptivo (HTML permitido)
+   * @param {string} confirmWord - Palabra que el usuario debe escribir (ej: "ELIMINAR")
+   * @param {Function} onConfirm - Callback al confirmar exitosamente
+   */
+  confirmTyped(title, message, confirmWord, onConfirm) {
+    const bodyHTML = `
+      <div style="margin-bottom:16px;">${message}</div>
+      <div class="typed-confirm-box">
+        <label class="typed-confirm-label">
+          Para confirmar, escribe <strong class="typed-confirm-word">${Utils.sanitize(confirmWord)}</strong> en el campo de abajo:
+        </label>
+        <input type="text" id="typedConfirmInput" class="typed-confirm-input"
+          placeholder="Escribe aquí..." autocomplete="off" spellcheck="false">
+        <div id="typedConfirmHint" class="typed-confirm-hint"></div>
+      </div>`;
+
+    const footerHTML = `
+      <button class="btn btn-outline" onclick="Modal.close()">Cancelar</button>
+      <button class="btn btn-danger" id="typedConfirmBtn" disabled>
+        <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">warning</span>
+        Confirmar
+      </button>`;
+
+    this.open(title, bodyHTML, footerHTML);
+
+    // Bind input validation
+    setTimeout(() => {
+      const input = document.getElementById('typedConfirmInput');
+      const btn = document.getElementById('typedConfirmBtn');
+      const hint = document.getElementById('typedConfirmHint');
+      if (!input || !btn) return;
+
+      input.focus();
+
+      input.addEventListener('input', () => {
+        const val = input.value.trim();
+        if (val === confirmWord) {
+          btn.disabled = false;
+          input.classList.add('typed-confirm-match');
+          input.classList.remove('typed-confirm-nomatch');
+          hint.textContent = '✓ Correcto';
+          hint.className = 'typed-confirm-hint typed-confirm-hint--ok';
+        } else {
+          btn.disabled = true;
+          input.classList.remove('typed-confirm-match');
+          if (val.length > 0) {
+            input.classList.add('typed-confirm-nomatch');
+            hint.textContent = 'No coincide';
+            hint.className = 'typed-confirm-hint typed-confirm-hint--err';
+          } else {
+            input.classList.remove('typed-confirm-nomatch');
+            hint.textContent = '';
+            hint.className = 'typed-confirm-hint';
+          }
+        }
+      });
+
+      // Allow Enter to confirm when valid
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !btn.disabled) {
+          btn.click();
+        }
+      });
+
+      btn.addEventListener('click', () => {
+        if (input.value.trim() === confirmWord) {
+          Modal.close();
+          onConfirm();
+        }
+      });
+    }, 100);
+  }
 };
 
 // ───────────────────────────────────────────────────────────────

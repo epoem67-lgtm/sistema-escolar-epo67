@@ -1,165 +1,232 @@
 /**
- * MODULO DE CALIFICACIONES - Entrada de Calificaciones para Docentes y Administradores
- * Sistema Escolar EPO 67
+ * MÓDULO DE CALIFICACIONES — Sistema Escolar EPO 67
  *
- * Proporciona:
- * - Vista de maestros: calificaciones solo de sus grupos asignados
- * - Vista de admin: calificaciones de todos los grupos con filtros avanzados
- * - Edicion inline con validaciones
- * - Pegar columna de calificaciones desde Excel
- * - Exportacion a Excel (admin)
+ * Vista maestro: cards de asignaciones → editor con rubros (EC, TR, EP/EX, PE)
+ *   auto-cálculo de SUMA y CAL, campo de FALTAS
+ *   Solo editable cuando el parcial está abierto (o con override)
+ *
+ * Vista admin/orientador: filtros cascada Turno→Grado→Grupo→Parcial→Materia→Docente
+ *   tabla con rubros completos, solo lectura (orientador), edición (admin)
+ *
+ * Rubros por turno:
+ *   MATUTINO:   EC (máx 8) + TR (máx 2) + PE = SUMA → CAL
+ *   VESPERTINO: EC (máx 5) + EX (máx 3) + TR (máx 2) + PE = SUMA → CAL
+ *
+ * Regla redondeo: ≥6 normal, <6 truncar (5.9→5). Mín 5, Máx 10.
  */
 
-const GradesModule = (function() {
+const GradesModule = (function () {
   const CONTAINER = '#moduleContainer';
 
+  // ─── Teacher view state ───
   let selectedGroup = null;
   let selectedSubject = null;
   let currentPartial = 'P1';
   let students = [];
   let assignments = [];
   let grades = {};
-  let _adminData = { grades: [], studentMap: {} };
+  let currentTurno = 'MATUTINO';
 
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
+  // ─── Admin view state ───
+  let _admin = {
+    allStudents: [], allGrades: [], allAssignments: [],
+    allTeachers: [], allSubjects: [], allGroups: [], allPartials: [],
+    turno: '', grado: '', grupo: '', parcial: '', materia: '', docente: ''
+  };
 
-  function _getContainer() {
-    return document.querySelector(CONTAINER);
-  }
+  // ═══════════════════════════════════════════════════════════════
+  // HELPERS
+  // ═══════════════════════════════════════════════════════════════
+
+  function _el(id) { return document.getElementById(id); }
+  function _container() { return document.querySelector(CONTAINER); }
 
   function _delegateClick(container) {
-    container.addEventListener('click', function(e) {
-      const target = e.target.closest('[data-action]');
-      if (!target) return;
-      const action = target.dataset.action;
-
-      if (action === 'open-editor') {
-        api.openGradeEditor(
-          target.dataset.assignmentId,
-          target.dataset.groupId,
-          target.dataset.subjectId
-        );
-      } else if (action === 'switch-partial') {
-        api.switchPartial(target.dataset.partial);
-      } else if (action === 'save-grades') {
-        api.saveGrades();
-      } else if (action === 'back-to-list') {
+    container.addEventListener('click', function (e) {
+      const t = e.target.closest('[data-action]');
+      if (!t) return;
+      const a = t.dataset.action;
+      if (a === 'open-editor') api.openGradeEditor(t.dataset.assignmentId, t.dataset.groupId, t.dataset.subjectId);
+      else if (a === 'switch-partial') api.switchPartial(t.dataset.partial);
+      else if (a === 'save-grades') api.saveGrades();
+      else if (a === 'back-to-list') {
+        if (_isDirty) {
+          if (!confirm('Tienes cambios sin guardar. ¿Deseas salir sin guardar?')) return;
+        }
         api.renderTeacher();
-      } else if (action === 'apply-admin-filters') {
-        api.applyAdminFilters();
       }
+      else if (a === 'export-grades') api.exportGrades();
+      else if (a === 'print-grades') api.printGrades();
+      else if (a === 'print-admin-grades') api.printAdminGrades();
+      else if (a === 'report-incident') _showIncidentModal(t.dataset.studentId, t.dataset.studentName);
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Teacher view
-  // ---------------------------------------------------------------------------
+  // ═══════════════════════════════════════════════════════════════
+  // TEACHER VIEW — cards de asignaciones
+  // ═══════════════════════════════════════════════════════════════
 
   async function renderTeacher() {
-    const container = _getContainer();
-    container.innerHTML = '<div class="module-container" style="text-align:center;">Cargando asignaciones...</div>';
+    const container = _container();
+    // Cleanup from previous editor session
+    if (container._undoHandler) {
+      document.removeEventListener('keydown', container._undoHandler);
+      container._undoHandler = null;
+    }
+    window.removeEventListener('beforeunload', _beforeUnloadGuard);
+    if (_draftTimer) { clearInterval(_draftTimer); _draftTimer = null; }
+    _undoStack.length = 0;
+    _isDirty = false;
+    _isSaving = false;
+
+    container.innerHTML = UI.moduleContainer(UI.loadingState('Cargando asignaciones...'));
+    const role = App.currentUser?.role;
+    const isAdmin = role === 'admin';
 
     try {
-      const teacherDocId = await Store.getTeacherDocId();
-      if (!teacherDocId) {
-        container.innerHTML = `
-          <div class="module-container">
-            <div class="card" style="max-width:600px; margin:40px auto; text-align:center;">
-              <div class="module-title">No se pudo identificar al docente</div>
-              <p class="module-subtitle">Tu cuenta de usuario no esta vinculada a un registro de docente. Contacta al administrador.</p>
-            </div>
-          </div>`;
-        return;
+      const allAssignments = await Store.getAssignments();
+
+      if (isAdmin) {
+        // Admin: show all assignments with turno/grado filters
+        assignments = allAssignments;
+      } else {
+        // Maestro: show only their assignments
+        const teacherDocId = await Store.getTeacherDocId();
+        if (!teacherDocId) {
+          container.innerHTML = UI.moduleContainer(UI.emptyState('person_off', 'Tu cuenta no está vinculada a un registro de docente. Contacta al administrador.'));
+          return;
+        }
+        assignments = allAssignments.filter(a => a.teacherId === teacherDocId);
       }
 
-      const snapshot = await db.collection('assignments')
-        .where('teacherId', '==', teacherDocId)
-        .get();
-
-      assignments = [];
-      snapshot.forEach(doc => {
-        assignments.push({ id: doc.id, ...doc.data() });
-      });
-
-      let cardsHtml = '';
-
-      if (assignments.length === 0) {
-        cardsHtml = '<div class="card module-subtitle" style="grid-column:1/-1; text-align:center;">No hay asignaciones disponibles</div>';
-      } else {
-        assignments.forEach(asg => {
-          const turnoClass = asg.turno && asg.turno.toLowerCase() === 'matutino'
-            ? 'badge-matutino'
-            : 'badge-vespertino';
-
-          cardsHtml += `
-            <div class="assignment-card"
-                 data-action="open-editor"
-                 data-assignment-id="${asg.id}"
-                 data-group-id="${asg.groupId}"
-                 data-subject-id="${asg.subjectId}">
-              <div class="assignment-card-title">${asg.groupName}</div>
-              <div class="assignment-card-subtitle">${asg.subjectName}</div>
-              <div class="assignment-card-tags">
-                <span class="badge ${turnoClass}">Turno: ${asg.turno}</span>
-                <span class="badge">Grado: ${asg.grado}</span>
+      // Build filter bar for admin
+      let filterHtml = '';
+      if (isAdmin) {
+        const turnos = [...new Set(assignments.map(a => a.turno).filter(Boolean))].sort();
+        const grados = [...new Set(assignments.map(a => a.grado).filter(Boolean))].sort((a, b) => a - b);
+        filterHtml = `
+          <div class="card" style="margin-bottom:16px;">
+            <div class="filter-bar-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
+              <div class="form-group"><label>Turno</label>
+                <select id="cap-turno"><option value="">Todos</option>${turnos.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
+              </div>
+              <div class="form-group"><label>Grado</label>
+                <select id="cap-grado"><option value="">Todos</option>${grados.map(g => `<option value="${g}">${g}°</option>`).join('')}</select>
               </div>
             </div>
-          `;
-        });
+          </div>`;
       }
 
-      const html = `
-        <div class="module-container">
-          <div>
-            <h1 class="module-title">Mis Asignaciones</h1>
-            <p class="module-subtitle">Selecciona una asignacion para ingresar calificaciones</p>
-          </div>
-          <div class="assignment-grid">
-            ${cardsHtml}
-          </div>
-        </div>
-      `;
+      const title = isAdmin ? 'Captura de Calificaciones' : 'Mis Asignaciones';
+      const subtitle = isAdmin
+        ? 'Selecciona una asignación para editar calificaciones'
+        : 'Selecciona una asignación para ingresar calificaciones';
 
-      container.innerHTML = html;
+      container.innerHTML = UI.moduleContainer(`
+        ${UI.pageHeader(title, subtitle)}
+        ${filterHtml}
+        <div id="cap-cards"></div>
+      `);
+
+      _renderAssignmentCards(assignments);
       _delegateClick(container);
+
+      // Bind filters for admin
+      if (isAdmin) {
+        const filterFn = () => {
+          const turno = document.getElementById('cap-turno')?.value || '';
+          const grado = document.getElementById('cap-grado')?.value || '';
+          let filtered = allAssignments;
+          if (turno) filtered = filtered.filter(a => a.turno === turno);
+          if (grado) filtered = filtered.filter(a => String(a.grado) === String(grado));
+          assignments = filtered;
+          _renderAssignmentCards(filtered);
+        };
+        document.getElementById('cap-turno')?.addEventListener('change', filterFn);
+        document.getElementById('cap-grado')?.addEventListener('change', filterFn);
+      }
     } catch (error) {
       console.error('Error loading assignments:', error);
       Toast.show('Error al cargar asignaciones', 'error');
-      container.innerHTML = '<div class="module-container module-subtitle">Error al cargar asignaciones</div>';
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Grade editor (teacher)
-  // ---------------------------------------------------------------------------
+  function _renderAssignmentCards(list) {
+    const cardsContainer = document.getElementById('cap-cards');
+    if (!cardsContainer) return;
+
+    if (list.length === 0) {
+      cardsContainer.innerHTML = UI.emptyState('assignment', 'No hay asignaciones disponibles');
+      return;
+    }
+
+    // Sort: by turno, then grado, then group name
+    list.sort((a, b) => (a.turno || '').localeCompare(b.turno || '') || (a.grado || 0) - (b.grado || 0) || (a.groupName || '').localeCompare(b.groupName || ''));
+
+    cardsContainer.innerHTML = '<div class="assignment-grid">' + list.map(asg => {
+      const turnoClass = (asg.turno || '').toUpperCase() === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino';
+      const teacherBadge = App.currentUser?.role === 'admin'
+        ? `<span class="badge" style="font-size:10px;background:rgba(0,0,0,0.06);">${Utils.sanitize(asg.teacherName || 'Sin docente')}</span>`
+        : '';
+      return `
+        <div class="assignment-card" data-action="open-editor" data-assignment-id="${asg.id}" data-group-id="${asg.groupId}" data-subject-id="${asg.subjectId}">
+          <div class="assignment-card-title">${Utils.sanitize(asg.groupName || asg.groupId)}</div>
+          <div class="assignment-card-subtitle">${Utils.sanitize(K.getUACNombre(asg.subjectName || asg.subjectId))}</div>
+          <div class="assignment-card-tags">
+            <span class="badge ${turnoClass}">${Utils.sanitize(asg.turno || '')}</span>
+            <span class="badge">Grado ${asg.grado || ''}</span>
+            ${teacherBadge}
+          </div>
+        </div>`;
+    }).join('') + '</div>';
+
+    // Re-attach click delegation on new cards
+    _delegateClick(cardsContainer);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // TEACHER — GRADE EDITOR con rubros
+  // ═══════════════════════════════════════════════════════════════
 
   async function openGradeEditor(assignmentId, groupId, subjectId) {
     selectedGroup = groupId;
     selectedSubject = subjectId;
-    currentPartial = 'P1';
 
     try {
-      const [studentSnap, partialSnap, gradeSnap] = await Promise.all([
-        db.collection('students').where('groupId', '==', groupId).get(),
-        db.collection('partials').get(),
-        db.collection('grades').where('groupId', '==', groupId).where('subjectId', '==', subjectId).get()
+      // Use Store cache for students, groups, partials — only grades need fresh per-subject query
+      const [allStudents, partials, allGroups, groupGrades] = await Promise.all([
+        Store.getStudents(),
+        Store.getPartials(),
+        Store.getGroups(),
+        Store.getGradesByGroup(groupId)
       ]);
 
-      students = [];
-      studentSnap.forEach(doc => {
-        students.push({ docId: doc.id, ...doc.data() });
-      });
+      students = allStudents
+        .filter(s => s.groupId === groupId)
+        .map(s => ({ docId: s.id, ...s }))
+        .sort((a, b) => (a.np || 0) - (b.np || 0) || (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
 
-      const partials = [];
-      partialSnap.forEach(doc => {
-        partials.push({ id: doc.id, ...doc.data() });
-      });
+      // Detect turno from group
+      const groupDoc = allGroups.find(g => g.id === groupId);
+      if (groupDoc) {
+        currentTurno = groupDoc.turno || 'MATUTINO';
+      } else if (students.length > 0) {
+        currentTurno = students[0].turno || 'MATUTINO';
+      }
 
+      // Set initial partial to first open one
+      const sorted = K.PARCIALES.map(kp => {
+        const doc = partials.find(p => p.id === kp.id);
+        return { id: kp.id, locked: doc ? (doc.locked || false) : false };
+      });
+      const open = sorted.find(p => !p.locked);
+      currentPartial = open ? open.id : 'P1';
+
+      // Filter grades to this subject only (already cached per-group)
       grades = {};
-      gradeSnap.forEach(doc => {
-        grades[doc.id] = doc.data();
+      groupGrades.filter(g => g.subjectId === subjectId).forEach(g => {
+        const key = `${g.studentId}_${g.subjectId}_${g.partial}`;
+        grades[key] = g;
       });
 
       _renderGradeEditor(partials);
@@ -169,386 +236,1792 @@ const GradesModule = (function() {
     }
   }
 
+  // ─── INPUT MODE STATE ───
+  let _inputMode = 'manual'; // 'manual' or 'paste'
+  let _pasteTargetField = null;
+
+  // ─── DIRTY STATE (unsaved changes tracking) ───
+  let _isDirty = false;
+  let _isSaving = false;
+  let _draftKey = ''; // localStorage key for auto-recovery
+
+  function _markDirty() {
+    if (_isDirty) return;
+    _isDirty = true;
+    const indicator = document.getElementById('unsaved-indicator');
+    if (indicator) indicator.style.display = '';
+    const saveBtn = document.querySelector('[data-action="save-grades"]');
+    if (saveBtn) saveBtn.classList.add('btn-pulse');
+  }
+
+  function _markClean() {
+    _isDirty = false;
+    const indicator = document.getElementById('unsaved-indicator');
+    if (indicator) indicator.style.display = 'none';
+    const saveBtn = document.querySelector('[data-action="save-grades"]');
+    if (saveBtn) saveBtn.classList.remove('btn-pulse');
+    // Clear draft from localStorage
+    if (_draftKey) { try { localStorage.removeItem(_draftKey); } catch(e){} }
+  }
+
+  // ─── AUTO-RECOVERY DRAFT (save to localStorage periodically) ───
+  let _draftTimer = null;
+
+  function _saveDraft() {
+    if (!_isDirty || !_draftKey) return;
+    try {
+      const snapshot = _captureSnapshot('draft');
+      localStorage.setItem(_draftKey, JSON.stringify({ time: Date.now(), values: snapshot.values }));
+    } catch(e) { /* localStorage may be full or disabled */ }
+  }
+
+  function _checkDraftRecovery() {
+    if (!_draftKey) return;
+    try {
+      const raw = localStorage.getItem(_draftKey);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      // Only offer recovery if draft is less than 24h old
+      if (Date.now() - draft.time > 86400000) {
+        localStorage.removeItem(_draftKey);
+        return;
+      }
+      // Check if draft has any values different from current
+      let hasDiffs = false;
+      const rows = document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]');
+      rows.forEach(row => {
+        const sid = row.dataset.studentId;
+        const vals = draft.values[sid];
+        if (!vals) return;
+        row.querySelectorAll('.ge-input').forEach(input => {
+          const field = input.dataset.field;
+          if (vals[field] !== undefined && vals[field] !== input.value) hasDiffs = true;
+        });
+      });
+      if (!hasDiffs) { localStorage.removeItem(_draftKey); return; }
+
+      // Show recovery banner
+      const banner = document.createElement('div');
+      banner.className = 'draft-recovery-banner';
+      banner.innerHTML = `
+        <span class="material-icons-round" style="font-size:20px;color:#d69e2e;">warning</span>
+        <span>Se encontraron datos sin guardar de una sesión anterior.</span>
+        <button class="btn btn-sm btn-primary" id="recover-draft-btn">Recuperar</button>
+        <button class="btn btn-sm btn-outline" id="discard-draft-btn">Descartar</button>`;
+      const editor = document.querySelector('.grade-editor-table');
+      if (editor) editor.parentNode.insertBefore(banner, editor);
+
+      document.getElementById('recover-draft-btn')?.addEventListener('click', () => {
+        _pushUndo('Antes de recuperar borrador');
+        rows.forEach(row => {
+          const sid = row.dataset.studentId;
+          const vals = draft.values[sid];
+          if (!vals) return;
+          row.querySelectorAll('.ge-input').forEach(input => {
+            const field = input.dataset.field;
+            if (vals[field] !== undefined) input.value = vals[field];
+          });
+          const firstRubro = row.querySelector('.grade-rubro');
+          if (firstRubro) _recalcRow(firstRubro);
+        });
+        _updateStats();
+        _markDirty();
+        banner.remove();
+        Toast.show('Datos recuperados. Recuerda guardar.', 'success');
+      });
+
+      document.getElementById('discard-draft-btn')?.addEventListener('click', () => {
+        localStorage.removeItem(_draftKey);
+        banner.remove();
+      });
+    } catch(e) { /* ignore parse errors */ }
+  }
+
+  // ─── BEFOREUNLOAD GUARD ───
+  function _beforeUnloadGuard(e) {
+    if (_isDirty) {
+      e.preventDefault();
+      e.returnValue = 'Tienes cambios sin guardar. ¿Deseas salir?';
+      return e.returnValue;
+    }
+  }
+
+  // ─── UNDO SYSTEM ───
+  const _undoStack = [];
+  const UNDO_MAX = 30;
+
+  /** Capture a snapshot of all current input values */
+  function _captureSnapshot(label) {
+    const snapshot = { label, time: Date.now(), values: {} };
+    document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]').forEach(row => {
+      const sid = row.dataset.studentId;
+      snapshot.values[sid] = {};
+      row.querySelectorAll('.ge-input').forEach(input => {
+        snapshot.values[sid][input.dataset.field] = input.value;
+      });
+    });
+    return snapshot;
+  }
+
+  /** Push current state to undo stack (call BEFORE making changes) */
+  function _pushUndo(label) {
+    _undoStack.push(_captureSnapshot(label));
+    if (_undoStack.length > UNDO_MAX) _undoStack.shift();
+    _updateUndoBtn();
+  }
+
+  /** Restore last snapshot */
+  function _popUndo() {
+    if (_undoStack.length === 0) return;
+    const snapshot = _undoStack.pop();
+    document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]').forEach(row => {
+      const sid = row.dataset.studentId;
+      const vals = snapshot.values[sid];
+      if (!vals) return;
+      row.querySelectorAll('.ge-input').forEach(input => {
+        const field = input.dataset.field;
+        if (vals[field] !== undefined) input.value = vals[field];
+      });
+      // Recalc row
+      const firstRubro = row.querySelector('.grade-rubro');
+      if (firstRubro) _recalcRow(firstRubro);
+    });
+    _updateStats();
+    _updateUndoBtn();
+    Toast.show(`Deshecho: ${snapshot.label}`, 'info');
+  }
+
+  function _updateUndoBtn() {
+    const btn = document.getElementById('undo-btn');
+    if (!btn) return;
+    btn.disabled = _undoStack.length === 0;
+    const last = _undoStack[_undoStack.length - 1];
+    btn.title = last ? `Deshacer: ${last.label}` : 'Nada que deshacer';
+    const countEl = document.getElementById('undo-count');
+    if (countEl) countEl.textContent = _undoStack.length > 0 ? _undoStack.length : '';
+  }
+
   function _renderGradeEditor(partials) {
-    const subjectId = selectedSubject;
-    const container = _getContainer();
+    const container = _container();
+    const rubros = K.getRubros(currentTurno);
 
-    const partialsHtml = partials.map(p => {
-      const activeClass = currentPartial === p.id ? 'btn-primary' : 'btn-outline';
-      return `<button class="btn ${activeClass}"
-                      data-action="switch-partial"
-                      data-partial="${p.id}">${p.nombre}${p.locked ? ' 🔒' : ''}</button>`;
-    }).join('');
+    // Partial buttons
+    const partialsHtml = K.PARCIALES.map(kp => {
+      const doc = partials.find(p => p.id === kp.id);
+      const locked = doc ? (doc.locked || false) : false;
+      const cls = currentPartial === kp.id ? 'btn-primary' : 'btn-outline';
+      return `<button class="btn btn-sm ${cls}" data-action="switch-partial" data-partial="${kp.id}">${kp.nombre}${locked ? ' \uD83D\uDD12' : ''}</button>`;
+    }).join(' ');
 
+    // Gender count
+    const hCount = students.filter(s => s.sexo === 'H').length;
+    const mCount = students.filter(s => s.sexo === 'M').length;
+
+    // Header columns for rubros
+    const headerCols = rubros.map(r =>
+      `<th class="col-rubro" data-field="${r.key}">${r.abbr}<br><span style="font-weight:400;font-size:9px;opacity:0.8;">m\u00e1x ${r.max}</span></th>`
+    ).join('');
+
+    // Build rows
     let rowsHtml = '';
-    students.forEach(student => {
-      const gradeKey = `${student.docId}_${subjectId}_${currentPartial}`;
-      const gradeValue = grades[gradeKey]?.value || '';
-      rowsHtml += `
-        <tr>
-          <td>${student.nombreCompleto}</td>
-          <td style="text-align:center;">
-            <input type="number" min="0" max="10" value="${gradeValue}"
-                   class="grade-input"
-                   data-student-id="${student.docId}">
-          </td>
-        </tr>
-      `;
+    students.forEach((s, i) => {
+      const key = `${s.docId}_${selectedSubject}_${currentPartial}`;
+      const gradeData = grades[key] || {};
+
+      const inputCells = rubros.map(r => {
+        const val = gradeData[r.key] !== undefined ? gradeData[r.key] : '';
+        return `<td class="cell-rubro" data-field="${r.key}">
+          <input type="number" min="0" max="${r.max}" step="${r.step}" value="${val}" placeholder="-"
+            class="ge-input grade-rubro" data-student-id="${s.docId}" data-field="${r.key}">
+        </td>`;
+      }).join('');
+
+      const suma = _calcRowSuma(gradeData, rubros);
+      const sumaDisplay = suma > 0 ? suma.toFixed(1) : '';
+      const cal = suma > 0 ? K.calcCal(suma) : '';
+      const calClass = cal !== '' && cal < 6 ? 'cal-fail' : (cal !== '' ? 'cal-pass' : '');
+      const rowClass = cal !== '' && cal < 6 ? ' row-reprobado' : '';
+      const faltas = gradeData.faltas !== undefined ? gradeData.faltas : '';
+
+      rowsHtml += `<tr data-student-id="${s.docId}" class="${rowClass}">
+        <td class="cell-num">${s.np || (i + 1)}</td>
+        <td class="cell-name" title="${Utils.sanitize(s.nombreCompleto || '')}">${Utils.sanitize(s.nombreCompleto || '')}</td>
+        ${inputCells}
+        <td class="cell-suma col-suma">${sumaDisplay}</td>
+        <td class="cell-cal ${calClass} col-cal">${cal}</td>
+        <td class="cell-faltas">
+          <input type="number" min="0" max="99" step="1" value="${faltas}" placeholder="-"
+            class="ge-input input-faltas grade-faltas" data-student-id="${s.docId}" data-field="faltas">
+        </td>
+        <td style="text-align:center;padding:2px;">
+          <button class="btn-icon" data-action="report-incident" data-student-id="${s.docId}" data-student-name="${Utils.sanitize(s.nombreCompleto || '')}" title="Reportar incidencia" style="color:var(--warning);background:none;border:none;cursor:pointer;padding:2px;">
+            <span class="material-icons-round" style="font-size:18px;">flag</span>
+          </button>
+        </td>
+      </tr>`;
     });
 
-    const html = `
+    // Find subject name
+    const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
+    const subjectName = asg ? K.getUACNombre(asg.subjectName || asg.subjectId) : selectedSubject;
+    const groupName = asg ? (asg.groupName || asg.groupId) : selectedGroup;
+
+    // Build paste field options
+    const pasteFieldOptions = rubros.map(r => `<option value="${r.key}">${r.label} (${r.abbr})</option>`).join('') +
+      `<option value="faltas">FALTAS</option>`;
+
+    // Check if current partial is locked (for warning banner)
+    const currentPartialDoc = partials.find(p => p.id === currentPartial);
+    const isLocked = currentPartialDoc ? (currentPartialDoc.locked || false) : false;
+    const lockWarning = isLocked ? `
+      <div class="partial-lock-banner">
+        <span class="material-icons-round" style="font-size:20px;">lock</span>
+        <span>Este parcial está <b>cerrado</b>. No se pueden guardar cambios a menos que tengas acceso especial.</span>
+      </div>` : '';
+
+    container.innerHTML = `
       <div class="module-container">
-        <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
           <div>
-            <h2 class="module-title">Ingreso de Calificaciones</h2>
-            <p class="module-subtitle">${students.length} estudiantes</p>
+            <h2 class="module-title">${Utils.sanitize(subjectName)}</h2>
+            <p class="module-subtitle">${Utils.sanitize(groupName)} \u00b7 ${Utils.sanitize(currentTurno)} \u00b7 ${hCount}H / ${mCount}M = ${students.length} alumnos</p>
           </div>
-          <button class="btn btn-outline" data-action="back-to-list">Volver</button>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="unsaved-indicator" class="unsaved-badge" style="display:none;">
+              <span class="material-icons-round" style="font-size:14px;vertical-align:middle;">edit_note</span> Sin guardar
+            </span>
+            <button class="btn btn-outline" data-action="back-to-list">\u2190 Volver</button>
+          </div>
         </div>
+
+        ${lockWarning}
 
         <div class="card">
-          <div class="form-group">
-            <label>Parcial:</label>
-            <div>${partialsHtml}</div>
+          <div class="form-group"><label>Parcial:</label><div class="btn-group">${partialsHtml}</div></div>
+        </div>
+
+        <!-- ═══ INPUT MODE SELECTOR + UNDO ═══ -->
+        <div class="input-mode-bar">
+          <span class="mode-label">Modo de captura:</span>
+          <button class="mode-btn active" data-mode="manual">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:3px;">edit</span>Dato por dato
+          </button>
+          <button class="mode-btn" data-mode="paste">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:3px;">content_paste</span>Pegar columna desde Excel
+          </button>
+          <div style="margin-left:auto;">
+            <button class="btn btn-outline btn-sm" id="undo-btn" disabled title="Nada que deshacer" style="position:relative;">
+              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;">undo</span>
+              Deshacer
+              <span id="undo-count" style="position:absolute;top:-6px;right:-6px;background:#e53e3e;color:#fff;font-size:10px;font-weight:700;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;"></span>
+            </button>
           </div>
         </div>
 
-        <div class="table-container">
-          <table class="table-light">
+        <!-- ═══ PASTE PANEL (hidden by default) ═══ -->
+        <div id="paste-panel" class="card" style="display:none;border:2px solid #3182ce;background:#f0f7ff;">
+          <h3 style="font-size:0.95rem;font-weight:700;color:#2b6cb0;margin-bottom:8px;">
+            <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">content_paste</span>
+            Pegar columna completa desde Excel
+          </h3>
+          <p style="font-size:0.85rem;color:#4a5568;margin-bottom:10px;">
+            Copia una columna completa de tu Excel (solo los valores, sin encabezado) y p\u00e9gala en el cuadro de abajo.
+            Los valores se asignar\u00e1n en orden a cada alumno.
+          </p>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <label style="font-weight:600;font-size:13px;">Columna destino:</label>
+            <select id="paste-target-field" style="padding:6px 12px;border:2px solid #3182ce;border-radius:6px;font-weight:600;font-size:13px;">
+              ${pasteFieldOptions}
+            </select>
+          </div>
+          <textarea id="paste-area" class="paste-area" placeholder="Pega aqu\u00ed los valores copiados de Excel (uno por l\u00ednea)...\n\nEjemplo:\n7.5\n8\n6.2\n9\n..."></textarea>
+          <div id="paste-preview"></div>
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            <button class="btn btn-primary" id="paste-apply-btn" disabled>Aplicar valores</button>
+            <button class="btn btn-outline" id="paste-clear-btn">Limpiar</button>
+          </div>
+        </div>
+
+        <div class="table-container" style="overflow-x:auto;max-height:65vh;">
+          <table class="grade-editor-table" style="min-width:750px;">
             <thead>
               <tr>
-                <th style="text-align:left;">Estudiante</th>
-                <th style="text-align:center;">Calificacion</th>
+                <th class="col-num">#</th>
+                <th class="col-name" style="text-align:left;padding-left:12px;">Estudiante</th>
+                ${headerCols}
+                <th class="col-suma" style="width:60px;">SUMA</th>
+                <th class="col-cal" style="width:55px;">CAL.</th>
+                <th class="col-faltas" style="width:58px;">FALTAS</th>
+                <th style="width:32px;background:#4a5568;" title="Reportar incidencia"></th>
               </tr>
             </thead>
-            <tbody>
-              ${rowsHtml}
-            </tbody>
+            <tbody>${rowsHtml}</tbody>
           </table>
         </div>
 
-        <div class="stats-grid">
-          <div class="stat-card--compact">
-            <div class="module-subtitle">Promedio</div>
-            <div class="module-title" id="stat-promedio">-</div>
-          </div>
-          <div class="stat-card--compact">
-            <div class="module-subtitle">Aprobados (>=${K.THRESHOLDS.PASS_GRADE})</div>
-            <div class="module-title" id="stat-aprobados" style="color:var(--success-color,#16a34a);">-</div>
-          </div>
-          <div class="stat-card--compact">
-            <div class="module-subtitle">Reprobados (<${K.THRESHOLDS.PASS_GRADE})</div>
-            <div class="module-title" id="stat-reprobados" style="color:var(--danger-color,#dc2626);">-</div>
-          </div>
-          <div class="stat-card--compact">
-            <div class="module-subtitle">Sin calificacion</div>
-            <div class="module-title" id="stat-sin-calif">-</div>
+        <div class="stats-grid" style="margin-top:16px;">
+          <div class="stat-card--compact"><div class="stat-label">Promedio</div><div class="stat-number" id="stat-promedio">-</div></div>
+          <div class="stat-card--compact stat-card--success"><div class="stat-label">Aprobados (\u2265${K.THRESHOLDS.PASS_GRADE})</div><div class="stat-number" id="stat-aprobados">-</div></div>
+          <div class="stat-card--compact stat-card--danger"><div class="stat-label">Reprobados (&lt;${K.THRESHOLDS.PASS_GRADE})</div><div class="stat-number" id="stat-reprobados">-</div></div>
+          <div class="stat-card--compact"><div class="stat-label">Sin calificaci\u00f3n</div><div class="stat-number" id="stat-sin-calif">-</div></div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:8px;">Horas Impartidas</h3>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+            ${['Febrero','Marzo','Abril','Mayo','Junio','Julio'].map(m =>
+              `<div style="text-align:center;">
+                <label style="font-size:0.78rem; color:var(--text-light);font-weight:600;">${m}</label>
+                <input type="number" min="0" max="99" step="1" id="horas-${m.toLowerCase()}"
+                  class="ge-input horas-input" data-month="${m.toLowerCase()}"
+                  style="width:56px; display:block; margin-top:4px;">
+              </div>`
+            ).join('')}
+            <div style="text-align:center;">
+              <label style="font-size:0.78rem; font-weight:700;">Total</label>
+              <div id="horas-total" style="font-weight:800; font-size:16px; padding:8px 0; color:#2b6cb0;">0</div>
+            </div>
           </div>
         </div>
 
-        <div style="display:flex; gap:12px; justify-content:center; margin-top:24px;">
-          <button class="btn btn-primary" data-action="save-grades">Guardar Calificaciones</button>
+        <div style="display:flex;gap:12px;justify-content:center;margin-top:20px;flex-wrap:wrap;">
+          <button class="btn btn-primary" data-action="save-grades" style="font-size:15px;padding:10px 28px;">
+            <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">save</span>Guardar Calificaciones
+          </button>
+          <button class="btn btn-outline" data-action="print-grades">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>Imprimir
+          </button>
           <button class="btn btn-outline" data-action="back-to-list">Cancelar</button>
         </div>
+      </div>`;
+
+    _delegateClick(container);
+
+    // ═══ INITIALIZE EDITOR STATE ═══
+    _undoStack.length = 0;
+    _isDirty = false;
+    _isSaving = false;
+    _draftKey = `grade_draft_${selectedGroup}_${selectedSubject}_${currentPartial}`;
+
+    // ═══ INPUT CLAMPING + UNDO + DIRTY TRACKING ═══
+    let _snapshotPending = false;
+
+    container.querySelectorAll('.grade-rubro, .grade-faltas').forEach(input => {
+      const maxVal = parseFloat(input.max) || 10;
+      const isInteger = input.classList.contains('grade-faltas');
+
+      // Select all text on focus for easy overwriting
+      input.addEventListener('focus', () => {
+        input.select();
+        if (!_snapshotPending) {
+          _snapshotPending = true;
+          input._prevVal = input.value;
+        }
+      });
+
+      // On blur: clamp value to valid range, sanitize
+      input.addEventListener('blur', () => {
+        if (input.value.trim() === '') { _snapshotPending = false; return; }
+        let v = parseFloat(input.value.replace(',', '.'));
+        if (isNaN(v)) { input.value = ''; input.classList.remove('ge-input-invalid'); _snapshotPending = false; return; }
+        // Clamp to range
+        v = Math.max(0, Math.min(v, maxVal));
+        v = isInteger ? Math.round(v) : Math.round(v * 10) / 10;
+        input.value = v;
+        input.classList.remove('ge-input-invalid');
+        // Recalc if rubro
+        if (input.classList.contains('grade-rubro')) _recalcRow(input);
+        _snapshotPending = false;
+      });
+
+      // On input: live validation + undo + recalc
+      input.addEventListener('input', () => {
+        // Push undo on first change
+        if (_snapshotPending && input.value !== input._prevVal) {
+          _pushUndo('Edición manual');
+          _snapshotPending = false;
+        }
+        _markDirty();
+
+        // Live visual validation (don't clamp yet — user might still be typing)
+        const raw = input.value.trim();
+        if (raw === '') { input.classList.remove('ge-input-invalid'); }
+        else {
+          const v = parseFloat(raw.replace(',', '.'));
+          if (isNaN(v) || v < 0 || v > maxVal) {
+            input.classList.add('ge-input-invalid');
+          } else {
+            input.classList.remove('ge-input-invalid');
+          }
+        }
+
+        // Recalc row for rubros
+        if (input.classList.contains('grade-rubro')) _recalcRow(input);
+      });
+
+      // Prevent invalid characters (allow digits, period, comma, navigation keys)
+      input.addEventListener('keydown', (e) => {
+        // Allow: backspace, delete, tab, escape, enter, arrows, home, end, select-all
+        if ([8, 46, 9, 27, 13, 37, 38, 39, 40, 35, 36].includes(e.keyCode)) return;
+        if ((e.ctrlKey || e.metaKey) && [65, 67, 86, 88, 90].includes(e.keyCode)) return; // Ctrl+A/C/V/X/Z
+        // Allow period and comma for decimals (not for integers)
+        if (!isInteger && (e.key === '.' || e.key === ',')) return;
+        // Block non-numeric
+        if (e.key < '0' || e.key > '9') { e.preventDefault(); }
+      });
+
+      // ═══ SMART TAB NAVIGATION ═══
+      // Enter key moves to next input in next row (same column) for fast data entry
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          // Find next row's input with same field
+          const row = input.closest('tr');
+          const field = input.dataset.field;
+          const nextRow = row.nextElementSibling;
+          if (nextRow) {
+            const nextInput = nextRow.querySelector(`input[data-field="${field}"]`);
+            if (nextInput) { nextInput.focus(); return; }
+          }
+          // If last row, move to next field in first row
+          const firstRow = input.closest('tbody').querySelector('tr');
+          if (firstRow) {
+            const allFields = [...row.querySelectorAll('.ge-input')].map(i => i.dataset.field);
+            const currentIdx = allFields.indexOf(field);
+            if (currentIdx < allFields.length - 1) {
+              const nextField = allFields[currentIdx + 1];
+              const target = firstRow.querySelector(`input[data-field="${nextField}"]`);
+              if (target) target.focus();
+            }
+          }
+        }
+        // Arrow up/down navigation between rows
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          const row = input.closest('tr');
+          const field = input.dataset.field;
+          const targetRow = e.key === 'ArrowUp' ? row.previousElementSibling : row.nextElementSibling;
+          if (targetRow && targetRow.dataset.studentId) {
+            e.preventDefault();
+            const targetInput = targetRow.querySelector(`input[data-field="${field}"]`);
+            if (targetInput) targetInput.focus();
+          }
+        }
+      });
+    });
+
+    // ═══ UNDO ═══
+    document.getElementById('undo-btn')?.addEventListener('click', _popUndo);
+    container._undoHandler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        if (_undoStack.length > 0) { e.preventDefault(); _popUndo(); }
+      }
+    };
+    document.addEventListener('keydown', container._undoHandler);
+
+    // ═══ BEFOREUNLOAD GUARD ═══
+    window.addEventListener('beforeunload', _beforeUnloadGuard);
+
+    // ═══ AUTO-SAVE DRAFT every 30 seconds ═══
+    if (_draftTimer) clearInterval(_draftTimer);
+    _draftTimer = setInterval(_saveDraft, 30000);
+
+    // ═══ HORAS IMPARTIDAS ═══
+    container.querySelectorAll('.horas-input').forEach(input => {
+      input.addEventListener('input', () => { _updateHorasTotal(); _markDirty(); });
+    });
+    _loadHoras();
+
+    _updateStats();
+    _updateUndoBtn();
+    _bindInputModes(container);
+
+    // ═══ CHECK FOR DRAFT RECOVERY ═══
+    setTimeout(_checkDraftRecovery, 500);
+  }
+
+  // ─── PASTE FROM EXCEL ───
+  function _bindInputModes(container) {
+    const modeBtns = container.querySelectorAll('.mode-btn');
+    const pastePanel = document.getElementById('paste-panel');
+    const pasteArea = document.getElementById('paste-area');
+    const pastePreview = document.getElementById('paste-preview');
+    const pasteApply = document.getElementById('paste-apply-btn');
+    const pasteClear = document.getElementById('paste-clear-btn');
+    const pasteFieldSelect = document.getElementById('paste-target-field');
+
+    let parsedValues = [];
+
+    modeBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        modeBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        _inputMode = btn.dataset.mode;
+        pastePanel.style.display = _inputMode === 'paste' ? '' : 'none';
+      });
+    });
+
+    // Parse pasted data
+    pasteArea.addEventListener('input', () => {
+      const raw = pasteArea.value.trim();
+      if (!raw) {
+        pastePreview.innerHTML = '';
+        pasteApply.disabled = true;
+        parsedValues = [];
+        return;
+      }
+
+      const field = pasteFieldSelect.value;
+      const rubro = K.getRubros(currentTurno).find(r => r.key === field);
+      const maxVal = rubro ? rubro.max : (field === 'faltas' ? 99 : 10);
+      const isInt = field === 'faltas';
+
+      // Split by newlines or tabs
+      const lines = raw.split(/[\n\r]+/).map(l => l.trim()).filter(l => l !== '');
+      parsedValues = lines.map(line => {
+        // Clean: remove commas used as decimal separator in some locales
+        const cleaned = line.replace(',', '.').replace(/[^0-9.]/g, '');
+        const num = isInt ? parseInt(cleaned) : parseFloat(cleaned);
+        if (isNaN(num)) return { raw: line, value: null, error: 'No es n\u00famero' };
+        if (num < 0) return { raw: line, value: num, error: 'Negativo' };
+        if (num > maxVal) return { raw: line, value: num, error: 'Excede m\u00e1x ' + maxVal };
+        return { raw: line, value: isInt ? Math.round(num) : Math.round(num * 10) / 10, error: null };
+      });
+
+      // Show preview
+      const countMatch = Math.min(parsedValues.length, students.length);
+      const countExtra = parsedValues.length - students.length;
+      let previewHtml = `<table><thead><tr><th>#</th><th>Alumno</th><th>Valor</th><th></th></tr></thead><tbody>`;
+      for (let i = 0; i < Math.min(parsedValues.length, students.length); i++) {
+        const pv = parsedValues[i];
+        const s = students[i];
+        const cls = pv.error ? 'val-error' : 'val-ok';
+        previewHtml += `<tr><td>${i+1}</td><td style="text-align:left;">${Utils.sanitize(s.nombreCompleto || '')}</td>
+          <td class="${cls}">${pv.value !== null ? pv.value : pv.raw}</td>
+          <td style="color:#c53030;font-size:11px;">${pv.error || ''}</td></tr>`;
+      }
+      previewHtml += '</tbody></table>';
+
+      if (countExtra > 0) {
+        previewHtml += `<p style="color:#c53030;font-size:12px;padding:6px;font-weight:600;">\u26A0 Hay ${countExtra} valores de m\u00e1s (se ignorar\u00e1n)</p>`;
+      } else if (parsedValues.length < students.length) {
+        previewHtml += `<p style="color:#d69e2e;font-size:12px;padding:6px;font-weight:600;">\u26A0 Solo ${parsedValues.length} valores para ${students.length} alumnos (los dem\u00e1s quedan vac\u00edos)</p>`;
+      }
+
+      const hasErrors = parsedValues.some(p => p.error);
+      pastePreview.innerHTML = `<div class="paste-preview">${previewHtml}</div>`;
+      pasteApply.disabled = parsedValues.length === 0;
+      if (hasErrors) {
+        pasteApply.textContent = 'Aplicar valores (con advertencias)';
+        pasteApply.style.background = '#dd6b20';
+      } else {
+        pasteApply.textContent = 'Aplicar valores';
+        pasteApply.style.background = '';
+      }
+    });
+
+    pasteFieldSelect.addEventListener('change', () => {
+      // Re-parse with new field limits
+      if (pasteArea.value.trim()) pasteArea.dispatchEvent(new Event('input'));
+    });
+
+    pasteApply.addEventListener('click', () => {
+      const field = pasteFieldSelect.value;
+      const fieldLabel = K.getRubros(currentTurno).find(r => r.key === field)?.label || 'FALTAS';
+      // Snapshot before paste
+      _pushUndo('Pegar columna: ' + fieldLabel);
+
+      const rows = document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]');
+      let applied = 0;
+
+      rows.forEach((row, i) => {
+        if (i >= parsedValues.length) return;
+        const pv = parsedValues[i];
+        if (pv.value === null) return;
+        const input = row.querySelector(`input[data-field="${field}"]`);
+        if (input) {
+          input.value = pv.value;
+          applied++;
+          // Trigger recalc if it's a rubro
+          if (input.classList.contains('grade-rubro')) _recalcRow(input);
+        }
+      });
+
+      Toast.show(`${applied} valores aplicados a ${fieldLabel}`, 'success');
+      pasteArea.value = '';
+      pastePreview.innerHTML = '';
+      pasteApply.disabled = true;
+      parsedValues = [];
+      _updateStats();
+      _markDirty();
+    });
+
+    pasteClear.addEventListener('click', () => {
+      pasteArea.value = '';
+      pastePreview.innerHTML = '';
+      pasteApply.disabled = true;
+      parsedValues = [];
+    });
+  }
+
+  // ─── HORAS IMPARTIDAS ───
+  async function _loadHoras() {
+    try {
+      const docId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
+      const doc = await db.collection('teacherHours').doc(docId).get();
+      if (doc.exists) {
+        const data = doc.data();
+        ['febrero','marzo','abril','mayo','junio','julio'].forEach(m => {
+          const el = document.getElementById('horas-' + m);
+          if (el && data[m] !== undefined) el.value = data[m];
+        });
+        _updateHorasTotal();
+      }
+    } catch (e) { console.warn('Error loading horas:', e); }
+  }
+
+  function _updateHorasTotal() {
+    let total = 0;
+    document.querySelectorAll('.horas-input').forEach(input => {
+      const v = parseInt(input.value);
+      if (!isNaN(v)) total += v;
+    });
+    const el = document.getElementById('horas-total');
+    if (el) el.textContent = total;
+  }
+
+  // ─── INCIDENT REPORTING FROM GRADE EDITOR ───
+  function _showIncidentModal(studentId, studentName) {
+    const body = `
+    <div style="display:flex; flex-direction:column; gap:12px;">
+      <div style="font-weight:600; color:var(--text);">Alumno: ${Utils.sanitize(studentName)}</div>
+      <div>
+        <label style="font-weight:600; font-size:0.875rem;">Tipo de incidencia</label>
+        <select id="inc-type" style="width:100%; padding:8px; margin-top:4px; border:1px solid var(--border); border-radius:6px;">
+          <option value="conducta">Conducta</option>
+          <option value="academica">Académica</option>
+          <option value="asistencia">Asistencia</option>
+          <option value="otra">Otra</option>
+        </select>
       </div>
+      <div>
+        <label style="font-weight:600; font-size:0.875rem;">Título</label>
+        <input id="inc-title" placeholder="Breve descripción" style="width:100%; padding:8px; margin-top:4px; border:1px solid var(--border); border-radius:6px;">
+      </div>
+      <div>
+        <label style="font-weight:600; font-size:0.875rem;">Descripción</label>
+        <textarea id="inc-desc" rows="3" placeholder="Detalle de la incidencia..."
+                  style="width:100%; padding:8px; margin-top:4px; border:1px solid var(--border); border-radius:6px; resize:vertical;"></textarea>
+      </div>
+    </div>`;
+
+    const footer = `
+      <button class="btn" onclick="Modal.close()">Cancelar</button>
+      <button class="btn btn-primary" id="inc-save-btn">Reportar</button>
     `;
 
-    container.innerHTML = html;
-    _delegateClick(container);
-    _attachEditorListeners();
+    Modal.open('Reportar Incidencia', body, footer);
+
+    setTimeout(() => {
+      const saveBtn = document.getElementById('inc-save-btn');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+          const title = document.getElementById('inc-title').value.trim();
+          if (!title) { Toast.show('Escribe un título', 'warning'); return; }
+
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Guardando...';
+
+          try {
+            await db.collection('incidents').add({
+              studentId: studentId,
+              groupId: selectedGroup,
+              turno: currentTurno,
+              type: document.getElementById('inc-type').value,
+              title: title,
+              description: document.getElementById('inc-desc').value.trim(),
+              date: new Date(),
+              reportedBy: App.currentUser?.displayName || App.currentUser?.email || '',
+              reportedByUid: auth.currentUser.uid,
+              createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            Modal.close();
+            Toast.show('Incidencia reportada', 'success');
+          } catch (err) {
+            console.error('Error saving incident:', err);
+            Toast.show('Error al reportar: ' + err.message, 'error');
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Reportar';
+          }
+        });
+      }
+    }, 100);
   }
 
-  function _attachEditorListeners() {
-    document.querySelectorAll('.grade-input').forEach(input => {
-      input.addEventListener('input', () => updateStats());
+  function _getHorasData() {
+    const data = {};
+    ['febrero','marzo','abril','mayo','junio','julio'].forEach(m => {
+      const el = document.getElementById('horas-' + m);
+      if (el && el.value.trim() !== '') data[m] = parseInt(el.value);
     });
-    updateStats();
+    return data;
   }
 
-  // ---------------------------------------------------------------------------
-  // Partials / stats / save
-  // ---------------------------------------------------------------------------
+  /** Auto-recalculate SUMA and CAL for a row when any rubro changes */
+  function _recalcRow(input) {
+    const row = input.closest('tr');
+    const rubros = K.getRubros(currentTurno);
+    const data = {};
+
+    rubros.forEach(r => {
+      const el = row.querySelector(`input[data-field="${r.key}"]`);
+      const v = el ? parseFloat(el.value) : 0;
+      data[r.key] = isNaN(v) ? 0 : v;
+    });
+
+    const suma = K.calcSuma(data);
+    const cal = suma > 0 ? K.calcCal(suma) : '';
+
+    const sumaCell = row.querySelector('.col-suma');
+    const calCell = row.querySelector('.col-cal');
+    if (sumaCell) sumaCell.textContent = suma > 0 ? suma.toFixed(1) : '';
+    if (calCell) {
+      calCell.textContent = cal;
+      calCell.className = 'cell-cal ' + (cal !== '' && cal < 6 ? 'cal-fail' : (cal !== '' ? 'cal-pass' : '')) + ' col-cal';
+    }
+
+    // Highlight row if failing
+    row.classList.toggle('row-reprobado', cal !== '' && cal < 6);
+
+    _updateStats();
+  }
+
+  function _calcRowSuma(gradeData, rubros) {
+    const data = {};
+    rubros.forEach(r => { data[r.key] = gradeData[r.key]; });
+    return K.calcSuma(data);
+  }
+
+  function _updateStats() {
+    const rows = document.querySelectorAll('tbody tr[data-student-id]');
+    const cals = [];
+    rows.forEach(row => {
+      const calCell = row.querySelector('.col-cal');
+      if (calCell && calCell.textContent.trim() !== '') {
+        cals.push(parseFloat(calCell.textContent));
+      }
+    });
+
+    const avg = cals.length > 0 ? (cals.reduce((a, b) => a + b, 0) / cals.length).toFixed(2) : '-';
+    const aprobados = cals.filter(v => v >= K.THRESHOLDS.PASS_GRADE).length;
+    const reprobados = cals.filter(v => v < K.THRESHOLDS.PASS_GRADE).length;
+    const sinCalif = rows.length - cals.length;
+
+    const e = id => document.getElementById(id);
+    if (e('stat-promedio')) e('stat-promedio').textContent = avg;
+    if (e('stat-aprobados')) e('stat-aprobados').textContent = aprobados;
+    if (e('stat-reprobados')) e('stat-reprobados').textContent = reprobados;
+    if (e('stat-sin-calif')) e('stat-sin-calif').textContent = sinCalif;
+  }
 
   function switchPartial(partialId) {
+    if (_isDirty) {
+      if (!confirm('Tienes cambios sin guardar en este parcial. ¿Deseas cambiar sin guardar?')) return;
+    }
+    _markClean();
     currentPartial = partialId;
     openGradeEditor(null, selectedGroup, selectedSubject);
   }
 
-  function updateStats() {
-    const inputs = document.querySelectorAll('.grade-input');
-    const values = [];
-    inputs.forEach(input => {
-      const val = parseFloat(input.value);
-      if (!isNaN(val)) values.push(val);
-    });
-
-    const aprobados = values.filter(v => v >= K.THRESHOLDS.PASS_GRADE).length;
-    const reprobados = values.filter(v => v < K.THRESHOLDS.PASS_GRADE).length;
-    const promedio = values.length > 0
-      ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2)
-      : '-';
-
-    const elPromedio = document.getElementById('stat-promedio');
-    const elAprobados = document.getElementById('stat-aprobados');
-    const elReprobados = document.getElementById('stat-reprobados');
-    const elSinCalif = document.getElementById('stat-sin-calif');
-
-    if (elPromedio) elPromedio.textContent = promedio;
-    if (elAprobados) elAprobados.textContent = aprobados;
-    if (elReprobados) elReprobados.textContent = reprobados;
-    if (elSinCalif) elSinCalif.textContent = inputs.length - values.length;
-  }
-
   async function saveGrades() {
-    // Verificar que el parcial no este cerrado (con soporte para override por docente)
+    // ═══ PREVENT DOUBLE-CLICK ═══
+    if (_isSaving) return;
+
+    const saveBtn = document.querySelector('[data-action="save-grades"]');
+
+    // ═══ CHECK NETWORK CONNECTIVITY ═══
+    if (!navigator.onLine) {
+      Toast.show('Sin conexión a internet. Verifica tu red e intenta de nuevo.', 'error');
+      return;
+    }
+
+    // ═══ CHECK PARTIAL LOCK + OVERRIDE ═══
     try {
       const partialDoc = await db.collection('partials').doc(currentPartial).get();
       if (partialDoc.exists && partialDoc.data().locked) {
-        // Verificar si el docente tiene un override activo
         const teacherDocId = await Store.getTeacherDocId();
-        let hasOverride = false;
-        if (teacherDocId) {
-          const overrideSnap = await db.collection('partialOverrides')
+        let hasOverride = App.currentUser?.role === 'admin';
+        if (!hasOverride && teacherDocId) {
+          const snap = await db.collection('partialOverrides')
             .where('partialId', '==', currentPartial)
-            .where('teacherId', '==', teacherDocId)
-            .limit(1)
-            .get();
-          if (!overrideSnap.empty) {
-            const override = overrideSnap.docs[0].data();
-            // Verificar si no ha expirado
-            if (!override.expiresAt) {
-              hasOverride = true;
-            } else {
-              const exp = override.expiresAt.toDate ? override.expiresAt.toDate() : new Date(override.expiresAt);
+            .where('teacherId', '==', teacherDocId).limit(1).get();
+          if (!snap.empty) {
+            const ov = snap.docs[0].data();
+            if (!ov.expiresAt) hasOverride = true;
+            else {
+              const exp = ov.expiresAt.toDate ? ov.expiresAt.toDate() : new Date(ov.expiresAt);
               hasOverride = exp > new Date();
             }
           }
         }
-        // Admin siempre puede guardar
-        if (App.currentUser?.role === 'admin') hasOverride = true;
-
         if (!hasOverride) {
-          Toast.show('Este parcial esta cerrado. No se pueden modificar calificaciones.', 'warning');
+          Toast.show('Parcial cerrado. No se pueden modificar calificaciones.', 'warning');
           return;
         }
         Toast.show('Guardando con acceso especial (parcial cerrado)', 'info');
       }
     } catch (e) {
-      console.warn('No se pudo verificar estado del parcial:', e);
+      console.warn('Error verificando parcial:', e);
+      Toast.show('Error al verificar parcial. Intentando guardar...', 'warning');
     }
 
-    const groupId = selectedGroup;
-    const subjectId = selectedSubject;
-    const userId = auth.currentUser.uid;
-    const timestamp = new Date();
+    // ═══ VALIDATE ALL INPUTS BEFORE SAVE ═══
+    const rubros = K.getRubros(currentTurno);
+    let validationErrors = 0;
 
-    const inputs = document.querySelectorAll('.grade-input');
+    document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+      rubros.forEach(r => {
+        const input = row.querySelector(`input[data-field="${r.key}"]`);
+        if (input && input.value.trim() !== '') {
+          let v = parseFloat(input.value.replace(',', '.'));
+          if (isNaN(v) || v < 0 || v > r.max) {
+            validationErrors++;
+            input.classList.add('ge-input-invalid');
+          } else {
+            // Auto-fix: clamp and round before save
+            v = Math.max(0, Math.min(v, r.max));
+            v = Math.round(v * 10) / 10;
+            input.value = v;
+            input.classList.remove('ge-input-invalid');
+          }
+        }
+      });
+      const faltasInput = row.querySelector('input[data-field="faltas"]');
+      if (faltasInput && faltasInput.value.trim() !== '') {
+        let v = parseInt(faltasInput.value);
+        if (isNaN(v) || v < 0) { validationErrors++; faltasInput.classList.add('ge-input-invalid'); }
+        else { faltasInput.value = Math.max(0, Math.min(v, 99)); faltasInput.classList.remove('ge-input-invalid'); }
+      }
+    });
+
+    if (validationErrors > 0) {
+      Toast.show(`Hay ${validationErrors} valor(es) fuera de rango. Se corrigieron automáticamente. Revisa y guarda de nuevo.`, 'warning');
+      return;
+    }
+
+    // ═══ LOCK UI DURING SAVE ═══
+    _isSaving = true;
+    const origBtnText = saveBtn?.innerHTML || '';
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:18px;vertical-align:middle;margin-right:4px;">autorenew</span>Guardando...';
+    }
+
+    // ═══ BUILD BATCH ═══
     const batch = db.batch();
     let count = 0;
 
-    inputs.forEach(input => {
-      const value = input.value.trim();
-      if (value) {
-        const studentId = input.getAttribute('data-student-id');
-        const gradeId = `${studentId}_${subjectId}_${currentPartial}`;
-        const gradeRef = db.collection('grades').doc(gradeId);
+    document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+      const studentId = row.dataset.studentId;
+      const data = {
+        studentId,
+        subjectId: selectedSubject,
+        groupId: selectedGroup,
+        partial: currentPartial,
+        updatedAt: new Date(),
+        updatedBy: auth.currentUser.uid
+      };
 
-        batch.set(gradeRef, {
-          studentId,
-          subjectId,
-          groupId,
-          partial: currentPartial,
-          value: parseFloat(value),
-          updatedAt: timestamp,
-          updatedBy: userId
-        }, { merge: true });
+      let hasData = false;
 
+      rubros.forEach(r => {
+        const input = row.querySelector(`input[data-field="${r.key}"]`);
+        if (input && input.value.trim() !== '') {
+          const v = parseFloat(input.value);
+          data[r.key] = Math.max(0, Math.min(v, r.max));
+          hasData = true;
+        }
+      });
+
+      const faltasInput = row.querySelector('input[data-field="faltas"]');
+      if (faltasInput && faltasInput.value.trim() !== '') {
+        data.faltas = parseInt(faltasInput.value);
+      }
+
+      if (hasData) {
+        const sumaData = {};
+        rubros.forEach(r => { sumaData[r.key] = data[r.key]; });
+        data.suma = K.calcSuma(sumaData);
+        data.cal = K.calcCal(data.suma);
+        data.value = data.cal;
+
+        const ref = db.collection('grades').doc(`${studentId}_${selectedSubject}_${currentPartial}`);
+        batch.set(ref, data, { merge: true });
         count++;
       }
     });
 
-    try {
-      await batch.commit();
-      Toast.show(`${count} calificaciones guardadas exitosamente`, 'success');
-      renderTeacher();
-    } catch (error) {
-      console.error('Error saving grades:', error);
-      Toast.show('Error al guardar calificaciones', 'error');
+    // ═══ COMMIT WITH RETRY ═══
+    const maxRetries = 2;
+    let attempt = 0;
+    let success = false;
+
+    while (attempt <= maxRetries && !success) {
+      try {
+        await batch.commit();
+        success = true;
+      } catch (error) {
+        attempt++;
+        console.error(`Error saving grades (attempt ${attempt}):`, error);
+        if (attempt <= maxRetries) {
+          Toast.show(`Reintentando guardar... (${attempt}/${maxRetries})`, 'warning');
+          await new Promise(r => setTimeout(r, 1500 * attempt));
+        } else {
+          Toast.show('Error al guardar calificaciones. Tus datos están seguros en el editor. Verifica tu conexión e intenta de nuevo.', 'error');
+          _isSaving = false;
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
+          // Save draft so data isn't lost
+          _saveDraft();
+          return;
+        }
+      }
     }
+
+    // ═══ SAVE TEACHER HOURS ═══
+    try {
+      const horasData = _getHorasData();
+      if (Object.keys(horasData).length > 0) {
+        const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
+        await db.collection('teacherHours').doc(horasDocId).set({
+          ...horasData,
+          groupId: selectedGroup,
+          subjectId: selectedSubject,
+          partial: currentPartial,
+          updatedBy: auth.currentUser.uid,
+          updatedAt: new Date()
+        }, { merge: true });
+      }
+    } catch (e) {
+      console.warn('Error saving horas (calificaciones sí se guardaron):', e);
+    }
+
+    // ═══ SUCCESS ═══
+    Store.invalidate('grades');
+    _markClean();
+    _isSaving = false;
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
+
+    // Success animation on button
+    if (saveBtn) {
+      saveBtn.classList.add('btn-save-success');
+      setTimeout(() => saveBtn.classList.remove('btn-save-success'), 2000);
+    }
+
+    // Bitácora
+    const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
+    DB.audit('editar', 'calificacion', `${selectedGroup}_${selectedSubject}_${currentPartial}`, {
+      description: `${count} calificaciones guardadas: ${asg?.subjectName || selectedSubject} · ${asg?.groupName || selectedGroup} · ${currentPartial}`,
+      extra: { groupId: selectedGroup, subjectId: selectedSubject, partial: currentPartial, count }
+    });
+
+    Toast.show(`✓ ${count} calificaciones guardadas correctamente`, 'success');
   }
 
-  // ---------------------------------------------------------------------------
-  // Admin view
-  // ---------------------------------------------------------------------------
+  // ═══════════════════════════════════════════════════════════════
+  // PRINT — Formato Oficial v13 (Control Parcial)
+  // ═══════════════════════════════════════════════════════════════
 
-  async function renderAdmin() {
-    if (App.currentUser.role !== 'admin') {
-      _getContainer().innerHTML =
-        '<div class="module-container module-subtitle">Acceso denegado. Solo administradores.</div>';
+  function _buildOfficialPrintHTML(studentsList, gradeData, meta) {
+    const { teacherName, subjectName, groupName, groupNum, grado, turno, parcialNum, parcialText, semText, orientador, horas } = meta;
+    const horasData = horas || {};
+    const n = studentsList.length;
+
+    // Dynamic font sizing based on student count (readability — minimum 6pt for legibility)
+    let fs;
+    if (n <= 30) { fs = '8pt'; }
+    else if (n <= 38) { fs = '7.5pt'; }
+    else if (n <= 45) { fs = '7pt'; }
+    else if (n <= 52) { fs = '6.5pt'; }
+    else { fs = '6pt'; }
+
+    let rows = '';
+    let aprobados = 0, reprobados = 0, totalCalif = 0, gradedCount = 0;
+
+    studentsList.forEach((s, idx) => {
+      const g = gradeData[s.docId || s.id] || {};
+      const ec = g.ec !== undefined && g.ec !== null ? g.ec : '';
+      const tr = g.tr !== undefined && g.tr !== null ? g.tr : '';
+      const ep = g.ex !== undefined && g.ex !== null ? g.ex : '';
+      const pe = g.pe !== undefined && g.pe !== null ? g.pe : '';
+      const sm = g.suma !== undefined && g.suma !== null ? g.suma : '';
+      const fa = g.faltas !== undefined && g.faltas !== null ? Math.round(g.faltas) : '';
+      const cd = g.cal !== undefined && g.cal !== null ? g.cal : (g.value !== undefined && g.value !== null ? Math.min(Number(g.value), 10) : '');
+
+      if (cd !== '') {
+        const nv = parseFloat(cd);
+        if (!isNaN(nv)) { gradedCount++; totalCalif += nv; if (nv >= 6) aprobados++; else reprobados++; }
+      }
+
+      const isReprobado = cd !== '' && parseFloat(cd) < 6;
+      const isOdd = idx % 2 === 1;
+      let rowBg = '';
+      if (isReprobado) { rowBg = ' background:#bbb;-webkit-print-color-adjust:exact;print-color-adjust:exact;'; }
+      else if (isOdd) { rowBg = ' background:#eee;-webkit-print-color-adjust:exact;print-color-adjust:exact;'; }
+
+      const ap1 = s.apellido1 || '';
+      const ap2 = s.apellido2 || '';
+      const nom = s.nombres || '';
+
+      rows += '<tr style="' + rowBg + '">' +
+        '<td class="c">' + (idx + 1) + '</td>' +
+        '<td class="nm">' + Utils.sanitize(ap1) + '</td>' +
+        '<td class="nm">' + Utils.sanitize(ap2) + '</td>' +
+        '<td class="nm">' + Utils.sanitize(nom) + '</td>' +
+        '<td class="c">' + ec + '</td>' +
+        '<td class="c">' + tr + '</td>' +
+        '<td class="c">' + ep + '</td>' +
+        '<td class="c">' + pe + '</td>' +
+        '<td class="c">' + sm + '</td>' +
+        '<td class="c">' + fa + '</td>' +
+        '<td class="c" style="font-weight:bold;">' + cd + '</td>' +
+        '<td></td>' +
+        '</tr>';
+    });
+
+    const existencia = studentsList.length;
+    const inscritos = existencia;
+    const promedio = gradedCount > 0 ? (totalCalif / gradedCount).toFixed(2) : '';
+    const pctAprob = gradedCount > 0 ? ((aprobados / gradedCount) * 100).toFixed(1) + '%' : '';
+
+    const logoHeader = typeof LOGO_HEADER_SRC !== 'undefined' ? LOGO_HEADER_SRC : '';
+    const logoFooter = typeof LOGO_FOOTER_SRC !== 'undefined' ? LOGO_FOOTER_SRC : '';
+
+    return `
+<style>
+@page { size: letter portrait; margin: 4mm 5mm 3mm 5mm; }
+html, body { margin:0; padding:0; height:100%; }
+* { box-sizing:border-box; margin:0; padding:0; }
+
+/* ═══ FLEX PAGE LAYOUT — llena la hoja completa ═══ */
+.PG {
+    width:100%; height:100vh;
+    font-family:Arial,Helvetica,sans-serif; color:#000; line-height:1.1;
+    font-size:6pt;
+    display:flex; flex-direction:column;
+    overflow:hidden;
+}
+.PG table { border-collapse:collapse; }
+
+/* Secciones fijas (no crecen) */
+.PG-hdr, .PG-ttl, .PG-nfo, .PG-bot, .PG-ftr { flex-shrink:0; flex-grow:0; }
+
+/* Sección de la tabla de alumnos — CRECE para llenar todo el espacio restante */
+.PG-data { flex:1; overflow:hidden; display:flex; flex-direction:column; }
+
+.hdr-t { width:100%; margin-bottom:0.3mm; }
+.hdr-t td { vertical-align:middle; padding:0; }
+.hdr-t img { height:6.5mm; width:auto; }
+.hdr-r { text-align:right; font-size:5pt; line-height:1.25; color:#333; }
+
+.ttl-esc { text-align:center; font-weight:bold; font-size:7.5pt; line-height:1.1; }
+.ttl-ctrl { text-align:center; font-weight:bold; font-size:7pt; line-height:1; margin:0.3mm 0;
+    border-bottom:0.5pt solid #000; padding-bottom:0.3mm; }
+
+.nfo { width:100%; font-size:6pt; line-height:1.15; }
+.nfo td { border:0.4pt solid #000; padding:0.4mm 0.8mm; height:3.5mm; vertical-align:middle; }
+.nfo .lb { font-size:5.5pt; color:#333; }
+.nfo .vl { font-weight:bold; font-size:6pt; }
+.nfo .sm { text-align:center; font-weight:bold; font-size:6.5pt; line-height:1.15; }
+
+/* ═══ TABLA PRINCIPAL — height:100% para llenar el flex container ═══ */
+.MT { width:100%; height:100%; table-layout:fixed; font-size:${fs}; line-height:1; }
+.MT th { border:0.5pt solid #000; padding:0.2mm; text-align:center; font-weight:bold; font-size:5pt;
+    background:#000; color:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    line-height:1.1; vertical-align:middle; height:5mm; }
+.MT td { border:0.4pt solid #000; font-size:${fs}; line-height:1;
+    padding:0 0.4mm; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; vertical-align:middle; }
+.MT .c { text-align:center; padding:0; }
+.MT .nm { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+
+.ST td { border:0.4pt solid #000; padding:0.25mm 0.6mm; font-size:6pt; line-height:1.1; height:2.6mm; }
+.ST .sl { font-weight:bold; }
+.ST .sv { text-align:center; font-weight:bold; font-size:6.5pt; width:10mm; }
+.HT td { border:0.4pt solid #000; padding:0.25mm 0.4mm; font-size:6pt; text-align:center; line-height:1.1; height:2.6mm; }
+.HT .hl { font-weight:bold; font-size:5.5pt; }
+.HT .hv { font-weight:bold; font-size:6.5pt; }
+.HT .ht { font-weight:bold; font-size:5pt; }
+
+.SG-tbl { width:100%; border-collapse:collapse; }
+.SG-tbl td { width:25%; text-align:center; padding:0 1.5mm; }
+.SG-tbl .sg-line-row td { vertical-align:bottom; border-bottom:0.5pt solid #000; height:1mm; }
+.SG-tbl .sg-text-row td { vertical-align:top; padding-top:0.3mm; }
+.SG-tt { font-weight:bold; font-size:6pt; line-height:1.15; }
+.SG-nm { font-size:5.5pt; line-height:1.15; }
+
+.ftr img { width:100%; max-height:3mm; display:block; }
+.ftr-t { text-align:center; font-size:4.5pt; color:#333; line-height:1; margin-top:0.1mm; }
+</style>
+
+<div class="PG">
+
+<!-- ═══ HEADER (fijo) ═══ -->
+<div class="PG-hdr">
+<table class="hdr-t"><tr>
+    <td style="width:50%">${logoHeader ? '<img src="' + logoHeader + '">' : ''}</td>
+    <td class="hdr-r">
+        DIRECCIÓN GENERAL DE EDUCACIÓN MEDIA SUPERIOR<br>
+        DIRECCIÓN DE BACHILLERATO GENERAL<br>
+        ZONA ESCOLAR NÚM. 63 BC<br>
+        ESCUELA PREPARATORIA OFICIAL NÚM. 67<br>
+        <b>C.C.T. 15EBH0134D · 15EBH0168U</b>
+    </td>
+</tr></table>
+</div>
+
+<!-- ═══ TÍTULOS (fijo) ═══ -->
+<div class="PG-ttl">
+<div class="ttl-esc">ESCUELA PREPARATORIA OFICIAL NÚM. 67</div>
+<div class="ttl-ctrl">CONTROL ${parcialText} PARCIAL</div>
+</div>
+
+<!-- ═══ INFO DOCENTE/MATERIA (fijo) ═══ -->
+<div class="PG-nfo">
+<table class="nfo">
+    <tr>
+        <td style="width:10%"><span class="lb">Profesor(a):</span></td>
+        <td style="width:35%" class="vl">${Utils.sanitize(teacherName)}</td>
+        <td style="width:10%"><span class="lb">Grado:</span> <span class="vl">${grado}°</span></td>
+        <td style="width:10%"><span class="lb">Grupo:</span> <span class="vl">${groupNum}</span></td>
+        <td style="width:20%" class="sm" rowspan="2">${semText}<br><span style="font-size:5.5pt;color:#333;">${Utils.sanitize(turno)}</span></td>
+    </tr>
+    <tr>
+        <td><span class="lb">UAC:</span></td>
+        <td colspan="3" class="vl">${Utils.sanitize(subjectName)}</td>
+    </tr>
+</table>
+</div>
+
+<!-- ═══ TABLA DE ALUMNOS (CRECE — flex:1) ═══ -->
+<div class="PG-data">
+<table class="MT">
+    <colgroup>
+        <col style="width:3%"><col style="width:10%"><col style="width:10%"><col style="width:13%">
+        <col style="width:6%"><col style="width:5.5%"><col style="width:5.5%"><col style="width:4.5%">
+        <col style="width:5%"><col style="width:4.5%"><col style="width:6%"><col style="width:7%">
+    </colgroup>
+    <thead><tr>
+        <th>No.</th>
+        <th>Apellido Paterno</th>
+        <th>Apellido Materno</th>
+        <th>Nombre(s)</th>
+        <th>Eval.<br>Continua</th>
+        <th>Trans-<br>versal</th>
+        <th>Examen<br>Parcial</th>
+        <th>Ptje.<br>Extra</th>
+        <th>Suma</th>
+        <th>Faltas</th>
+        <th>Cal.<br>Definitiva</th>
+        <th>Firma</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+</table>
+</div>
+
+<!-- ═══ ESTADÍSTICAS + FIRMAS (fijo) ═══ -->
+<div class="PG-bot">
+<table style="width:100%; border-collapse:collapse; margin-top:0.3mm;">
+    <tr>
+        <td style="width:28%; vertical-align:top; padding:0;">
+            <table class="ST" style="width:100%; border-collapse:collapse;">
+                <tr><td class="sl">No. de Alumnos Inscritos</td><td class="sv">${inscritos}</td></tr>
+                <tr><td class="sl">Bajas Durante el Semestre</td><td class="sv">0</td></tr>
+                <tr><td class="sl">Existencia</td><td class="sv">${existencia}</td></tr>
+                <tr><td class="sl">No. de Alumnos Aprobados</td><td class="sv">${aprobados}</td></tr>
+                <tr><td class="sl">No. de Alumnos Reprobados</td><td class="sv">${reprobados}</td></tr>
+                <tr><td class="sl">Porcentaje de Aprobados</td><td class="sv">${pctAprob}</td></tr>
+                <tr><td class="sl">Promedio del Grupo</td><td class="sv">${promedio}</td></tr>
+            </table>
+            <table class="HT" style="width:100%; border-collapse:collapse; margin-top:0.3mm;">
+                <tr>
+                    <td class="ht" rowspan="2" style="width:12mm;">Horas<br>Impartidas</td>
+                    <td class="hl">Febrero</td><td class="hl">Marzo</td><td class="hl">Abril</td>
+                    <td class="hl">Mayo</td><td class="hl">Junio</td><td class="hl">Julio</td>
+                    <td class="hl" style="font-weight:bold">Total</td>
+                </tr>
+                <tr>
+                    <td class="hv">${horasData.febrero || ''}</td><td class="hv">${horasData.marzo || ''}</td><td class="hv">${horasData.abril || ''}</td>
+                    <td class="hv">${horasData.mayo || ''}</td><td class="hv">${horasData.junio || ''}</td><td class="hv">${horasData.julio || ''}</td>
+                    <td class="hv" style="font-weight:bold">${[horasData.febrero,horasData.marzo,horasData.abril,horasData.mayo,horasData.junio,horasData.julio].reduce((s,v) => s + (parseInt(v) || 0), 0) || ''}</td>
+                </tr>
+            </table>
+        </td>
+
+        <td style="width:72%; vertical-align:bottom; padding:0 0 0 1.5mm;">
+            <table class="SG-tbl">
+                <tr class="sg-line-row">
+                    <td></td><td></td><td></td><td></td>
+                </tr>
+                <tr class="sg-text-row">
+                    <td>
+                        <div class="SG-tt">FIRMA DEL PROFESOR</div>
+                        <div class="SG-nm">${Utils.sanitize(teacherName)}</div>
+                    </td>
+                    <td>
+                        <div class="SG-tt">FIRMA DEL ORIENTADOR</div>
+                        <div class="SG-nm">${Utils.sanitize(orientador)}</div>
+                    </td>
+                    <td>
+                        <div class="SG-tt">VO. BO. SUBDIRECCIÓN ESCOLAR</div>
+                        <div class="SG-nm">PROFR. OCTAVIO VÁZQUEZ BARRETO</div>
+                    </td>
+                    <td>
+                        <div class="SG-tt">REVISADO POR SECRETARÍA ESCOLAR</div>
+                        <div class="SG-nm">PROFR. ROBERTO PALOMARES MEJÍA</div>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+</div>
+
+<!-- ═══ FOOTER (fijo) ═══ -->
+<div class="PG-ftr">
+<div class="ftr">
+    ${logoFooter ? '<img src="' + logoFooter + '">' : ''}
+    <div class="ftr-t">Av. de los Astros 7, Cuautitlán Izcalli, Estado de México, México C.P. 54770 · Tel. 55 5877 0221 · epo67@edu.gem.gob.mx</div>
+</div>
+</div>
+
+</div>`;
+  }
+
+  async function printGrades() {
+    if (!students || students.length === 0) {
+      Toast.show('No hay datos para imprimir', 'warning');
       return;
     }
 
-    const container = _getContainer();
-    container.innerHTML = '<div class="module-container" style="text-align:center;">Cargando calificaciones...</div>';
+    const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
+    const subjectName = asg ? K.getUACNombre(asg.subjectName || asg.subjectId) : selectedSubject;
+    const groupName = asg ? (asg.groupName || asg.groupId) : selectedGroup;
+    const teacherName = (asg?.teacherName || '').toUpperCase();
+    const grado = asg?.grado || 1;
+    const groupNum = (groupName.split('-')[1] || groupName).trim();
 
-    try {
-      const [studentsSnap, assignmentsSnap, gradesSnap, partialsSnap] = await Promise.all([
-        db.collection('students').get(),
-        db.collection('assignments').get(),
-        db.collection('grades').get(),
-        db.collection('partials').get()
-      ]);
+    const parcialObj = K.PARCIALES.find(p => p.id === currentPartial);
+    const parcialNum = parcialObj?.numero || 1;
+    const parcMap = { 1: 'PRIMER', 2: 'SEGUNDO', 3: 'TERCER' };
+    const parcialText = parcMap[parcialNum] || 'PRIMER';
+    const semMap = { 1: 'SEGUNDO SEMESTRE', 2: 'CUARTO SEMESTRE', 3: 'SEXTO SEMESTRE' };
+    const semText = semMap[grado] || '';
+    const orientador = K.getOrientador(currentTurno, groupName) || '';
 
-      const studentMap = {};
-      const assignmentMap = {};
-      const gradesData = [];
-      const partialsMap = {};
+    // Build grade data map from DOM (current editor state)
+    const gradeDataMap = {};
+    const rubros = K.getRubros(currentTurno);
+    students.forEach(s => {
+      const key = `${s.docId}_${selectedSubject}_${currentPartial}`;
+      const stored = grades[key] || {};
+      const row = document.querySelector(`tr[data-student-id="${s.docId}"]`);
+      const g = {};
 
-      studentsSnap.forEach(doc => {
-        studentMap[doc.id] = { docId: doc.id, ...doc.data() };
-      });
-      assignmentsSnap.forEach(doc => {
-        assignmentMap[doc.id] = doc.data();
-      });
-      gradesSnap.forEach(doc => {
-        gradesData.push({ id: doc.id, ...doc.data() });
-      });
-      partialsSnap.forEach(doc => {
-        partialsMap[doc.id] = doc.data();
-      });
-
-      _adminData = { grades: gradesData, studentMap };
-
-      const filtersHtml = _buildFilterUI(studentMap);
-      const tableHtml = _buildGradesTable(gradesData, studentMap);
-
-      container.innerHTML = `
-        <div class="module-container">
-          <h1 class="module-title">Calificaciones (Admin)</h1>
-          ${filtersHtml}
-          <div id="admin-grades-table">${tableHtml}</div>
-        </div>
-      `;
-
-      _delegateClick(container);
-    } catch (error) {
-      console.error('Error loading admin grades:', error);
-      container.innerHTML = '<div class="module-container module-subtitle">Error al cargar calificaciones</div>';
-    }
-  }
-
-  function _buildFilterUI(studentMap) {
-    const turnos = [...new Set(Object.values(studentMap).map(s => s.turno))].filter(Boolean);
-    const grados = [...new Set(Object.values(studentMap).map(s => s.grado))].filter(Boolean);
-
-    return `
-      <div class="filter-bar">
-        <div class="filter-bar-grid">
-          <div class="form-group">
-            <select id="filterTurno">
-              <option value="">Todos los turnos</option>
-              ${turnos.map(t => `<option value="${t}">${t}</option>`).join('')}
-            </select>
-          </div>
-          <div class="form-group">
-            <select id="filterGrado">
-              <option value="">Todos los grados</option>
-              ${grados.map(g => `<option value="${g}">Grado ${g}</option>`).join('')}
-            </select>
-          </div>
-          <button class="btn btn-primary" data-action="apply-admin-filters">Filtrar</button>
-        </div>
-      </div>
-    `;
-  }
-
-  function _buildGradesTable(gradesArr, studentMap) {
-    if (gradesArr.length === 0) {
-      return '<div class="card module-subtitle" style="text-align:center;">No hay calificaciones registradas</div>';
-    }
-
-    let rowsHtml = '';
-    gradesArr.forEach(grade => {
-      const student = studentMap[grade.studentId];
-      if (student) {
-        const badgeClass = grade.value >= K.THRESHOLDS.PASS_GRADE
-          ? 'grade-badge--pass'
-          : 'grade-badge--fail';
-
-        rowsHtml += `
-          <tr>
-            <td>${student.nombreCompleto || 'N/A'}</td>
-            <td>${grade.groupId}</td>
-            <td>${grade.subjectName || 'N/A'}</td>
-            <td style="text-align:center;">${grade.partial}</td>
-            <td style="text-align:center;">
-              <span class="${badgeClass}">${grade.value}</span>
-            </td>
-          </tr>
-        `;
+      if (row) {
+        rubros.forEach(r => {
+          const input = row.querySelector(`input[data-field="${r.key}"]`);
+          g[r.key] = input && input.value.trim() !== '' ? parseFloat(input.value) : (stored[r.key] !== undefined ? stored[r.key] : null);
+        });
+        const sumaCell = row.querySelector('.col-suma');
+        const calCell = row.querySelector('.col-cal');
+        const faltasInput = row.querySelector('input[data-field="faltas"]');
+        g.suma = sumaCell && sumaCell.textContent.trim() !== '' ? parseFloat(sumaCell.textContent) : null;
+        g.cal = calCell && calCell.textContent.trim() !== '' ? parseFloat(calCell.textContent) : null;
+        g.faltas = faltasInput && faltasInput.value.trim() !== '' ? parseInt(faltasInput.value) : null;
+      } else {
+        rubros.forEach(r => { g[r.key] = stored[r.key] !== undefined ? stored[r.key] : null; });
+        g.suma = stored.suma !== undefined ? stored.suma : null;
+        g.cal = stored.cal !== undefined ? stored.cal : (stored.value !== undefined ? Math.min(Number(stored.value), 10) : null);
+        g.faltas = stored.faltas !== undefined ? stored.faltas : null;
       }
+      gradeDataMap[s.docId] = g;
     });
 
-    return `
-      <div class="table-container">
-        <table class="table-light">
-          <thead>
-            <tr>
-              <th style="text-align:left;">Estudiante</th>
-              <th style="text-align:left;">Grupo</th>
-              <th style="text-align:left;">Materia</th>
-              <th style="text-align:center;">Parcial</th>
-              <th style="text-align:center;">Calificacion</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
+    const html = _buildOfficialPrintHTML(students, gradeDataMap, {
+      teacherName, subjectName, groupName, groupNum, grado, turno: currentTurno,
+      parcialNum, parcialText, semText, orientador, horas: _getHorasData()
+    });
+
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Control Parcial - ' +
+      Utils.sanitize(groupName) + ' - ' + Utils.sanitize(subjectName) + '</title></head><body>' +
+      html + '<script>setTimeout(()=>window.print(),400)<\/script></body></html>');
+    printWindow.document.close();
+  }
+
+  function printAdminGrades() {
+    if (!_admin.grupo || !_admin.parcial) {
+      Toast.show('Selecciona un grupo y parcial para imprimir', 'warning');
+      return;
+    }
+    if (!_admin.materia) {
+      Toast.show('Selecciona una materia para imprimir en formato oficial', 'warning');
+      return;
+    }
+
+    const studentMap = {};
+    _admin.allStudents.forEach(s => { studentMap[s.id] = s; });
+    const subjectMap = {};
+    _admin.allSubjects.forEach(s => { subjectMap[s.id] = s; });
+    const groupMap = {};
+    _admin.allGroups.forEach(g => { groupMap[g.id] = g; });
+
+    const grupo = groupMap[_admin.grupo];
+    const groupName = grupo?.nombre || _admin.grupo;
+    const groupNum = (groupName.split('-')[1] || groupName).trim();
+    const grado = grupo?.grado || parseInt(_admin.grado) || 1;
+    const turno = _admin.turno;
+
+    const subject = subjectMap[_admin.materia];
+    const subjectName = K.getUACNombre(subject?.nombre || _admin.materia);
+
+    // Find teacher for this group+subject
+    const asg = _admin.allAssignments.find(a => a.groupId === _admin.grupo && a.subjectId === _admin.materia);
+    const teacherName = (asg?.teacherName || '').toUpperCase();
+
+    const parcialObj = K.PARCIALES.find(p => p.id === _admin.parcial);
+    const parcialNum = parcialObj?.numero || 1;
+    const parcMap = { 1: 'PRIMER', 2: 'SEGUNDO', 3: 'TERCER' };
+    const parcialText = parcMap[parcialNum] || 'PRIMER';
+    const semMap = { 1: 'SEGUNDO SEMESTRE', 2: 'CUARTO SEMESTRE', 3: 'SEXTO SEMESTRE' };
+    const semText = semMap[grado] || '';
+    const orientador = K.getOrientador(turno, groupName) || '';
+
+    // Filter students for this group and sort by apellido
+    const groupStudents = _admin.allStudents
+      .filter(s => s.groupId === _admin.grupo)
+      .sort((a, b) => {
+        const c = (a.apellido1 || '').localeCompare(b.apellido1 || '');
+        if (c) return c;
+        const c2 = (a.apellido2 || '').localeCompare(b.apellido2 || '');
+        if (c2) return c2;
+        return (a.nombres || '').localeCompare(b.nombres || '');
+      });
+
+    // Build grade data map from allGrades
+    const gradeDataMap = {};
+    const filtered = _admin.allGrades.filter(g => g.subjectId === _admin.materia && g.partial === _admin.parcial);
+    filtered.forEach(g => {
+      gradeDataMap[g.studentId] = g;
+    });
+
+    const html = _buildOfficialPrintHTML(groupStudents, gradeDataMap, {
+      teacherName, subjectName, groupName, groupNum, grado, turno,
+      parcialNum, parcialText, semText, orientador
+    });
+
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Control Parcial - ' +
+      Utils.sanitize(groupName) + ' - ' + Utils.sanitize(subjectName) + '</title></head><body>' +
+      html + '<script>setTimeout(()=>window.print(),400)<\/script></body></html>');
+    printWindow.document.close();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ADMIN / ORIENTADOR VIEW — Filtros cascada estilo v13
+  // ═══════════════════════════════════════════════════════════════
+
+  async function renderAdmin() {
+    const role = App.currentUser?.role;
+    if (role !== 'admin' && role !== 'orientador' && role !== 'maestro') {
+      _container().innerHTML = UI.moduleContainer(UI.emptyState('block', 'Acceso denegado'));
+      return;
+    }
+
+    const container = _container();
+    container.innerHTML = UI.moduleContainer(UI.loadingState('Cargando datos...'));
+
+    try {
+      const [s, a, t, sub, grp, p] = await Promise.all([
+        Store.getStudents(), Store.getAssignments(),
+        Store.getTeachers(), Store.getSubjects(), Store.getGroups(), Store.getPartials()
+      ]);
+
+      _admin.allStudents = s.filter(st => st.estatus === 'ACTIVO');
+      _admin.allGrades = []; // Se cargan bajo demanda al seleccionar grupo
+      _admin.allAssignments = a;
+      _admin.allTeachers = t;
+      _admin.allSubjects = sub;
+      _admin.allGroups = grp;
+      _admin.allPartials = p;
+      _admin.turno = ''; _admin.grado = ''; _admin.grupo = '';
+      _admin.parcial = ''; _admin.materia = ''; _admin.docente = '';
+
+      // For maestros: auto-filter to their assigned groups/subjects
+      if (role === 'maestro') {
+        _admin._teacherDocId = await Store.getTeacherDocId();
+        if (_admin._teacherDocId) {
+          _admin._teacherAssignments = a.filter(asg => asg.teacherId === _admin._teacherDocId);
+        } else {
+          _admin._teacherAssignments = [];
+        }
+      } else {
+        _admin._teacherDocId = null;
+        _admin._teacherAssignments = null;
+      }
+
+      _renderAdminUI();
+    } catch (error) {
+      console.error('Error loading admin grades:', error);
+      container.innerHTML = UI.moduleContainer(UI.errorState('Error al cargar calificaciones'));
+    }
+  }
+
+  function _renderAdminUI() {
+    const container = _container();
+    const role = App.currentUser?.role;
+    const isMaestro = role === 'maestro';
+    const subtitle = isMaestro
+      ? 'Consulta de calificaciones de tus grupos y materias asignadas'
+      : 'Consulta de calificaciones por grupo (solo lectura)';
+
+    container.innerHTML = `
+      <div class="module-container">
+        ${UI.pageHeader('Consulta de Calificaciones', subtitle)}
+
+        <div class="card">
+          <div class="filter-bar-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
+            <div class="form-group"><label>Turno</label>
+              <select id="gf-turno"><option value="">Seleccionar...</option>${K.TURNOS.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
+            </div>
+            <div class="form-group"><label>Grado</label>
+              <select id="gf-grado"><option value="">Seleccionar...</option></select>
+            </div>
+            <div class="form-group"><label>Grupo</label>
+              <select id="gf-grupo"><option value="">Seleccionar...</option></select>
+            </div>
+            <div class="form-group"><label>Parcial</label>
+              <select id="gf-parcial"><option value="">Seleccionar...</option></select>
+            </div>
+            <div class="form-group"><label>Materia</label>
+              <select id="gf-materia"><option value="">Todas</option></select>
+            </div>
+            <div class="form-group"><label>Docente</label>
+              <select id="gf-docente"><option value="">Todos</option></select>
+            </div>
+          </div>
+          <div class="filter-bar-actions" style="margin-top:12px;display:flex;gap:8px;">
+            <button class="btn btn-outline btn-sm" data-action="export-grades">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">download</span>Exportar Excel
+            </button>
+            <button class="btn btn-outline btn-sm" data-action="print-admin-grades">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>Imprimir
+            </button>
+          </div>
+        </div>
+
+        <div id="gf-stats"></div>
+        <div id="gf-table"></div>
+      </div>`;
+
+    _delegateClick(container);
+    _bindAdminFilters();
+  }
+
+  function _bindAdminFilters() {
+    _el('gf-turno').addEventListener('change', function() { _admin.turno = this.value; _cascadeFrom('turno'); });
+    _el('gf-grado').addEventListener('change', function() { _admin.grado = this.value; _cascadeFrom('grado'); });
+    _el('gf-grupo').addEventListener('change', function() { _admin.grupo = this.value; _cascadeFrom('grupo'); });
+    _el('gf-parcial').addEventListener('change', function() { _admin.parcial = this.value; _cascadeFrom('parcial'); });
+    _el('gf-materia').addEventListener('change', function() { _admin.materia = this.value; _cascadeFrom('materia'); });
+    _el('gf-docente').addEventListener('change', function() { _admin.docente = this.value; _cascadeFrom('docente'); });
+  }
+
+  function _cascadeFrom(field) {
+    const fields = ['turno', 'grado', 'grupo', 'parcial', 'materia', 'docente'];
+    const idx = fields.indexOf(field);
+    if (idx <= 0) { _admin.grado = ''; _updateGradoOptions(); }
+    if (idx <= 1) { _admin.grupo = ''; _updateGrupoOptions(); }
+    if (idx <= 2) { _admin.parcial = ''; _updateParcialOptions(); }
+    if (idx <= 3) { _admin.materia = ''; _updateMateriaOptions(); }
+    if (idx <= 4) { _admin.docente = ''; _updateDocenteOptions(); }
+    _updateTable();
+  }
+
+  function _updateGradoOptions() {
+    const el = _el('gf-grado');
+    let grados = _admin.turno
+      ? [...new Set(_admin.allStudents.filter(s => s.turno === _admin.turno).map(s => s.grado))].filter(Boolean).sort((a,b) => a-b)
+      : [...K.GRADOS];
+    // For maestros: only show grados where they have assignments
+    if (_admin._teacherAssignments) {
+      const teacherGroupIds = new Set(_admin._teacherAssignments.map(a => a.groupId));
+      const teacherGrados = new Set(_admin.allGroups.filter(g => teacherGroupIds.has(g.id)).map(g => String(g.grado)));
+      grados = grados.filter(g => teacherGrados.has(String(g)));
+    }
+    el.innerHTML = '<option value="">Seleccionar...</option>' + grados.map(g => `<option value="${g}">${g}° Grado</option>`).join('');
+  }
+
+  function _updateGrupoOptions() {
+    const el = _el('gf-grupo');
+    let filtered = _admin.allGroups;
+    if (_admin.turno) filtered = filtered.filter(g => g.turno === _admin.turno);
+    if (_admin.grado) filtered = filtered.filter(g => String(g.grado) === String(_admin.grado));
+    // For maestros: only show groups they are assigned to
+    if (_admin._teacherAssignments) {
+      const teacherGroupIds = new Set(_admin._teacherAssignments.map(a => a.groupId));
+      filtered = filtered.filter(g => teacherGroupIds.has(g.id));
+    }
+    filtered.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    el.innerHTML = '<option value="">Seleccionar...</option>' + filtered.map(g => `<option value="${g.id}">${Utils.sanitize(g.nombre || g.id)}</option>`).join('');
+  }
+
+  function _updateParcialOptions() {
+    const el = _el('gf-parcial');
+    el.innerHTML = '<option value="">Seleccionar...</option>' + K.PARCIALES.map(p => {
+      const partial = _admin.allPartials.find(pp => pp.id === p.id);
+      const locked = partial?.locked ? ' 🔒' : '';
+      return `<option value="${p.id}">${p.nombre}${locked}</option>`;
+    }).join('');
+  }
+
+  function _updateMateriaOptions() {
+    const el = _el('gf-materia');
+    let subs = [];
+    // Determine which assignments to use (maestros only see their own)
+    const relevantAssignments = _admin._teacherAssignments || _admin.allAssignments;
+    if (_admin.grupo) {
+      const ids = [...new Set(relevantAssignments.filter(a => a.groupId === _admin.grupo).map(a => a.subjectId))];
+      subs = _admin.allSubjects.filter(s => ids.includes(s.id));
+    } else if (_admin.grado) {
+      const gGroups = _admin.allGroups.filter(g => String(g.grado) === String(_admin.grado) && (!_admin.turno || g.turno === _admin.turno));
+      const gIds = gGroups.map(g => g.id);
+      const ids = [...new Set(relevantAssignments.filter(a => gIds.includes(a.groupId)).map(a => a.subjectId))];
+      subs = _admin.allSubjects.filter(s => ids.includes(s.id));
+    } else {
+      if (_admin._teacherAssignments) {
+        const ids = [...new Set(_admin._teacherAssignments.map(a => a.subjectId))];
+        subs = _admin.allSubjects.filter(s => ids.includes(s.id));
+      } else {
+        subs = [..._admin.allSubjects];
+      }
+    }
+    subs.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    el.innerHTML = '<option value="">Todas las materias</option>' + subs.map(s => `<option value="${s.id}">${Utils.sanitize(K.getUACNombre(s.nombre || s.id))}</option>`).join('');
+  }
+
+  function _updateDocenteOptions() {
+    const el = _el('gf-docente');
+    // For maestros: hide docente filter (they only see their own data)
+    if (_admin._teacherAssignments) {
+      el.closest('.form-group').style.display = 'none';
+      return;
+    }
+    el.closest('.form-group').style.display = '';
+    let filtered = _admin.allAssignments;
+    if (_admin.grupo) filtered = filtered.filter(a => a.groupId === _admin.grupo);
+    if (_admin.materia) filtered = filtered.filter(a => a.subjectId === _admin.materia);
+    const tIds = [...new Set(filtered.map(a => a.teacherId))];
+    const teachers = _admin.allTeachers.filter(t => tIds.includes(t.id));
+    teachers.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    el.innerHTML = '<option value="">Todos los docentes</option>' + teachers.map(t => `<option value="${t.id}">${Utils.sanitize(t.nombre || t.id)}</option>`).join('');
+  }
+
+  async function _updateTable() {
+    const tableContainer = _el('gf-table');
+    const statsContainer = _el('gf-stats');
+    if (!tableContainer) return;
+
+    if (!_admin.turno) {
+      tableContainer.innerHTML = UI.emptyState('filter_list', 'Selecciona un turno para comenzar');
+      statsContainer.innerHTML = '';
+      return;
+    }
+
+    if (!_admin.grupo) {
+      tableContainer.innerHTML = UI.emptyState('filter_list', 'Selecciona un grupo para ver calificaciones');
+      statsContainer.innerHTML = '';
+      return;
+    }
+
+    // Show loading while fetching grades for this group
+    tableContainer.innerHTML = UI.loadingState('Cargando calificaciones del grupo...');
+    statsContainer.innerHTML = '';
+
+    // Load grades for selected group(s) on demand
+    try {
+      _admin.allGrades = await Store.getGradesByGroup(_admin.grupo);
+    } catch (err) {
+      console.error('Error loading grades:', err);
+      tableContainer.innerHTML = UI.emptyState('error', 'Error al cargar calificaciones');
+      return;
+    }
+
+    // Filter grades (already filtered by groupId from Firestore query)
+    let filtered = [..._admin.allGrades];
+
+    // For maestros: restrict to their assigned subjects for this group
+    if (_admin._teacherAssignments) {
+      const teacherCombos = new Set(_admin._teacherAssignments.map(a => `${a.groupId}_${a.subjectId}`));
+      filtered = filtered.filter(g => teacherCombos.has(`${g.groupId}_${g.subjectId}`));
+    }
+
+    if (_admin.parcial) filtered = filtered.filter(g => g.partial === _admin.parcial);
+    if (_admin.materia) filtered = filtered.filter(g => g.subjectId === _admin.materia);
+    if (_admin.docente) {
+      const combos = new Set(_admin.allAssignments.filter(a => a.teacherId === _admin.docente).map(a => `${a.groupId}_${a.subjectId}`));
+      filtered = filtered.filter(g => combos.has(`${g.groupId}_${g.subjectId}`));
+    }
+
+    // Build maps
+    const studentMap = {};
+    _admin.allStudents.forEach(s => { studentMap[s.id] = s; });
+    const subjectMap = {};
+    _admin.allSubjects.forEach(s => { subjectMap[s.id] = s; });
+    const groupMap = {};
+    _admin.allGroups.forEach(g => { groupMap[g.id] = g; });
+
+    // Stats using cal (or value for legacy data)
+    const values = filtered.map(g => {
+      const cal = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : null);
+      return cal;
+    }).filter(v => v !== null && v !== '' && !isNaN(v));
+
+    const avg = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+    const aprobados = values.filter(v => v >= K.THRESHOLDS.PASS_GRADE).length;
+    const reprobados = values.filter(v => v < K.THRESHOLDS.PASS_GRADE).length;
+    const pctReprob = values.length > 0 ? Math.round((reprobados / values.length) * 100) : 0;
+
+    const avgClass = avg >= 8.3 ? 'stat-card--success' : avg >= 7 ? 'stat-card--warning' : 'stat-card--danger';
+    const repClass = pctReprob <= 14 ? 'stat-card--success' : pctReprob <= 20 ? 'stat-card--warning' : 'stat-card--danger';
+
+    statsContainer.innerHTML = `
+      <div class="stats-grid" style="margin-bottom:16px;">
+        <div class="stat-card--compact ${avgClass}"><div class="stat-number">${avg.toFixed(2)}</div><div class="stat-label">Promedio</div></div>
+        <div class="stat-card--compact stat-card--primary"><div class="stat-number">${filtered.length}</div><div class="stat-label">Calificaciones</div></div>
+        <div class="stat-card--compact stat-card--success"><div class="stat-number">${aprobados}</div><div class="stat-label">Aprobados</div></div>
+        <div class="stat-card--compact ${repClass}"><div class="stat-number">${reprobados} (${pctReprob}%)</div><div class="stat-label">Reprobados</div></div>
+      </div>`;
+
+    if (filtered.length === 0) {
+      tableContainer.innerHTML = UI.emptyState('grading', 'No hay calificaciones para los filtros seleccionados');
+      return;
+    }
+
+    // Determine rubros for display
+    const turnoRubros = K.getRubros(_admin.turno);
+
+    // Sort by student name
+    filtered.sort((a, b) => {
+      const sa = studentMap[a.studentId];
+      const sb = studentMap[b.studentId];
+      return (sa?.nombreCompleto || '').localeCompare(sb?.nombreCompleto || '');
+    });
+
+    const display = filtered.slice(0, 500);
+    const truncated = filtered.length > 500;
+
+    // Header for rubros columns
+    const rubroHeaders = turnoRubros.map(r => `<th style="width:55px;text-align:center;font-size:11px;">${r.abbr}</th>`).join('');
+
+    let rows = '';
+    display.forEach((g, i) => {
+      const student = studentMap[g.studentId];
+      const subject = subjectMap[g.subjectId];
+      const group = groupMap[g.groupId];
+      const cal = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : '-');
+      const suma = g.suma !== undefined ? Number(g.suma).toFixed(1) : '-';
+      const calColor = cal !== '-' && cal < 6 ? 'color:var(--color-danger);font-weight:700;' : 'font-weight:600;';
+
+      // Rubros cells
+      const rubroCells = turnoRubros.map(r => {
+        const v = g[r.key];
+        return `<td style="text-align:center;font-size:12px;">${v !== undefined ? v : '-'}</td>`;
+      }).join('');
+
+      rows += `<tr>
+        <td class="text-muted">${i + 1}</td>
+        <td class="font-semibold" style="font-size:12px;">${Utils.sanitize(student?.nombreCompleto || 'N/A')}</td>
+        <td style="font-size:12px;">${Utils.sanitize(group?.nombre || g.groupId)}</td>
+        <td style="font-size:12px;">${Utils.sanitize(K.getUACNombre(subject?.nombre || g.subjectName || g.subjectId))}</td>
+        <td style="text-align:center;">${g.partial || ''}</td>
+        ${rubroCells}
+        <td style="text-align:center;background:rgba(49,130,206,0.04);">${suma}</td>
+        <td style="text-align:center;${calColor}">${cal}</td>
+        <td style="text-align:center;">${g.faltas !== undefined ? g.faltas : '-'}</td>
+      </tr>`;
+    });
+
+    tableContainer.innerHTML = `
+      ${truncated ? `<div class="alert alert-warning" style="margin-bottom:12px;">Mostrando las primeras 500 de ${filtered.length} calificaciones.</div>` : ''}
+      <div class="table-container" style="overflow-x:auto;">
+        <table class="table-light" style="min-width:900px;">
+          <thead><tr>
+            <th style="width:40px">#</th>
+            <th>Alumno</th>
+            <th>Grupo</th>
+            <th>Materia</th>
+            <th style="width:60px;text-align:center;">Parcial</th>
+            ${rubroHeaders}
+            <th style="width:55px;text-align:center;">SUMA</th>
+            <th style="width:50px;text-align:center;">CAL.</th>
+            <th style="width:55px;text-align:center;">FALTAS</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
         </table>
-      </div>
-    `;
+      </div>`;
   }
 
-  function applyAdminFilters() {
-    const turno = document.getElementById('filterTurno')?.value;
-    const grado = document.getElementById('filterGrado')?.value;
-
-    let filteredGrades = [..._adminData.grades];
-
-    if (turno) {
-      filteredGrades = filteredGrades.filter(g => {
-        const student = _adminData.studentMap[g.studentId];
-        return student && student.turno === turno;
-      });
+  function exportGrades() {
+    if (!_admin.grupo) {
+      Toast.show('Selecciona un grupo para exportar', 'warning');
+      return;
     }
-    if (grado) {
-      filteredGrades = filteredGrades.filter(g => {
-        const student = _adminData.studentMap[g.studentId];
-        return student && student.grado === parseInt(grado);
-      });
-    }
+    // Use already-loaded grades for this group
+    let filtered = [..._admin.allGrades];
+    const studentMap = {}, subjectMap = {}, groupMap = {};
+    _admin.allStudents.forEach(s => { studentMap[s.id] = s; });
+    _admin.allSubjects.forEach(s => { subjectMap[s.id] = s; });
+    _admin.allGroups.forEach(g => { groupMap[g.id] = g; });
 
-    const tableContainer = document.getElementById('admin-grades-table');
-    if (tableContainer) {
-      tableContainer.innerHTML = _buildGradesTable(filteredGrades, _adminData.studentMap);
+    // For maestros: restrict export to their assigned subjects
+    if (_admin._teacherAssignments) {
+      const teacherCombos = new Set(_admin._teacherAssignments.map(a => `${a.groupId}_${a.subjectId}`));
+      filtered = filtered.filter(g => teacherCombos.has(`${g.groupId}_${g.subjectId}`));
     }
-    Toast.show(`${filteredGrades.length} calificaciones mostradas`, 'info');
+    if (_admin.parcial) filtered = filtered.filter(g => g.partial === _admin.parcial);
+    if (_admin.materia) filtered = filtered.filter(g => g.subjectId === _admin.materia);
+
+    const rubros = K.getRubros(_admin.turno);
+    const data = filtered.map(g => {
+      const s = studentMap[g.studentId];
+      const sub = subjectMap[g.subjectId];
+      const grp = groupMap[g.groupId];
+      const row = {
+        'Alumno': s?.nombreCompleto || '',
+        'Grupo': grp?.nombre || g.groupId,
+        'Turno': s?.turno || '',
+        'Materia': K.getUACNombre(sub?.nombre || g.subjectName || ''),
+        'Parcial': g.partial || ''
+      };
+      rubros.forEach(r => { row[r.abbr] = g[r.key] !== undefined ? g[r.key] : ''; });
+      row['SUMA'] = g.suma !== undefined ? g.suma : '';
+      row['CAL.'] = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : '');
+      row['FALTAS'] = g.faltas !== undefined ? g.faltas : '';
+      return row;
+    });
+
+    Utils.exportToExcel(data, `Calificaciones_${_admin.turno}_${new Date().toISOString().split('T')[0]}.xlsx`);
   }
 
-  // ---------------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------------
+  // ═══════════════════════════════════════════════════════════════
+  // PUBLIC API
+  // ═══════════════════════════════════════════════════════════════
 
   const api = {
-    renderTeacher,
-    renderAdmin,
-    openGradeEditor,
-    switchPartial,
-    saveGrades,
-    applyAdminFilters,
-    updateStats
+    renderTeacher, renderAdmin, openGradeEditor,
+    switchPartial, saveGrades, exportGrades,
+    printGrades, printAdminGrades
   };
-
   return api;
 })();
 

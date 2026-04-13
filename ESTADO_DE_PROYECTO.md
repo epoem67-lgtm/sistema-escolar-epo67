@@ -1,6 +1,6 @@
 # Estado del Proyecto — Sistema Escolar EPO 67
 
-> **Última actualización:** 11 de abril de 2026
+> **Última actualización:** 11 de abril de 2026 (v3.1 + Git)
 > **Responsable del proyecto:** Darío (dev.daalper@gmail.com)
 > **Ciclo escolar:** 2025-2026
 
@@ -221,9 +221,152 @@ Se realizó una auditoría completa de mantenibilidad y se ejecutó una refactor
 
 ---
 
-## 10. Issues conocidos y pendientes
+## 10. Control de versiones (Git)
 
-### Bugs / Issues técnicos
+### Estado actual
+
+El proyecto tiene un repositorio Git inicializado en la raíz de la carpeta `ADMINISTRACIÓN ESCOLAR EPO 67/`. El repositorio está en la rama `main` con un commit inicial que incluye todos los archivos del proyecto.
+
+| Concepto | Valor |
+|---|---|
+| Rama principal | `main` |
+| Commit inicial | `ce06bd1` — "Commit inicial - Sistema de Administracion Escolar EPO 67" (12 abril 2026) |
+| Archivos versionados | 196 |
+| Remoto configurado | Ninguno (repositorio local únicamente) |
+| Autor configurado | Darío \<dev.daalper@gmail.com\> |
+
+### Ubicación del repositorio
+
+El `.git/` vive en la raíz del proyecto:
+
+```
+ADMINISTRACIÓN ESCOLAR EPO 67/
+├── .git/                          ← Repositorio Git
+├── .gitignore                     ← Reglas de exclusión
+├── ESTADO_DE_PROYECTO.md
+├── sistema-escolar-firebase/      ← Código en producción (versionado)
+├── _AGENTE/                       ← Sistema de agentes (versionado)
+├── TURNO MATUTINO/                ← Datos escolares (versionados)
+├── TURNO VESPERTINO/              ← Datos escolares (versionados)
+└── ...
+```
+
+### .gitignore
+
+El archivo `.gitignore` excluye:
+
+- **macOS:** `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`
+- **Firebase:** `sistema-escolar-firebase/.firebase/`, `sistema-escolar-firebase/node_modules/`
+- **Editores:** `.vscode/`, `.idea/`, archivos swap (`*.swp`, `*.swo`)
+- **Temporales:** `*.tmp`, `*.temp`, `*.log`
+- **Backups automáticos:** `*~backup*`, `*.bak`
+
+Los respaldos manuales en `_RESPALDOS/` **sí** se versionan.
+
+### Instrucciones para Claude Code
+
+**IMPORTANTE — Unicode NFD/NFC:** El nombre de la carpeta contiene "ADMINISTRACIÓN" que macOS almacena en NFD (la `Ó` se descompone en `O` + combining accent). Desde bash en el sandbox Linux, usar glob para navegar al directorio:
+
+```bash
+cd "/ruta/a/ADMINISTRACI"*"N ESCOLAR EPO 67 "
+```
+
+O usar `find` para localizar la carpeta:
+
+```bash
+find /ruta -maxdepth 1 -name "ADMINISTRACI*N ESCOLAR*" -type d
+```
+
+**Comandos Git esenciales para este proyecto:**
+
+```bash
+# Ver estado actual
+git status
+
+# Ver historial de commits
+git log --oneline
+
+# Agregar cambios y hacer commit (después de modificar archivos)
+git add -A
+git commit -m "Descripción clara del cambio"
+
+# Ver qué archivos cambiaron
+git diff --stat
+
+# Ver cambios específicos en un archivo
+git diff sistema-escolar-firebase/public/js/modules/students.js
+
+# Revertir un archivo a su último commit (descartar cambios locales)
+git checkout -- ruta/al/archivo
+
+# Ver archivos versionados
+git ls-files
+
+# Ver archivos no rastreados
+git ls-files --others --exclude-standard
+```
+
+**Convención de commits para este proyecto:**
+
+Los mensajes de commit deben seguir este formato:
+
+```
+[módulo/área] Descripción concisa del cambio
+
+Ejemplos:
+  [students] Agregar validación de CURP en modal de edición
+  [firestore.rules] Permitir lectura de attendance a orientadores
+  [indicadores] Corregir cálculo de tasa de reprobación
+  [styles] Agregar clases para badges de asistencia
+  [deploy] Actualizar script REDESPLEGAR.command
+  [docs] Actualizar ESTADO_DE_PROYECTO.md
+  [git] Actualizar .gitignore
+  [config] Cambiar umbral de riesgo en constants.js
+  [import] Mejorar matching fuzzy en import-grades
+  [multi] Refactorizar data-store + actualizar módulos dependientes
+```
+
+**Flujo de trabajo recomendado para Claude Code:**
+
+1. **Antes de editar:** Ejecutar `git status` para verificar que el working tree está limpio.
+2. **Después de editar:** Ejecutar `git diff --stat` para revisar los archivos modificados.
+3. **Antes de hacer commit:** Verificar que los cambios son correctos con `git diff`.
+4. **Hacer commit:** `git add -A && git commit -m "[módulo] Descripción"`.
+5. **Después de deploy:** Hacer commit con `[deploy] Desplegar vX.X a Firebase`.
+6. **Nunca hacer force push** ni reescribir historial — este repo es solo local por ahora.
+
+**Archivos que se modifican con más frecuencia (priorizar en commits):**
+
+| Archivo | Razón de cambio frecuente |
+|---------|--------------------------|
+| `sistema-escolar-firebase/public/js/modules/*.js` | Nuevas features, bug fixes en módulos |
+| `sistema-escolar-firebase/public/css/styles.css` | Nuevos componentes visuales, ajustes de layout |
+| `sistema-escolar-firebase/public/index.html` | Nuevos scripts, ítems de sidebar |
+| `sistema-escolar-firebase/firestore.rules` | Nuevas reglas de seguridad por colección/rol |
+| `sistema-escolar-firebase/public/js/constants.js` | Nuevas constantes, umbrales, mapeos |
+| `sistema-escolar-firebase/public/js/data-store.js` | Nuevos métodos de cache |
+| `ESTADO_DE_PROYECTO.md` | Documentar avances y cambios |
+
+### Pendientes de Git
+
+- **Configurar remoto:** No hay remoto configurado. Si se desea respaldar en GitHub/GitLab, ejecutar:
+  ```bash
+  git remote add origin https://github.com/usuario/repo.git
+  git push -u origin main
+  ```
+- **Ramas de feature:** Actualmente todo se trabaja en `main`. Para features grandes, considerar crear ramas:
+  ```bash
+  git checkout -b feature/nombre-de-feature
+  # ... trabajar ...
+  git checkout main
+  git merge feature/nombre-de-feature
+  ```
+
+---
+
+## 11. Issues conocidos y pendientes
+
+### Bugs / Issues técnicos (nota: el issue de Unicode NFD/NFC también aplica a Git, ver sección 10)
 - **Unicode NFD/NFC en el nombre de la carpeta:** macOS usa NFD para "ADMINISTRACIÓN", el sandbox Linux usa NFC. Al copiar archivos desde scripts, siempre usar `find -exec` para detectar ambas variantes.
 - **Firebase Storage NO configurado:** El upload de logo en school-config no funciona porque Storage no está activo.
 - **Bootstrap rule en users:** Cualquier usuario autenticado puede crear su propio doc. Esto es intencional para el primer login, pero puede ser un vector si no se vigila.
@@ -242,7 +385,7 @@ Se realizó una auditoría completa de mantenibilidad y se ejecutó una refactor
 
 ---
 
-## 11. Cómo trabajar en este proyecto
+## 12. Cómo trabajar en este proyecto
 
 ### Para desarrollar localmente
 El sistema es estático (no requiere build). Editar los archivos en `sistema-escolar-firebase/public/` y ver en navegador o desplegar a Firebase.
@@ -281,7 +424,7 @@ Este proyecto se puede abrir directamente en Claude Code apuntando a la carpeta 
 
 ---
 
-## 12. Estructura de carpetas (resumen visual)
+## 13. Estructura de carpetas (resumen visual)
 
 ```
 ADMINISTRACIÓN ESCOLAR EPO 67/
@@ -315,7 +458,7 @@ ADMINISTRACIÓN ESCOLAR EPO 67/
 
 ---
 
-## 13. Actualización v3.1 (11 de abril de 2026)
+## 14. Actualización v3.1 (11 de abril de 2026)
 
 La versión 3.1 amplió significativamente el sistema con 7 módulos nuevos, CRUD completo en módulos existentes, importación de datos desde Excel, y corrección de bugs de la v3.0. El total de código JS pasó de ~4,350 a ~9,010 líneas.
 

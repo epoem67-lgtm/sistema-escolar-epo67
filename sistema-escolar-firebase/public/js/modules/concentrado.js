@@ -13,6 +13,7 @@ const ConcentradoModule = (() => {
   let allAssignments = [];
   let allGrades = [];
   let lastMatrix = null;
+  let orientadorGroupIds = null; // null = no filter (admin), array = orientador filter
 
   // ─── RENDER ───
   async function render() {
@@ -86,18 +87,21 @@ const ConcentradoModule = (() => {
   // ─── DATA LOADING ───
   async function loadData() {
     try {
-      const [students, groups, subjects, assignments, grades] = await Promise.all([
+      const [students, groups, subjects, assignments, oriGroups] = await Promise.all([
         Store.getStudents(),
         Store.getGroups(),
         Store.getSubjects(),
         Store.getAssignments(),
-        Store.getGrades()
+        Store.getOrientadorGroups()
       ]);
+      orientadorGroupIds = oriGroups; // null for admin, array for orientador
       allStudents = students.filter(s => s.estatus === 'ACTIVO');
-      allGroups = groups;
+      allGroups = oriGroups ? groups.filter(g => oriGroups.includes(g.id)) : groups;
       allSubjects = subjects;
       allAssignments = assignments;
-      allGrades = grades;
+      // Load grades per-group (much more efficient than loading ALL grades)
+      const groupIds = allGroups.map(g => g.id);
+      allGrades = await Store.getGradesByGroups(groupIds);
     } catch (e) {
       console.error('Error cargando datos de concentrado:', e);
       Toast.show('Error al cargar datos', 'error');
@@ -206,9 +210,11 @@ const ConcentradoModule = (() => {
 
       const gradeMap = {};
       gradesForGroup.forEach(g => {
-        if (g.value === undefined || g.value === null) return;
+        // Use cal (new format) or value (legacy)
+        const cal = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : null);
+        if (cal === null || cal === undefined) return;
         if (!gradeMap[g.studentId]) gradeMap[g.studentId] = {};
-        gradeMap[g.studentId][g.subjectId] = g.value;
+        gradeMap[g.studentId][g.subjectId] = cal;
       });
 
       // Build matrix data
@@ -276,40 +282,43 @@ const ConcentradoModule = (() => {
       html += `<table class="table-light">`;
 
       // Header
-      html += `<thead><tr><th class="text-center">#</th><th>Nombre del Alumno</th>`;
+      html += `<thead><tr><th style="text-align:center;width:35px;">#</th><th>Nombre del Alumno</th>`;
       subjectList.forEach(sub => {
-        html += `<th class="text-center" title="${Utils.sanitize(sub.nombre)}">${Utils.sanitize(abbreviate(sub.nombre))}</th>`;
+        html += `<th style="text-align:center;font-size:10px;" title="${Utils.sanitize(K.getUACNombre(sub.nombre))}">${Utils.sanitize(abbreviate(sub.nombre))}</th>`;
       });
-      html += `<th class="text-center font-semibold">PROMEDIO</th></tr></thead>`;
+      html += `<th style="text-align:center;font-weight:700;">PROM.</th></tr></thead>`;
 
-      // Body
+      // Body — clean colored text, no badges
       html += '<tbody>';
       matrix.forEach(row => {
-        html += `<tr><td class="text-center text-muted">${row.num}</td>`;
-        html += `<td class="font-semibold">${Utils.sanitize(row.name)}</td>`;
+        html += `<tr><td style="text-align:center;" class="text-muted">${row.num}</td>`;
+        html += `<td class="font-semibold" style="font-size:12px;white-space:nowrap;">${Utils.sanitize(row.name)}</td>`;
         row.grades.forEach(val => {
           if (val !== null) {
-            html += `<td class="text-center"><span class="grade-badge ${gradeBadgeClass(val)}">${val}</span></td>`;
+            html += `<td style="text-align:center;${gradeStyle(val)}">${val}</td>`;
           } else {
-            html += `<td class="text-center text-muted">-</td>`;
+            html += `<td style="text-align:center;color:var(--color-text-lighter);">-</td>`;
           }
         });
-        const avgClass = row.gradeCount > 0 ? gradeBadgeClass(row.average) : '';
-        html += `<td class="text-center font-semibold">${row.gradeCount > 0 ? `<span class="grade-badge ${avgClass}">${row.average.toFixed(1)}</span>` : '-'}</td>`;
+        if (row.gradeCount > 0) {
+          html += `<td style="text-align:center;font-weight:700;${gradeStyle(row.average)}">${row.average.toFixed(1)}</td>`;
+        } else {
+          html += `<td style="text-align:center;">-</td>`;
+        }
         html += '</tr>';
       });
 
       // Averages row
-      html += `<tr class="font-semibold" style="background: var(--color-gray-100);">`;
+      html += `<tr style="background:#f0f2f5;font-weight:700;border-top:2px solid var(--color-border);">`;
       html += `<td></td><td>PROMEDIO</td>`;
       colAverages.forEach(avg => {
         if (avg > 0) {
-          html += `<td class="text-center"><span class="grade-badge ${gradeBadgeClass(avg)}">${avg.toFixed(1)}</span></td>`;
+          html += `<td style="text-align:center;${gradeStyle(avg)}">${avg.toFixed(1)}</td>`;
         } else {
-          html += `<td class="text-center text-muted">-</td>`;
+          html += `<td style="text-align:center;">-</td>`;
         }
       });
-      html += `<td class="text-center"><span class="grade-badge ${gradeBadgeClass(overallAvg)}">${overallAvg.toFixed(1)}</span></td>`;
+      html += `<td style="text-align:center;${gradeStyle(overallAvg)}">${overallAvg.toFixed(1)}</td>`;
       html += '</tr></tbody></table></div></div>';
 
       // ─── STATS PANEL ───
@@ -356,6 +365,15 @@ const ConcentradoModule = (() => {
   }
 
   // ─── HELPERS ───
+  /** Returns inline style for grade value (v13-style color coding, no badges) */
+  function gradeStyle(val) {
+    if (val < 6) return 'color:var(--color-danger);font-weight:700;background:rgba(229,62,62,0.06);';
+    if (val < 7) return 'color:#c05621;font-weight:600;';
+    if (val < 8) return 'color:#92400e;';
+    return 'color:var(--color-success);font-weight:600;';
+  }
+
+  // Legacy function kept for compatibility
   function gradeBadgeClass(val) {
     if (val >= 8) return 'grade-badge--excellent';
     if (val >= 6) return 'grade-badge--good';
@@ -401,7 +419,7 @@ const ConcentradoModule = (() => {
     }
   }
 
-  // ─── PRINT ───
+  // ─── PRINT — Formato oficial que llena la hoja completa ───
   function printConcentrado() {
     if (!lastMatrix) {
       Toast.show('Genera primero el concentrado', 'warning');
@@ -410,55 +428,234 @@ const ConcentradoModule = (() => {
 
     const { subjectList, matrix, colAverages, overallAvg, grupo, parcial, turno, grado } = lastMatrix;
     const parcialLabel = K.PARCIALES.find(p => p.id === parcial)?.nombre || parcial;
-    const filterDesc = `${turno || ''} ${grado ? grado + '\u00ba' : ''} ${grupo} - ${parcialLabel}`;
+    const parcMap = { P1: 'PRIMER', P2: 'SEGUNDO', P3: 'TERCER' };
+    const parcialText = parcMap[parcial] || 'PRIMER';
+    const semMap = { '1': 'SEGUNDO SEMESTRE', '2': 'CUARTO SEMESTRE', '3': 'SEXTO SEMESTRE' };
+    const semText = semMap[String(grado)] || '';
+    const orientador = K.getOrientador(turno, grupo) || '';
+    const n = matrix.length;
+    const nSubs = subjectList.length;
 
-    // Build print-friendly table
-    let tableHTML = '<table><thead><tr><th>#</th><th>Alumno</th>';
-    subjectList.forEach(sub => {
-      tableHTML += `<th>${sub.nombre || ''}</th>`;
-    });
-    tableHTML += '<th>PROM.</th></tr></thead><tbody>';
+    // Dynamic font based on students AND subjects count
+    let fs;
+    if (n <= 35 && nSubs <= 10) { fs = '6.5pt'; }
+    else if (n <= 42) { fs = '6pt'; }
+    else if (n <= 48) { fs = '5.5pt'; }
+    else { fs = '5pt'; }
 
-    matrix.forEach(row => {
-      tableHTML += `<tr><td>${row.num}</td><td>${row.name}</td>`;
+    // Subject column width
+    const nameColW = 18; // % for name
+    const numColW = 3;   // % for #
+    const promColW = 5;  // % for promedio
+    const subColW = Math.max(3, (100 - nameColW - numColW - promColW) / nSubs);
+
+    // Stats
+    const evaluated = matrix.filter(r => r.gradeCount > 0);
+    const approved = evaluated.filter(r => r.average >= 6).length;
+    const failed = evaluated.filter(r => r.average < 6).length;
+    const pctAprob = evaluated.length > 0 ? ((approved / evaluated.length) * 100).toFixed(1) + '%' : '';
+
+    // Build rows
+    let rows = '';
+    matrix.forEach((row, idx) => {
+      const isOdd = idx % 2 === 1;
+      const isFail = row.gradeCount > 0 && row.average < 6;
+      let rowBg = '';
+      if (isFail) { rowBg = ' background:#bbb;-webkit-print-color-adjust:exact;print-color-adjust:exact;'; }
+      else if (isOdd) { rowBg = ' background:#eee;-webkit-print-color-adjust:exact;print-color-adjust:exact;'; }
+
+      rows += '<tr style="' + rowBg + '">';
+      rows += '<td class="c">' + row.num + '</td>';
+      rows += '<td class="nm">' + Utils.sanitize(row.name) + '</td>';
       row.grades.forEach(val => {
-        const cls = val !== null ? (val < 6 ? ' class="fail"' : '') : '';
-        tableHTML += `<td${cls}>${val !== null ? val : '-'}</td>`;
+        if (val !== null) {
+          const style = val < 6 ? 'font-weight:bold;' : '';
+          rows += '<td class="c" style="' + style + '">' + val + '</td>';
+        } else {
+          rows += '<td class="c">-</td>';
+        }
       });
-      const avgCls = row.gradeCount > 0 && row.average < 6 ? ' class="fail"' : '';
-      tableHTML += `<td${avgCls}>${row.gradeCount > 0 ? row.average.toFixed(1) : '-'}</td></tr>`;
+      const avgStr = row.gradeCount > 0 ? row.average.toFixed(1) : '-';
+      const avgStyle = row.gradeCount > 0 && row.average < 6 ? 'font-weight:bold;' : 'font-weight:bold;';
+      rows += '<td class="c" style="' + avgStyle + '">' + avgStr + '</td>';
+      rows += '</tr>';
     });
 
-    tableHTML += '<tr class="avg-row"><td></td><td>PROMEDIO</td>';
+    // Averages row
+    rows += '<tr style="background:#000;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-weight:bold;">';
+    rows += '<td class="c"></td><td class="nm" style="font-weight:bold;">PROMEDIO</td>';
     colAverages.forEach(avg => {
-      tableHTML += `<td>${avg > 0 ? avg.toFixed(1) : '-'}</td>`;
+      rows += '<td class="c">' + (avg > 0 ? avg.toFixed(1) : '-') + '</td>';
     });
-    tableHTML += `<td>${overallAvg.toFixed(1)}</td></tr></tbody></table>`;
+    rows += '<td class="c">' + overallAvg.toFixed(1) + '</td></tr>';
+
+    // Subject headers (abbreviated + rotated for many subjects)
+    let subHeaders = '';
+    subjectList.forEach(sub => {
+      const name = K.getUACNombre(sub.nombre || sub.id);
+      const abbr = abbreviate(name);
+      subHeaders += '<th title="' + Utils.sanitize(name) + '">' + Utils.sanitize(abbr) + '</th>';
+    });
+
+    // Colgroup
+    let cols = `<col style="width:${numColW}%"><col style="width:${nameColW}%">`;
+    subjectList.forEach(() => { cols += `<col style="width:${subColW}%">`; });
+    cols += `<col style="width:${promColW}%">`;
+
+    const logoHeader = typeof LOGO_HEADER_SRC !== 'undefined' ? LOGO_HEADER_SRC : '';
+    const logoFooter = typeof LOGO_FOOTER_SRC !== 'undefined' ? LOGO_FOOTER_SRC : '';
+
+    const html = `
+<style>
+@page { size: letter landscape; margin: 4mm 5mm 3mm 5mm; }
+html, body { margin:0; padding:0; height:100%; }
+* { box-sizing:border-box; margin:0; padding:0; }
+
+.PG {
+    width:100%; height:100vh;
+    font-family:Arial,Helvetica,sans-serif; color:#000; line-height:1.1;
+    font-size:6pt;
+    display:flex; flex-direction:column;
+    overflow:hidden;
+}
+.PG table { border-collapse:collapse; }
+.PG-hdr, .PG-ttl, .PG-nfo, .PG-bot, .PG-ftr { flex-shrink:0; flex-grow:0; }
+.PG-data { flex:1; overflow:hidden; display:flex; flex-direction:column; }
+
+.hdr-t { width:100%; margin-bottom:0.3mm; }
+.hdr-t td { vertical-align:middle; padding:0; }
+.hdr-t img { height:6.5mm; width:auto; }
+.hdr-r { text-align:right; font-size:5pt; line-height:1.25; color:#333; }
+
+.ttl-esc { text-align:center; font-weight:bold; font-size:7.5pt; line-height:1.1; }
+.ttl-ctrl { text-align:center; font-weight:bold; font-size:7pt; line-height:1; margin:0.3mm 0;
+    border-bottom:0.5pt solid #000; padding-bottom:0.3mm; }
+
+.nfo { width:100%; font-size:6pt; line-height:1.15; }
+.nfo td { border:0.4pt solid #000; padding:0.4mm 0.8mm; height:3.5mm; vertical-align:middle; }
+.nfo .lb { font-size:5.5pt; color:#333; }
+.nfo .vl { font-weight:bold; font-size:6pt; }
+.nfo .sm { text-align:center; font-weight:bold; font-size:6.5pt; line-height:1.15; }
+
+.MT { width:100%; height:100%; table-layout:fixed; font-size:${fs}; line-height:1; }
+.MT th { border:0.5pt solid #000; padding:0.2mm; text-align:center; font-weight:bold; font-size:${nSubs > 10 ? '4pt' : '4.5pt'};
+    background:#000; color:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    line-height:1.1; vertical-align:middle; height:5mm; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.MT td { border:0.4pt solid #000; font-size:${fs}; line-height:1;
+    padding:0 0.3mm; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; vertical-align:middle; }
+.MT .c { text-align:center; padding:0; }
+.MT .nm { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+
+.ST td { border:0.4pt solid #000; padding:0.25mm 0.6mm; font-size:6pt; line-height:1.1; height:2.6mm; }
+.ST .sl { font-weight:bold; }
+.ST .sv { text-align:center; font-weight:bold; font-size:6.5pt; width:10mm; }
+
+.SG-tbl { width:100%; border-collapse:collapse; }
+.SG-tbl td { width:25%; text-align:center; padding:0 1.5mm; }
+.SG-tbl .sg-line-row td { vertical-align:bottom; border-bottom:0.5pt solid #000; height:1mm; }
+.SG-tbl .sg-text-row td { vertical-align:top; padding-top:0.3mm; }
+.SG-tt { font-weight:bold; font-size:6pt; line-height:1.15; }
+.SG-nm { font-size:5.5pt; line-height:1.15; }
+
+.ftr img { width:100%; max-height:3mm; display:block; }
+.ftr-t { text-align:center; font-size:4.5pt; color:#333; line-height:1; margin-top:0.1mm; }
+</style>
+
+<div class="PG">
+
+<div class="PG-hdr">
+<table class="hdr-t"><tr>
+    <td style="width:50%">${logoHeader ? '<img src="' + logoHeader + '">' : ''}</td>
+    <td class="hdr-r">
+        DIRECCIÓN GENERAL DE EDUCACIÓN MEDIA SUPERIOR<br>
+        DIRECCIÓN DE BACHILLERATO GENERAL<br>
+        ZONA ESCOLAR NÚM. 63 BC<br>
+        ESCUELA PREPARATORIA OFICIAL NÚM. 67<br>
+        <b>C.C.T. 15EBH0134D · 15EBH0168U</b>
+    </td>
+</tr></table>
+</div>
+
+<div class="PG-ttl">
+<div class="ttl-esc">ESCUELA PREPARATORIA OFICIAL NÚM. 67</div>
+<div class="ttl-ctrl">CONCENTRADO DE CALIFICACIONES — ${parcialText} PARCIAL</div>
+</div>
+
+<div class="PG-nfo">
+<table class="nfo">
+    <tr>
+        <td style="width:10%"><span class="lb">Orientador(a):</span></td>
+        <td style="width:35%" class="vl">${Utils.sanitize(orientador)}</td>
+        <td style="width:10%"><span class="lb">Grado:</span> <span class="vl">${grado}°</span></td>
+        <td style="width:10%"><span class="lb">Grupo:</span> <span class="vl">${grupo}</span></td>
+        <td style="width:20%" class="sm" rowspan="2">${semText}<br><span style="font-size:5.5pt;color:#333;">${Utils.sanitize(turno || '')}</span></td>
+    </tr>
+    <tr>
+        <td colspan="4"><span class="lb">Alumnos:</span> <span class="vl">${n}</span>
+        &nbsp;&nbsp;<span class="lb">Aprobados:</span> <span class="vl">${approved}</span>
+        &nbsp;&nbsp;<span class="lb">Reprobados:</span> <span class="vl">${failed}</span>
+        &nbsp;&nbsp;<span class="lb">% Aprobación:</span> <span class="vl">${pctAprob}</span>
+        &nbsp;&nbsp;<span class="lb">Promedio:</span> <span class="vl">${overallAvg.toFixed(2)}</span></td>
+    </tr>
+</table>
+</div>
+
+<div class="PG-data">
+<table class="MT">
+    <colgroup>${cols}</colgroup>
+    <thead><tr>
+        <th>No.</th>
+        <th>Nombre del Alumno</th>
+        ${subHeaders}
+        <th>PROM.</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+</table>
+</div>
+
+<div class="PG-bot">
+<table style="width:100%; border-collapse:collapse; margin-top:0.3mm;">
+    <tr>
+        <td style="width:100%; vertical-align:bottom; padding:0;">
+            <table class="SG-tbl">
+                <tr class="sg-line-row"><td></td><td></td><td></td><td></td></tr>
+                <tr class="sg-text-row">
+                    <td>
+                        <div class="SG-tt">ORIENTADOR(A)</div>
+                        <div class="SG-nm">${Utils.sanitize(orientador)}</div>
+                    </td>
+                    <td>
+                        <div class="SG-tt">VO. BO. SUBDIRECCIÓN ESCOLAR</div>
+                        <div class="SG-nm">PROFR. OCTAVIO VÁZQUEZ BARRETO</div>
+                    </td>
+                    <td>
+                        <div class="SG-tt">SECRETARÍA ESCOLAR</div>
+                        <div class="SG-nm">PROFR. ROBERTO PALOMARES MEJÍA</div>
+                    </td>
+                    <td>
+                        <div class="SG-tt">DIRECCIÓN ESCOLAR</div>
+                        <div class="SG-nm"></div>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+</div>
+
+<div class="PG-ftr">
+<div class="ftr">
+    ${logoFooter ? '<img src="' + logoFooter + '">' : ''}
+    <div class="ftr-t">Av. de los Astros 7, Cuautitlán Izcalli, Estado de México, México C.P. 54770 · Tel. 55 5877 0221 · epo67@edu.gem.gob.mx</div>
+</div>
+</div>
+
+</div>`;
 
     const printWindow = window.open('', '_blank');
-    printWindow.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-      <title>Concentrado - ${grupo}</title>
-      <style>
-        *{margin:0;padding:0;box-sizing:border-box}
-        body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;padding:15px;color:#1f2937;font-size:11px}
-        h1{text-align:center;font-size:18px;margin-bottom:4px}
-        .info{text-align:center;font-size:12px;color:#6b7280;margin-bottom:12px}
-        table{width:100%;border-collapse:collapse;font-size:10px}
-        th{background:#f3f4f6;padding:4px 6px;text-align:center;font-weight:600;border:1px solid #d1d5db;white-space:nowrap}
-        td{padding:4px 6px;border:1px solid #e5e7eb;text-align:center}
-        td:nth-child(2){text-align:left;white-space:nowrap}
-        .fail{color:#dc2626;font-weight:600}
-        .avg-row{background:#f3f4f6;font-weight:700}
-        .footer{margin-top:20px;text-align:center;font-size:10px;color:#9ca3af}
-        @media print{body{padding:5px}table{page-break-inside:auto}tr{page-break-inside:avoid}}
-      </style>
-    </head><body>
-      <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
-      <p class="info">Concentrado de Calificaciones - ${filterDesc}</p>
-      ${tableHTML}
-      <div class="footer"><p>Generado por el Sistema Escolar EPO 67</p></div>
-      <script>setTimeout(()=>window.print(),500)<\/script>
-    </body></html>`);
+    printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Concentrado - ' +
+      Utils.sanitize(grupo) + '</title></head><body>' + html +
+      '<script>setTimeout(()=>window.print(),400)<\/script></body></html>');
     printWindow.document.close();
   }
 

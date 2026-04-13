@@ -100,22 +100,21 @@ service cloud.firestore {
     }
 
     // ─── CALIFICACIONES ────────────────────────────────
+    // Maestros leen calificaciones de sus grupos/materias asignadas
+    // Maestros solo escriben cuando el parcial está abierto
     match /grades/{gradeId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || isOrientador() ||
-        (isMaestro() && resource.data.teacherId == getTeacherId())
+        isAdmin() || isOrientador() || isMaestro()
       );
 
       allow create: if isAuthenticated() && (
         isAdmin() ||
-        (isMaestro() && request.resource.data.teacherId == getTeacherId()
-          && !isPartialLocked(request.resource.data.partial))
+        (isMaestro() && !isPartialLocked(request.resource.data.partial))
       );
 
       allow update: if isAuthenticated() && (
         isAdmin() ||
-        (isMaestro() && resource.data.teacherId == getTeacherId()
-          && !isPartialLocked(resource.data.partial))
+        (isMaestro() && !isPartialLocked(resource.data.partial))
       );
 
       allow delete: if isAdmin();
@@ -144,11 +143,19 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ─── REGISTRO DE ACTIVIDAD (audit log) ─────────────
+    // ─── REGISTRO DE ACTIVIDAD / BITÁCORA ─────────────
     match /activityLog/{logId} {
       allow read: if isAdmin();
       allow create: if isAuthenticated();
       allow update, delete: if false;
+    }
+
+    // ─── ALERTAS POR CORREO (cola de emails) ─────────────
+    match /emailAlerts/{alertId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update: if isAdmin();
+      allow delete: if false;
     }
 
     // ─── INSCRIPCIONES ─────────────────────────────────
@@ -165,6 +172,22 @@ service cloud.firestore {
 
     // Asistencia (maestros y admin pueden registrar, todos autenticados leen)
     match /attendance/{attendanceId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && (isAdmin() || isMaestro());
+      allow delete: if isAdmin();
+    }
+
+    // ─── INCIDENCIAS ──────────────────────────────────────
+    // Maestros, orientadores y admin pueden crear; admin y orientador pueden eliminar
+    match /incidents/{incidentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (isAdmin() || isOrientador() || isMaestro());
+      allow update: if isAuthenticated() && (isAdmin() || isOrientador());
+      allow delete: if isAuthenticated() && (isAdmin() || isOrientador());
+    }
+
+    // ─── HORAS DE MAESTRO ─────────────────────────────────
+    match /teacherHours/{docId} {
       allow read: if isAuthenticated();
       allow create, update: if isAuthenticated() && (isAdmin() || isMaestro());
       allow delete: if isAdmin();

@@ -106,16 +106,16 @@ const HonorRollModule = (() => {
         return;
       }
 
-      const gradesSnap = await db.collection('grades')
-        .where('partial', '==', partial)
-        .get();
+      // Get grades via Store cache (per-group), filtered to relevant groups only
+      const relevantGroupIds = [...new Set(filtered.map(s => s.groupId).filter(Boolean))];
+      const allGrades = await Store.getGradesByGroups(relevantGroupIds);
 
       const gradesByStudent = {};
-      gradesSnap.forEach(doc => {
-        const g = doc.data();
+      for (const g of allGrades) {
+        if (g.partial !== partial) continue;
         if (!gradesByStudent[g.studentId]) gradesByStudent[g.studentId] = [];
         gradesByStudent[g.studentId].push(g.value || 0);
-      });
+      }
 
       const studentAverages = filtered.map(s => {
         const grades = gradesByStudent[s.id] || [];

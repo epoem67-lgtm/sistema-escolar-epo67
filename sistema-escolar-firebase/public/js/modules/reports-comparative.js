@@ -78,15 +78,31 @@ const ReportsComparativeModule = (() => {
     results.innerHTML = `<div class="loading-state"><span class="material-icons-round loading-spinner">autorenew</span><p>Calculando...</p></div>`;
 
     try {
-      const [allStudents, allGrades, allGroups, allSubjects] = await Promise.all([
+      const [allStudents, allGroups, allSubjects, oriGroups] = await Promise.all([
         Store.getStudents(),
-        Store.getGrades(),
         Store.getGroups(),
-        Store.getSubjects()
+        Store.getSubjects(),
+        Store.getOrientadorGroups()
       ]);
+      // Load grades per-group instead of entire collection
+      const relevantGroupIds = (oriGroups || allGroups.map(g => g.id));
+      const allGrades = await Store.getGradesByGroups(relevantGroupIds);
 
       // Apply filters
       let students = allStudents.filter(s => s.estatus === 'ACTIVO');
+
+      // Orientador filtering: only show data from assigned groups
+      if (oriGroups) {
+        const oriGroupSet = new Set(oriGroups);
+        const oriGroupNames = new Set(
+          allGroups.filter(g => oriGroupSet.has(g.id)).map(g => g.nombre || g.grupo).filter(Boolean)
+        );
+        students = students.filter(s =>
+          oriGroupSet.has(s.groupId) || oriGroupNames.has(s.groupId) ||
+          oriGroupSet.has(s.grupo) || oriGroupNames.has(s.grupo)
+        );
+      }
+
       if (turno) students = students.filter(s => s.turno === turno);
       if (grado) students = students.filter(s => s.grado === parseInt(grado));
 
@@ -226,8 +242,9 @@ const ReportsComparativeModule = (() => {
   function renderParcialComparison(container) {
     const { students } = lastData;
 
-    // Need all grades (not filtered by parcial)
-    Store.getGrades().then(allGrades => {
+    // Need all grades (not filtered by parcial) — use cached per-group grades
+    const relevantGroupIds = [...new Set(students.map(s => s.groupId).filter(Boolean))];
+    Store.getGradesByGroups(relevantGroupIds).then(allGrades => {
       const studentIds = new Set(students.map(s => s.id));
       const filteredGrades = allGrades.filter(g => studentIds.has(g.studentId));
 

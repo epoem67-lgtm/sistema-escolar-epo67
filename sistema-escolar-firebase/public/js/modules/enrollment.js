@@ -238,7 +238,7 @@ const EnrollmentModule = (() => {
       const groupDoc = await db.collection('groups').doc(groupId).get();
       const groupData = groupDoc.data();
 
-      await db.collection('students').add({
+      const studentData = {
         nombres, apellido1, apellido2,
         nombreCompleto: `${apellido1} ${apellido2} ${nombres}`.trim(),
         sexo,
@@ -250,6 +250,12 @@ const EnrollmentModule = (() => {
         tutorNombre, direccionContacto, telefonoContacto,
         estatus: 'ACTIVO',
         createdAt: new Date()
+      };
+      const ref = await db.collection('students').add(studentData);
+
+      DB.audit('crear', 'alumno', ref.id, {
+        description: `Alumno inscrito: ${studentData.nombreCompleto} en ${groupData.nombre}`,
+        after: { nombre: studentData.nombreCompleto, grupo: groupData.nombre, turno: groupData.turno, grado: groupData.grado }
       });
 
       Modal.close();

@@ -144,9 +144,14 @@ const UsersMgmt = (() => {
     }
 
     try {
-      await DB.users().doc(email.replace(/[^a-z0-9]/gi, '')).set({
+      const docId = email.replace(/[^a-z0-9]/gi, '');
+      await DB.users().doc(docId).set({
         email, displayName, role, status: 'active',
         createdAt: new Date(), autoCreado: false
+      });
+      DB.audit('crear_usuario', 'usuario', docId, {
+        description: `Usuario creado: ${displayName} (${email}) con rol ${role}`,
+        after: { email, displayName, role }
       });
       Modal.close();
       Store.invalidate('users');
@@ -185,6 +190,11 @@ const UsersMgmt = (() => {
       const newRole = document.getElementById('editRoleSelect')?.value;
       try {
         await DB.users().doc(userId).update({ role: newRole });
+        DB.audit('editar_usuario', 'usuario', userId, {
+          description: `Rol cambiado: ${user.displayName || user.email} de ${user.role} a ${newRole}`,
+          before: { role: user.role },
+          after: { role: newRole }
+        });
         Modal.close();
         Store.invalidate('users');
         users = await Store.getUsers(true);
@@ -202,6 +212,11 @@ const UsersMgmt = (() => {
     const newStatus = user.status === 'active' ? 'inactive' : 'active';
     try {
       await DB.users().doc(userId).update({ status: newStatus });
+      DB.audit('editar_usuario', 'usuario', userId, {
+        description: `Estatus de ${user.displayName || user.email} cambiado a ${newStatus}`,
+        before: { status: user.status },
+        after: { status: newStatus }
+      });
       Store.invalidate('users');
       users = await Store.getUsers(true);
       renderTable();

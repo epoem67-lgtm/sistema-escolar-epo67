@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sistema Escolar</title>
-  <link rel="stylesheet" href="/css/styles.css?v=3.0">
+  <link rel="stylesheet" href="/css/styles.css?v=4.6">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
@@ -28,10 +28,23 @@
         <h1>Sistema Escolar</h1>
         <p class="login-subtitle">Gestión Académica Integral</p>
       </div>
-      <button id="btnGoogleLogin" class="btn btn-google" onclick="Auth.loginWithGoogle()">
-        <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-        Ingresar con Google
-      </button>
+      <form id="loginForm" onsubmit="Auth.loginWithEmail(event)">
+        <div class="form-group">
+          <label for="loginEmail">Correo electrónico</label>
+          <input type="email" id="loginEmail" placeholder="tu@correo.com" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Contraseña</label>
+          <input type="password" id="loginPassword" placeholder="Tu contraseña" required autocomplete="current-password" minlength="6">
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" id="btnLogin">
+          <span class="material-icons-round" style="font-size:20px;vertical-align:middle;margin-right:6px;">login</span>
+          Iniciar Sesión
+        </button>
+      </form>
+      <div class="login-toggle">
+        <span id="toggleAuth" class="link-button" onclick="Auth.toggleRegister()">¿No tienes cuenta? Regístrate</span>
+      </div>
       <div id="loginError" class="login-error" style="display:none"></div>
       <p class="login-footer">Acceso autorizado solo para personal de la institución</p>
     </div>
@@ -53,8 +66,8 @@
           <span class="nav-label">Inicio</span>
         </a>
 
-        <!-- Solo admin -->
-        <div class="nav-section admin-only" data-roles="admin">
+        <!-- ═══ Solo Admin: Administración ═══ -->
+        <div class="nav-section" data-roles="admin">
           <span class="nav-section-title">Administración</span>
           <a href="#" class="nav-item" data-module="school-config" onclick="Router.navigate('school-config')">
             <span class="material-icons-round">settings</span>
@@ -72,13 +85,13 @@
             <span class="material-icons-round">how_to_reg</span>
             <span class="nav-label">Inscripciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="grades-admin" onclick="Router.navigate('grades-admin')">
-            <span class="material-icons-round">grading</span>
-            <span class="nav-label">Calificaciones</span>
-          </a>
           <a href="#" class="nav-item" data-module="partial-close" onclick="Router.navigate('partial-close')">
             <span class="material-icons-round">lock</span>
             <span class="nav-label">Cierre de Parciales</span>
+          </a>
+          <a href="#" class="nav-item" data-module="captura-progress" onclick="Router.navigate('captura-progress')">
+            <span class="material-icons-round">fact_check</span>
+            <span class="nav-label">Monitor de Captura</span>
           </a>
           <a href="#" class="nav-item" data-module="honor-roll" onclick="Router.navigate('honor-roll')">
             <span class="material-icons-round">emoji_events</span>
@@ -88,19 +101,24 @@
             <span class="material-icons-round">admin_panel_settings</span>
             <span class="nav-label">Usuarios</span>
           </a>
-          <a href="#" class="nav-item" data-module="import-grades" onclick="Router.navigate('import-grades')">
-            <span class="material-icons-round">upload_file</span>
-            <span class="nav-label">Importar Calificaciones</span>
-          </a>
           <a href="#" class="nav-item" data-module="import-students" onclick="Router.navigate('import-students')">
             <span class="material-icons-round">person_search</span>
             <span class="nav-label">Importar Listas</span>
           </a>
+          <a href="#" class="nav-item" data-module="bitacora" onclick="Router.navigate('bitacora')">
+            <span class="material-icons-round">history</span>
+            <span class="nav-label">Bitácora</span>
+          </a>
         </div>
 
-        <!-- Admin + Orientadores -->
+        <!-- ═══ Admin + Orientadores: Seguimiento y Reportes ═══ -->
+        <!-- Orientadores: acceso solo lectura a calificaciones, boletas, concentrado -->
         <div class="nav-section" data-roles="admin,orientador">
           <span class="nav-section-title">Seguimiento y Reportes</span>
+          <a href="#" class="nav-item" data-module="student-profile" onclick="Router.navigate('student-profile')">
+            <span class="material-icons-round">person_search</span>
+            <span class="nav-label">Consulta por Alumno</span>
+          </a>
           <a href="#" class="nav-item" data-module="at-risk" onclick="Router.navigate('at-risk')">
             <span class="material-icons-round">warning</span>
             <span class="nav-label">Alumnos en Riesgo</span>
@@ -113,10 +131,6 @@
             <span class="material-icons-round">grid_on</span>
             <span class="nav-label">Concentrado</span>
           </a>
-          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')">
-            <span class="material-icons-round">insights</span>
-            <span class="nav-label">Indicadores</span>
-          </a>
           <a href="#" class="nav-item" data-module="reports-comparative" onclick="Router.navigate('reports-comparative')">
             <span class="material-icons-round">compare_arrows</span>
             <span class="nav-label">Reportes Comparativos</span>
@@ -127,8 +141,30 @@
           </a>
         </div>
 
-        <!-- Admin: Asistencia -->
-        <div class="nav-section" data-roles="admin">
+        <!-- ═══ Admin + Orientadores + Maestros: Calificaciones ═══ -->
+        <div class="nav-section" data-roles="admin,orientador,maestro">
+          <span class="nav-section-title">Calificaciones</span>
+          <a href="#" class="nav-item" data-module="grades-admin" onclick="Router.navigate('grades-admin')">
+            <span class="material-icons-round">search</span>
+            <span class="nav-label">Consultar Calificaciones</span>
+          </a>
+          <a href="#" class="nav-item" data-module="my-grades" onclick="Router.navigate('my-grades')">
+            <span class="material-icons-round">edit_note</span>
+            <span class="nav-label">Capturar Calificaciones</span>
+          </a>
+        </div>
+
+        <!-- ═══ Admin + Orientadores + Maestros: Indicadores ═══ -->
+        <div class="nav-section" data-roles="admin,orientador,maestro">
+          <span class="nav-section-title">Análisis</span>
+          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')">
+            <span class="material-icons-round">insights</span>
+            <span class="nav-label">Indicadores</span>
+          </a>
+        </div>
+
+        <!-- ═══ Admin + Maestros: Asistencia ═══ -->
+        <div class="nav-section" data-roles="admin,maestro">
           <span class="nav-section-title">Asistencia</span>
           <a href="#" class="nav-item" data-module="attendance" onclick="Router.navigate('attendance')">
             <span class="material-icons-round">fact_check</span>
@@ -136,24 +172,20 @@
           </a>
         </div>
 
-        <!-- Maestros -->
+        <!-- ═══ Solo Maestros: Mis Grupos ═══ -->
         <div class="nav-section" data-roles="maestro">
           <span class="nav-section-title">Mis Grupos</span>
-          <a href="#" class="nav-item" data-module="my-grades" onclick="Router.navigate('my-grades')">
-            <span class="material-icons-round">grading</span>
-            <span class="nav-label">Captura de Calif.</span>
-          </a>
           <a href="#" class="nav-item" data-module="my-lists" onclick="Router.navigate('my-lists')">
             <span class="material-icons-round">list_alt</span>
             <span class="nav-label">Mis Listas</span>
           </a>
+          <a href="#" class="nav-item" data-module="student-profile" onclick="Router.navigate('student-profile')">
+            <span class="material-icons-round">person_search</span>
+            <span class="nav-label">Consulta por Alumno</span>
+          </a>
           <a href="#" class="nav-item" data-module="my-at-risk" onclick="Router.navigate('my-at-risk')">
             <span class="material-icons-round">report_problem</span>
             <span class="nav-label">Alumnos en Riesgo</span>
-          </a>
-          <a href="#" class="nav-item" data-module="attendance" onclick="Router.navigate('attendance')">
-            <span class="material-icons-round">fact_check</span>
-            <span class="nav-label">Asistencia</span>
           </a>
         </div>
       </div>
@@ -197,32 +229,36 @@
 
   <!-- ═══════ SCRIPTS ═══════ -->
   <!-- Core -->
-  <script src="/js/firebase-config.js?v=3.0"></script>
-  <script src="/js/constants.js?v=3.0"></script>
-  <script src="/js/data-store.js?v=3.0"></script>
-  <script src="/js/app.js?v=3.0"></script>
-  <script src="/js/components.js?v=3.0"></script>
+  <script src="/js/firebase-config.js?v=4.6"></script>
+  <script src="/js/constants.js?v=4.6"></script>
+  <script src="/js/data-store.js?v=4.6"></script>
+  <script src="/js/app.js?v=4.6"></script>
+  <script src="/js/components.js?v=4.6"></script>
+  <script src="/js/logos.js?v=4.6"></script>
+  <script src="/js/modules/student-profile.js?v=4.6"></script>
 
   <!-- Módulos -->
-  <script src="/js/modules/dashboard.js?v=3.0"></script>
-  <script src="/js/modules/school-config.js?v=3.0"></script>
-  <script src="/js/modules/teachers.js?v=3.0"></script>
-  <script src="/js/modules/students.js?v=3.0"></script>
-  <script src="/js/modules/grades.js?v=3.0"></script>
-  <script src="/js/modules/partial-close.js?v=3.0"></script>
-  <script src="/js/modules/at-risk.js?v=3.0"></script>
-  <script src="/js/modules/users-mgmt.js?v=3.0"></script>
-  <script src="/js/modules/my-lists.js?v=3.0"></script>
-  <script src="/js/modules/enrollment.js?v=3.0"></script>
-  <script src="/js/modules/honor-roll.js?v=3.0"></script>
+  <script src="/js/modules/dashboard.js?v=4.6"></script>
+  <script src="/js/modules/school-config.js?v=4.6"></script>
+  <script src="/js/modules/teachers.js?v=4.6"></script>
+  <script src="/js/modules/students.js?v=4.6"></script>
+  <script src="/js/modules/grades.js?v=4.6"></script>
+  <script src="/js/modules/partial-close.js?v=4.6"></script>
+  <script src="/js/modules/at-risk.js?v=4.6"></script>
+  <script src="/js/modules/users-mgmt.js?v=4.6"></script>
+  <script src="/js/modules/my-lists.js?v=4.6"></script>
+  <script src="/js/modules/enrollment.js?v=4.6"></script>
+  <script src="/js/modules/honor-roll.js?v=4.6"></script>
 
   <!-- Nuevos módulos v3.1 -->
-  <script src="/js/modules/import-grades.js?v=3.1"></script>
-  <script src="/js/modules/import-students.js?v=3.1"></script>
-  <script src="/js/modules/boletas.js?v=3.1"></script>
-  <script src="/js/modules/indicadores.js?v=3.1"></script>
-  <script src="/js/modules/concentrado.js?v=3.1"></script>
-  <script src="/js/modules/attendance.js?v=3.1"></script>
-  <script src="/js/modules/reports-comparative.js?v=3.1"></script>
+  <script src="/js/modules/import-grades.js?v=4.6"></script>
+  <script src="/js/modules/import-students.js?v=4.6"></script>
+  <script src="/js/modules/boletas.js?v=4.6"></script>
+  <script src="/js/modules/indicadores.js?v=4.6"></script>
+  <script src="/js/modules/concentrado.js?v=4.6"></script>
+  <script src="/js/modules/attendance.js?v=4.6"></script>
+  <script src="/js/modules/reports-comparative.js?v=4.6"></script>
+  <script src="/js/modules/bitacora.js?v=4.6"></script>
+  <script src="/js/modules/captura-progress.js?v=4.6"></script>
 </body>
 </html>

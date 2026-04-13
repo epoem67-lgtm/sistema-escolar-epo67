@@ -228,7 +228,10 @@ const ImportStudentsModule = (() => {
       });
 
       await batch.commit();
-      await DB.log('import_student_data', { count, source: 'excel_lista_oficial' });
+      DB.audit('importar', 'alumno', '', {
+        description: `Importación masiva: ${count} alumnos actualizados desde Excel`,
+        extra: { count, source: 'excel_lista_oficial' }
+      });
       Store.invalidate('students');
       Toast.show(`${count} alumnos actualizados exitosamente`, 'success');
 

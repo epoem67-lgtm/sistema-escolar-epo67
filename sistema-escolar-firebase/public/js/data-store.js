@@ -86,9 +86,53 @@ const Store = (() => {
       }, force);
     },
 
+    /**
+     * @deprecated Use getGradesByGroup(groupId) or getGradesByGroups(groupIds) instead.
+     * This reads ALL grades (10,000+ docs) and exhausts Firestore Spark quota quickly.
+     * Kept only as fallback — will log a warning.
+     */
     getGrades(force) {
+      console.warn('⚠️ Store.getGrades() is deprecated — use Store.getGradesByGroup(groupId) instead. This reads ALL grades and wastes quota.');
       return get('grades', async () => {
         const snap = await db.collection('grades').get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
+    /**
+     * Obtiene calificaciones filtradas por groupId.
+     * Mucho más rápido que getGrades() ya que solo carga un grupo.
+     * Usa cache por grupo para evitar re-fetches.
+     * @param {string} groupId
+     * @param {boolean} [force=false]
+     * @returns {Promise<Array>}
+     */
+    getGradesByGroup(groupId, force) {
+      const key = 'grades_group_' + groupId;
+      return get(key, async () => {
+        const snap = await db.collection('grades').where('groupId', '==', groupId).get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
+    /**
+     * Obtiene calificaciones filtradas por múltiples groupIds.
+     * Para consultas de admin/orientador que abarcan varios grupos.
+     * @param {string[]} groupIds
+     * @param {boolean} [force=false]
+     * @returns {Promise<Array>}
+     */
+    async getGradesByGroups(groupIds, force) {
+      if (!groupIds || groupIds.length === 0) return [];
+      // Load each group in parallel, using per-group cache
+      const promises = groupIds.map(gid => this.getGradesByGroup(gid, force));
+      const results = await Promise.all(promises);
+      return results.flat();
+    },
+
+    getAtRisk(force) {
+      return get('atRisk', async () => {
+        const snap = await db.collection('atRisk').get();
         return snapshotToArray(snap);
       }, force);
     },
@@ -140,6 +184,31 @@ const Store = (() => {
 
         return null;
       }, force);
+    },
+
+    // — Orientador group filtering —
+
+    /**
+     * Obtiene los IDs de grupos asignados al orientador actual.
+     * Si el usuario es admin, retorna null (sin filtro, ve todo).
+     * Si es orientador, retorna solo los grupos donde orientadorId === teacherDocId.
+     * @returns {Promise<string[]|null>} Array de group IDs o null si es admin
+     */
+    async getOrientadorGroups() {
+      const role = App.currentUser?.role;
+      if (role === 'admin') return null; // admin sees everything
+
+      if (role !== 'orientador') return []; // other roles get empty (no access)
+
+      return get('orientadorGroups', async () => {
+        const teacherDocId = await Store.getTeacherDocId();
+        if (!teacherDocId) return [];
+
+        const allGroups = await Store.getGroups();
+        return allGroups
+          .filter(g => g.orientadorId === teacherDocId)
+          .map(g => g.id);
+      });
     },
 
     // — Gestion de cache —

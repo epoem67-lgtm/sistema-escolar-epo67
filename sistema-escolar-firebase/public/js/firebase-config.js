@@ -20,9 +20,8 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 const storage = firebase.storage();
 
-// Proveedor de Google
-const googleProvider = new firebase.auth.GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
+// Nota: Se eliminó el proveedor de Google.
+// Ahora se usa autenticación por email/password.
 
 // ═══════════════════════════════════════════════════════════════
 // HELPERS DE FIRESTORE
@@ -52,7 +51,7 @@ const DB = {
   arrayRemove: (...items) => firebase.firestore.FieldValue.arrayRemove(...items),
   batch: () => db.batch(),
 
-  // Log de actividad
+  // Log de actividad (legacy — usa DB.audit() para bitácora completa)
   async log(action, details = {}) {
     try {
       await db.collection('activityLog').add({
@@ -64,6 +63,75 @@ const DB = {
       });
     } catch (e) {
       console.warn('Error logging activity:', e);
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // BITÁCORA DE AUDITORÍA COMPLETA
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Registra una acción en la bitácora de auditoría.
+   * @param {string} action   - Tipo: 'crear', 'editar', 'eliminar', 'login', 'logout', 'importar', etc.
+   * @param {string} entity   - Entidad: 'alumno', 'docente', 'calificación', 'asignación', 'usuario', 'incidencia', 'parcial', 'configuración', 'asistencia'
+   * @param {string} entityId - ID del documento afectado
+   * @param {object} opts     - { description, before, after, extra }
+   */
+  async audit(action, entity, entityId, opts = {}) {
+    try {
+      const user = auth.currentUser;
+      const entry = {
+        action,
+        entity,
+        entityId: entityId || '',
+        description: opts.description || '',
+        before: opts.before || null,
+        after: opts.after || null,
+        extra: opts.extra || null,
+        userId: user?.uid || 'system',
+        userEmail: user?.email || 'system',
+        userName: user?.displayName || App?.currentUser?.displayName || '',
+        userRole: App?.currentUser?.role || '',
+        ip: '', // No disponible client-side sin servicio externo
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        date: new Date().toISOString()
+      };
+
+      await db.collection('activityLog').add(entry);
+
+      // ═══ ALERTA POR CORREO para acciones críticas ═══
+      const critical = ['eliminar', 'login', 'crear_usuario', 'editar_usuario', 'importar', 'cerrar_parcial', 'abrir_parcial'];
+      if (critical.includes(action)) {
+        DB._queueEmailAlert(entry);
+      }
+    } catch (e) {
+      console.warn('Error en bitácora:', e);
+    }
+  },
+
+  /**
+   * Encola una alerta de correo en la colección emailAlerts.
+   * Un Cloud Function o servicio externo (EmailJS, webhook) la procesa.
+   */
+  async _queueEmailAlert(auditEntry) {
+    try {
+      await db.collection('emailAlerts').add({
+        type: 'audit_alert',
+        subject: `[EPO 67] Alerta: ${auditEntry.action} en ${auditEntry.entity}`,
+        body: `Acción: ${auditEntry.action.toUpperCase()}\n` +
+              `Entidad: ${auditEntry.entity}\n` +
+              `Descripción: ${auditEntry.description}\n` +
+              `Usuario: ${auditEntry.userEmail} (${auditEntry.userName || 'N/A'})\n` +
+              `Rol: ${auditEntry.userRole}\n` +
+              `Fecha: ${auditEntry.date}\n` +
+              (auditEntry.entityId ? `ID: ${auditEntry.entityId}\n` : ''),
+        status: 'pending',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        auditAction: auditEntry.action,
+        auditEntity: auditEntry.entity
+      });
+    } catch (e) {
+      console.warn('Error encolando alerta de email:', e);
     }
   }
 };

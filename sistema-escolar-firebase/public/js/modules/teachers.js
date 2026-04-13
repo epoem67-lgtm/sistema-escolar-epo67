@@ -90,10 +90,6 @@ const TeachersModule = (() => {
           <label>Especialidad</label>
           <input type="text" id="tf_especialidad" value="${isEdit ? S(teacher.especialidad) : ''}">
         </div>
-        <div class="form-group">
-          <label>Spreadsheet URL</label>
-          <input type="text" id="tf_spreadsheet" value="${isEdit ? S(teacher.spreadsheetUrl) : ''}">
-        </div>
       </form>
     `;
 
@@ -122,18 +118,26 @@ const TeachersModule = (() => {
           nombre,
           email: document.getElementById('tf_email').value.trim(),
           turno: document.getElementById('tf_turno').value,
-          especialidad: document.getElementById('tf_especialidad').value.trim(),
-          spreadsheetUrl: document.getElementById('tf_spreadsheet').value.trim()
+          especialidad: document.getElementById('tf_especialidad').value.trim()
         };
 
         try {
           if (isEdit) {
+            const before = { nombre: teacher.nombre, email: teacher.email, turno: teacher.turno, especialidad: teacher.especialidad };
             await db.collection('teachers').doc(teacher.id).update(data);
+            DB.audit('editar', 'docente', teacher.id, {
+              description: `Docente editado: ${data.nombre}`,
+              before, after: data
+            });
             Toast.show('Docente actualizado', 'success');
           } else {
             data.status = 'active';
             data.createdAt = new Date();
-            await db.collection('teachers').add(data);
+            const ref = await db.collection('teachers').add(data);
+            DB.audit('crear', 'docente', ref.id, {
+              description: `Docente creado: ${data.nombre}`,
+              after: data
+            });
             Toast.show('Docente creado', 'success');
           }
           Modal.close();
@@ -153,34 +157,24 @@ const TeachersModule = (() => {
       warningMsg = `<p style="color:var(--danger);font-weight:600;">Este docente tiene ${teacherAssignments.length} asignacion(es). Se recomienda eliminarlas primero.</p>`;
     }
 
-    const body = `
-      <p>Esta a punto de eliminar al docente:</p>
+    const message = `
+      <p>Está a punto de eliminar al docente:</p>
       <p><strong>${S(teacher.nombre)}</strong></p>
       ${warningMsg}
-      <p>Esta accion no se puede deshacer.</p>
-    `;
-    const footer = `
-      <button class="btn btn-outline" data-action="modal-cancel">Cancelar</button>
-      <button class="btn btn-danger" data-action="confirm-delete-teacher">Eliminar</button>
-    `;
+      <div class="alert alert-danger">Esta acción es irreversible.</div>`;
 
-    Modal.open('Eliminar Docente', body, footer);
-
-    document.getElementById('modalFooter').addEventListener('click', async (e) => {
-      if (e.target.closest('[data-action="modal-cancel"]')) {
-        Modal.close();
-        return;
-      }
-      if (e.target.closest('[data-action="confirm-delete-teacher"]')) {
-        try {
-          await db.collection('teachers').doc(teacher.id).delete();
-          Toast.show('Docente eliminado', 'success');
-          Modal.close();
-          await invalidateAndReload('teachers');
-        } catch (err) {
-          console.error('Error deleting teacher:', err);
-          Toast.show('Error al eliminar docente', 'error');
-        }
+    Modal.confirmTyped('Eliminar Docente', message, 'ELIMINAR', async () => {
+      try {
+        await DB.audit('eliminar', 'docente', teacher.id, {
+          description: `Docente eliminado: ${teacher.nombre}`,
+          before: { nombre: teacher.nombre, email: teacher.email, turno: teacher.turno, especialidad: teacher.especialidad }
+        });
+        await db.collection('teachers').doc(teacher.id).delete();
+        Toast.show('Docente eliminado', 'success');
+        await invalidateAndReload('teachers');
+      } catch (err) {
+        console.error('Error deleting teacher:', err);
+        Toast.show('Error al eliminar docente', 'error');
       }
     });
   };
@@ -389,9 +383,17 @@ const TeachersModule = (() => {
         try {
           if (isEdit) {
             await db.collection('assignments').doc(assignment.id).update(data);
+            DB.audit('editar', 'asignacion', assignment.id, {
+              description: `Asignación editada: ${data.teacherName} → ${data.subjectName} (${data.groupName})`,
+              after: data
+            });
             Toast.show('Asignacion actualizada', 'success');
           } else {
-            await db.collection('assignments').add(data);
+            const ref = await db.collection('assignments').add(data);
+            DB.audit('crear', 'asignacion', ref.id, {
+              description: `Asignación creada: ${data.teacherName} → ${data.subjectName} (${data.groupName})`,
+              after: data
+            });
             Toast.show('Asignacion creada', 'success');
           }
           Modal.close();
@@ -405,33 +407,23 @@ const TeachersModule = (() => {
   };
 
   const deleteAssignment = (assignment) => {
-    const body = `
-      <p>Esta a punto de eliminar la asignacion:</p>
+    const message = `
+      <p>Está a punto de eliminar la asignación:</p>
       <p><strong>${S(assignment.teacherName)}</strong> &rarr; ${S(assignment.subjectName)} (${S(assignment.groupName)})</p>
-      <p>Esta accion no se puede deshacer.</p>
-    `;
-    const footer = `
-      <button class="btn btn-outline" data-action="modal-cancel">Cancelar</button>
-      <button class="btn btn-danger" data-action="confirm-delete-assignment">Eliminar</button>
-    `;
+      <div class="alert alert-danger">Esta acción es irreversible.</div>`;
 
-    Modal.open('Eliminar Asignacion', body, footer);
-
-    document.getElementById('modalFooter').addEventListener('click', async (e) => {
-      if (e.target.closest('[data-action="modal-cancel"]')) {
-        Modal.close();
-        return;
-      }
-      if (e.target.closest('[data-action="confirm-delete-assignment"]')) {
-        try {
-          await db.collection('assignments').doc(assignment.id).delete();
-          Toast.show('Asignacion eliminada', 'success');
-          Modal.close();
-          await invalidateAndReload('assignments');
-        } catch (err) {
-          console.error('Error deleting assignment:', err);
-          Toast.show('Error al eliminar asignacion', 'error');
-        }
+    Modal.confirmTyped('Eliminar Asignación', message, 'ELIMINAR', async () => {
+      try {
+        await DB.audit('eliminar', 'asignacion', assignment.id, {
+          description: `Asignación eliminada: ${assignment.teacherName} → ${assignment.subjectName} (${assignment.groupName})`,
+          before: { teacherName: assignment.teacherName, subjectName: assignment.subjectName, groupName: assignment.groupName }
+        });
+        await db.collection('assignments').doc(assignment.id).delete();
+        Toast.show('Asignación eliminada', 'success');
+        await invalidateAndReload('assignments');
+      } catch (err) {
+        console.error('Error deleting assignment:', err);
+        Toast.show('Error al eliminar asignación', 'error');
       }
     });
   };
@@ -512,7 +504,6 @@ const TeachersModule = (() => {
                   <th>Nombre</th>
                   <th>Turno</th>
                   <th>Especialidad</th>
-                  <th>Spreadsheet</th>
                   <th>Estado</th>
                   <th>Acciones</th>
                 </tr>
@@ -523,11 +514,6 @@ const TeachersModule = (() => {
                     <td><strong>${S(t.nombre) || 'N/A'}</strong></td>
                     <td>${turnoBadge(t.turno)}</td>
                     <td>${S(t.especialidad) || '-'}</td>
-                    <td>
-                      ${t.spreadsheetUrl
-                        ? `<a href="${S(t.spreadsheetUrl)}" target="_blank" class="btn btn-sm btn-outline">Ver</a>`
-                        : 'Sin asignar'}
-                    </td>
                     <td><span class="badge badge-success">${S(t.status) || 'N/A'}</span></td>
                     <td>
                       <button class="btn btn-sm btn-warning" data-action="edit-teacher" data-id="${S(t.id)}">Editar</button>

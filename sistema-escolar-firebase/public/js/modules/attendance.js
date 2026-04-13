@@ -260,6 +260,10 @@ const AttendanceModule = (() => {
       }
 
       await batch.commit();
+      DB.audit('editar', 'asistencia', '', {
+        description: `Asistencia guardada: ${count} registros`,
+        extra: { count }
+      });
       Toast.show(`Asistencia guardada: ${count} registros`, 'success');
     } catch (error) {
       console.error('Error saving attendance:', error);

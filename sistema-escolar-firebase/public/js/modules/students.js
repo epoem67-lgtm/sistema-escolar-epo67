@@ -42,7 +42,7 @@ const StudentsModule = (() => {
       if (state.filters.turno !== 'TODOS' && student.turno !== state.filters.turno) {
         return false;
       }
-      if (state.filters.grado !== 'TODOS' && student.grado !== parseInt(state.filters.grado)) {
+      if (state.filters.grado !== 'TODOS' && String(student.grado) !== String(state.filters.grado)) {
         return false;
       }
       if (state.filters.grupo !== 'TODOS' && student.grupo !== state.filters.grupo) {
@@ -77,17 +77,17 @@ const StudentsModule = (() => {
   function getFilterOptions() {
     const turnos = [...new Set(allStudents.map(s => s.turno))].filter(Boolean).sort();
 
-    // Grados filtrados por turno seleccionado
-    let gradoBase = allStudents;
-    if (state.filters.turno !== 'TODOS') {
-      gradoBase = gradoBase.filter(s => s.turno === state.filters.turno);
-    }
-    const grados = [...new Set(gradoBase.map(s => s.grado))].filter(Boolean).sort((a, b) => a - b);
+    // Siempre mostrar todos los grados definidos en constantes
+    // para evitar que desaparezcan del dropdown
+    const grados = [...K.GRADOS];
 
     // Grupos filtrados por turno Y grado seleccionados
-    let grupoBase = gradoBase;
+    let grupoBase = allStudents;
+    if (state.filters.turno !== 'TODOS') {
+      grupoBase = grupoBase.filter(s => s.turno === state.filters.turno);
+    }
     if (state.filters.grado !== 'TODOS') {
-      grupoBase = grupoBase.filter(s => s.grado === parseInt(state.filters.grado));
+      grupoBase = grupoBase.filter(s => String(s.grado) === String(state.filters.grado));
     }
     const grupos = [...new Set(grupoBase.map(s => s.grupo))].filter(Boolean).sort();
 
@@ -170,7 +170,7 @@ const StudentsModule = (() => {
 
     let gradoOptions = '<option value="TODOS">Todos</option>';
     grados.forEach(g => {
-      gradoOptions += `<option value="${g}" ${state.filters.grado === g ? 'selected' : ''}>${g}\u00b0</option>`;
+      gradoOptions += `<option value="${g}" ${String(state.filters.grado) === String(g) ? 'selected' : ''}>${g}\u00b0</option>`;
     });
 
     let grupoOptions = '<option value="TODOS">Todos</option>';
@@ -623,11 +623,11 @@ const StudentsModule = (() => {
             bajaBy: auth.currentUser.uid
           });
 
-          await DB.log('student_baja', {
-            studentId: sid,
-            studentName: student.nombreCompleto,
-            reason,
-            detail
+          DB.audit('editar', 'alumno', sid, {
+            description: `Alumno dado de baja: ${student.nombreCompleto}`,
+            before: { estatus: student.estatus },
+            after: { estatus: 'BAJA', bajaReason: reason },
+            extra: { reason, detail }
           });
 
           Store.invalidate('students');
@@ -653,61 +653,43 @@ const StudentsModule = (() => {
     const student = allStudents.find(s => s.id === studentId);
     if (!student) return;
 
-    const bodyHtml = `
-      <div class="modal-form-grid modal-form-grid--single">
-        <div class="alert alert-danger">
-          ELIMINAR ALUMNO PERMANENTEMENTE
-        </div>
-        <div class="form-group">
-          <label>Alumno</label>
-          <div class="detail-value detail-value--lg">${Utils.sanitize(student.nombreCompleto || '-')}</div>
-        </div>
-        <div class="form-group">
-          <label>Motivo de la eliminacion *</label>
-          <textarea id="deleteReason" rows="3" placeholder="Escriba el motivo de la eliminacion..." required></textarea>
-        </div>
-        <div class="alert alert-danger">
-          Esta accion es irreversible. El registro sera eliminado permanentemente.
-        </div>
+    const message = `
+      <div class="alert alert-danger" style="margin-bottom:12px;">
+        <strong>ACCIÓN IRREVERSIBLE</strong> — El registro será eliminado permanentemente.
       </div>
-    `;
-
-    const footerHtml = `
-      <div class="btn-group">
-        <button class="btn btn-outline" data-action="close-modal">Cancelar</button>
-        <button class="btn btn-danger" data-action="confirm-delete" data-student-id="${student.id}">Eliminar Permanentemente</button>
+      <div style="margin-bottom:12px;">
+        <strong>Alumno:</strong> ${Utils.sanitize(student.nombreCompleto || '-')}<br>
+        <strong>Grupo:</strong> ${Utils.sanitize(student.groupName || student.groupId || '-')}<br>
+        <strong>NP:</strong> ${student.np || '-'}
       </div>
-    `;
+      <div class="form-group" style="margin-bottom:12px;">
+        <label style="font-weight:600;">Motivo de la eliminación *</label>
+        <textarea id="deleteReason" rows="2" placeholder="Escriba el motivo..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;"></textarea>
+      </div>`;
 
-    Modal.open(`Eliminar: ${Utils.sanitize(student.nombreCompleto || 'Estudiante')}`, bodyHtml, footerHtml);
-
-    document.getElementById('modalFooter').addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-action]');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const sid = btn.dataset.studentId;
-
-      if (action === 'close-modal') {
-        Modal.close();
-      } else if (action === 'confirm-delete') {
+    Modal.confirmTyped(
+      `Eliminar: ${Utils.sanitize(student.nombreCompleto || 'Estudiante')}`,
+      message,
+      'ELIMINAR',
+      async () => {
         try {
-          const reason = document.getElementById('deleteReason').value.trim();
+          const reason = document.getElementById('deleteReason')?.value?.trim() || 'Sin motivo especificado';
 
-          if (!reason) {
-            Toast.show('Debe ingresar un motivo para la eliminacion', 'warning');
-            return;
-          }
-
-          await DB.log('delete_student', {
-            studentId: sid,
-            studentName: student.nombreCompleto,
-            reason,
-            deletedBy: auth.currentUser.email
+          // Bitácora con datos completos antes de eliminar
+          await DB.audit('eliminar', 'alumno', studentId, {
+            description: `Alumno eliminado: ${student.nombreCompleto}`,
+            before: {
+              nombre: student.nombreCompleto,
+              grupo: student.groupName || student.groupId,
+              np: student.np,
+              curp: student.curp || '',
+              turno: student.turno
+            },
+            extra: { reason }
           });
 
-          await db.collection('students').doc(sid).delete();
+          await db.collection('students').doc(studentId).delete();
           Store.invalidate('students');
-          Modal.close();
           Toast.show('Alumno eliminado permanentemente', 'success');
 
           allStudents = await Store.getStudents(true);
@@ -719,7 +701,7 @@ const StudentsModule = (() => {
           Toast.show('Error al eliminar: ' + error.message, 'error');
         }
       }
-    });
+    );
   }
 
   /**

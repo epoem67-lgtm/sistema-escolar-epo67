@@ -536,6 +536,11 @@ const ImportGradesModule = (() => {
       await batch.commit();
       Store.invalidate('grades');
 
+      DB.audit('importar', 'calificacion', '', {
+        description: `Importación masiva: ${rowsToImport.length} calificaciones importadas desde Excel`,
+        extra: { count: rowsToImport.length }
+      });
+
       Toast.show(`${rowsToImport.length} calificaciones importadas correctamente`, 'success');
       renderResultSummary(rowsToImport.length);
     } catch (err) {

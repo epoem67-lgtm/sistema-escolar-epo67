@@ -19,16 +19,13 @@ const MyListsModule = (() => {
         return;
       }
 
-      const assignments = await db.collection('assignments')
-        .where('teacherId', '==', teacherDocId)
-        .get();
+      const allAssignments = await Store.getAssignments();
+      const groups = allAssignments.filter(a => a.teacherId === teacherDocId);
 
-      if (assignments.empty) {
+      if (groups.length === 0) {
         container.innerHTML = `<div class="module-container"><div class="empty-state"><span class="material-icons-round empty-state-icon">folder_open</span><p class="empty-state-text">No hay grupos asignados.</p></div></div>`;
         return;
       }
-
-      const groups = assignments.docs.map(doc => doc.data());
 
       container.innerHTML = `
         <div class="module-container">
@@ -68,12 +65,10 @@ const MyListsModule = (() => {
     listContainer.innerHTML = `<div class="loading-state"><span class="material-icons-round loading-spinner">autorenew</span><p>Cargando estudiantes...</p></div>`;
 
     try {
-      const students = await db.collection('students')
-        .where('groupId', '==', groupId)
-        .orderBy('nombreCompleto')
-        .get();
-
-      studentData = students.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const allStudents = await Store.getStudents();
+      studentData = allStudents
+        .filter(s => s.groupId === groupId)
+        .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
 
       const rows = studentData.map((student, index) => {
         const isActive = student.estatus === 'ACTIVO';

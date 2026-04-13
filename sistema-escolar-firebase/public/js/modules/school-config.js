@@ -231,6 +231,10 @@ const SchoolConfig = (() => {
       };
 
       await DB.doc('config', 'school').set(updatedConfig, { merge: true });
+      DB.audit('editar', 'configuracion', 'school', {
+        description: 'Configuración de escuela actualizada',
+        after: { nombre: updatedConfig.nombre, ciclo: updatedConfig.cicloEscolar, semestre: updatedConfig.semestre }
+      });
       config = updatedConfig;
       Toast.show('Configuraci\u00f3n guardada exitosamente', 'success');
     } catch (e) {
