@@ -29,7 +29,7 @@ const BoletasModule = (() => {
 
     container.innerHTML = `
       <div class="module-container">
-        ${UI.pageHeader('Boletas de Calificaciones', 'Genera boletas individuales o por grupo con formato oficial')}
+        ${UI.pageHeader('Pre Boletas de Calificaciones', 'Genera pre boletas individuales o por grupo con formato oficial')}
 
         <div class="card filter-bar">
           <div class="filter-bar-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
@@ -285,7 +285,7 @@ const BoletasModule = (() => {
       // Render
       const filterLabel = estatusFiltro === 'todos' ? '' :
         estatusFiltro === 'reprobados' ? ' (Solo Reprobados)' : ' (Solo Aprobados)';
-      let html = `<div class="alert alert-info" style="margin-bottom:12px;">Mostrando <strong>${targetStudents.length}</strong> de ${totalBeforeFilter} alumnos${filterLabel}</div>`;
+      let html = `<div class="alert alert-info no-print" style="margin-bottom:12px;">Mostrando <strong>${targetStudents.length}</strong> de ${totalBeforeFilter} alumnos${filterLabel}</div>`;
 
       targetStudents.forEach((student, idx) => {
         html += _buildBoleta(student, groupSubjects, gradesMap[student.id] || {}, meta, idx === targetStudents.length - 1);
@@ -309,7 +309,7 @@ const BoletasModule = (() => {
     const gradoNombre = K.GRADO_NOMBRE[meta.grado] || meta.grado;
     const semestre = { 1: 'PRIMERO', 2: 'TERCERO', 3: 'QUINTO' }[meta.grado] || '';
     const headerLines = K.BOLETA_HEADER.map(line =>
-      `<div style="font-size:9px;font-weight:600;letter-spacing:0.3px;line-height:1.3;">${Utils.sanitize(line)}</div>`
+      `<div style="font-size:10px;font-weight:600;letter-spacing:0.3px;line-height:1.3;">${Utils.sanitize(line)}</div>`
     ).join('');
     const parcialLabel = isTodos ? 'TODOS LOS PARCIALES' :
       (K.PARCIALES.find(p => p.id === parcialMode)?.nombre || parcialMode).toUpperCase();
@@ -373,7 +373,7 @@ const BoletasModule = (() => {
         return `<tr style="${bg}">
           <td style="font-size:9px;padding:2px 4px;">${Utils.sanitize(K.getUACNombre(subj.nombre || subj.id))}</td>
           ${faltasCells}${calCells}
-          <td style="font-size:8px;color:#555;padding:2px 4px;">${observation}</td>
+          <td style="font-size:9px;color:#555;padding:2px 4px;">${observation}</td>
         </tr>`;
       }).join('');
 
@@ -448,8 +448,8 @@ const BoletasModule = (() => {
 
     // ─── Observaciones META ───
     const metaText = isTodos ? `
-      <table style="width:100%;border:1px solid #333;border-collapse:collapse;margin-top:8px;font-size:7.5px;">
-        <tr><td style="background:#e0e0e0;font-weight:700;padding:3px 6px;font-size:8px;border:1px solid #333;">OBSERVACIONES Y SUGERENCIAS POR PARTE DEL DEPARTAMENTO DE ORIENTACI\u00d3N</td></tr>
+      <table style="width:100%;border:1px solid #333;border-collapse:collapse;margin-top:8px;font-size:9px;">
+        <tr><td style="background:#e0e0e0;font-weight:700;padding:3px 6px;font-size:9px;border:1px solid #333;">OBSERVACIONES Y SUGERENCIAS POR PARTE DEL DEPARTAMENTO DE ORIENTACI\u00d3N</td></tr>
         <tr><td style="padding:4px 6px;line-height:1.4;border:1px solid #333;">
           Lineamientos para la aplicaci\u00f3n del META del Bachillerato General (Gaceta del Gobierno del Estado de M\u00e9xico)<br>
           Calificaci\u00f3n aprobatoria: acumule de 18 a 30 puntos en la evaluaci\u00f3n final. Cubra el m\u00ednimo del 80% de asistencia y obtenga dos de las tres evaluaciones parciales acreditadas.<br>
@@ -463,14 +463,14 @@ const BoletasModule = (() => {
 
     // ─── Pie de boleta ───
     const firmasPadres = isTodos ? `
-      <div style="margin-top:10px;font-size:8.5px;line-height:1.8;">
-        <div style="font-size:8px;font-style:italic;margin-bottom:4px;">Documento NO OFICIAL para uso del Departamento de Orientaci\u00f3n Educativa</div>
+      <div style="margin-top:10px;font-size:10px;line-height:1.8;">
+        <div style="font-size:9px;font-style:italic;margin-bottom:4px;">Documento NO OFICIAL para uso del Departamento de Orientaci\u00f3n Educativa</div>
         <div>En calidad de padre/madre de familia o tutor del (la)alumno (a) ___________________________________________</div>
         <div>Del grupo <strong>${Utils.sanitize(meta.grado)}\u00b0${Utils.sanitize(meta.groupName)}</strong></div>
         <div style="margin-top:2px;">Estoy en conocimiento y de acuerdo con las calificaciones asentadas en la pre- boleta.</div>
         <div style="margin-top:8px;">NOMBRE DE LA MADRE, PADRE DE FAMILIA: ___________________________________________________________</div>
         <div style="margin-top:6px;">FIRMA: _________________________________ NUMERO DE CONTACTO: ___________________________________</div>
-        <div style="margin-top:8px;text-align:right;font-size:8px;">Cuautitl\u00e1n Izcalli, M\u00e9x. A _________ de ___________________________ de  2025.</div>
+        <div style="margin-top:8px;text-align:right;font-size:9px;">Cuautitl\u00e1n Izcalli, M\u00e9x. A _________ de ___________________________ de  2025.</div>
       </div>` : `
       <table style="width:100%;margin-top:30px;border-collapse:collapse;">
         <tr>
@@ -487,7 +487,7 @@ const BoletasModule = (() => {
           <td>&nbsp;</td>
           <td style="text-align:center;font-size:9px;padding-top:4px;font-weight:600;">FIRMA DE ENTERADO</td>
         </tr>
-        ${meta.orientador ? `<tr><td style="text-align:center;font-size:8px;color:#555;">${Utils.sanitize(meta.orientador)}</td><td></td><td></td><td></td><td></td></tr>` : ''}
+        ${meta.orientador ? `<tr><td style="text-align:center;font-size:9px;color:#555;">${Utils.sanitize(meta.orientador)}</td><td></td><td></td><td></td><td></td></tr>` : ''}
       </table>`;
 
     const pageBreak = isLast ? '' : ' style="page-break-after:always;"';
@@ -501,7 +501,7 @@ const BoletasModule = (() => {
         <div style="text-align:center;margin-bottom:${isTodos ? '6' : '12'}px;">
           ${headerLines}
           ${isTodos ? `<div style="font-size:9px;font-weight:600;margin-top:4px;">DEPARTAMENTO DE ORIENTACI\u00d3N EDUCATIVA &mdash; TURNO ${Utils.sanitize(meta.turno)}</div>` : ''}
-          <div style="font-size:11px;font-weight:700;margin-top:4px;letter-spacing:1px;">${isTodos ? 'PRE BOLETA DE CALIFICACIONES' : 'BOLETA DE CALIFICACIONES'}</div>
+          <div style="font-size:11px;font-weight:700;margin-top:4px;letter-spacing:1px;">PRE BOLETA DE CALIFICACIONES</div>
           ${!isTodos ? `<div style="font-size:9px;margin-top:2px;">CICLO ESCOLAR ${Utils.sanitize(meta.cicloEscolar)} &mdash; ${parcialLabel}</div>` : ''}
         </div>
 
@@ -535,19 +535,19 @@ const BoletasModule = (() => {
         <div style="display:flex;justify-content:center;gap:16px;margin:10px 0;font-family:Arial,sans-serif;">
           <div style="text-align:center;padding:8px 18px;border:2px solid #333;border-radius:8px;">
             <div style="font-size:22px;font-weight:800;color:#333;">${promedio}</div>
-            <div style="font-size:8px;color:#666;">Promedio</div>
+            <div style="font-size:9px;color:#666;">Promedio</div>
           </div>
           <div style="text-align:center;padding:8px 18px;border:2px solid ${parcialReprobadas > 0 ? '#c62828' : '#333'};border-radius:8px;">
             <div style="font-size:22px;font-weight:800;color:${parcialReprobadas > 0 ? '#c62828' : '#2e7d32'};">${parcialReprobadas}</div>
-            <div style="font-size:8px;color:#666;">Reprobadas</div>
+            <div style="font-size:9px;color:#666;">Reprobadas</div>
           </div>
           <div style="text-align:center;padding:8px 18px;border:2px solid #333;border-radius:8px;">
             <div style="font-size:22px;font-weight:800;color:#333;">${parcialFaltasTotal}</div>
-            <div style="font-size:8px;color:#666;">Faltas Total</div>
+            <div style="font-size:9px;color:#666;">Faltas Total</div>
           </div>
           <div style="text-align:center;padding:8px 18px;border:2px solid ${nivelRiesgo.border};border-radius:8px;background:${nivelRiesgo.bg};-webkit-print-color-adjust:exact;print-color-adjust:exact;">
             <div style="font-size:16px;font-weight:800;color:${nivelRiesgo.color};">${nivelRiesgo.text}</div>
-            <div style="font-size:8px;color:#666;">Nivel de Riesgo</div>
+            <div style="font-size:9px;color:#666;">Nivel de Riesgo</div>
           </div>
         </div>
         ` : ''}
@@ -607,7 +607,7 @@ const BoletasModule = (() => {
   </style>
 </head>
 <body>
-  ${results.innerHTML}
+  ${[...results.children].filter(el => !el.classList.contains('no-print')).map(el => el.outerHTML).join('')}
   <script>setTimeout(() => window.print(), 400)<\/script>
 </body>
 </html>`);

@@ -201,5 +201,33 @@ const K = Object.freeze({
 
   getSexLabel(code) {
     return this.SEX_MAP[code] || code || '-';
+  },
+
+  /**
+   * Verifica si estamos dentro de la ventana de corrección (3 días hábiles post-cierre).
+   * @param {Object} partialDoc — doc del parcial con { locked, closedAt }
+   * @returns {{ open: boolean, daysLeft: number, deadline: Date|null }}
+   */
+  getCorrectionWindow(partialDoc) {
+    if (!partialDoc || !partialDoc.locked || !partialDoc.closedAt) {
+      return { open: false, daysLeft: 0, deadline: null };
+    }
+    const closedDate = partialDoc.closedAt.toDate
+      ? partialDoc.closedAt.toDate()
+      : new Date(partialDoc.closedAt);
+    // Count 3 business days (Mon-Fri) from closedDate
+    let count = 0;
+    const d = new Date(closedDate);
+    while (count < 3) {
+      d.setDate(d.getDate() + 1);
+      const day = d.getDay();
+      if (day !== 0 && day !== 6) count++;
+    }
+    d.setHours(23, 59, 59, 999); // End of 3rd business day
+    const now = new Date();
+    const open = now <= d;
+    const diffMs = d - now;
+    const daysLeft = open ? Math.ceil(diffMs / (1000 * 60 * 60 * 24)) : 0;
+    return { open, daysLeft, deadline: d };
   }
 });

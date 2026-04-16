@@ -376,32 +376,35 @@ const Router = {
    * Si un módulo no está aquí, se asume acceso para todos los autenticados.
    */
   ACCESS: {
-    // Solo admin
+    // ─── Administracion (solo admin) ───
     'school-config': ['admin'],
     'teachers': ['admin'],
     'students': ['admin'],
     'enrollment': ['admin'],
-    'grades-admin': ['admin', 'orientador', 'maestro'],
     'partial-close': ['admin'],
-    'honor-roll': ['admin'],
-    'users-mgmt': ['admin'],
+    'captura-progress': ['admin'],
     'import-grades': ['admin'],
     'import-students': ['admin'],
-    // Admin + orientadores
-    'student-profile': ['admin', 'orientador', 'maestro'],
-    'at-risk': ['admin', 'orientador'],
+    'users-mgmt': ['admin'],
+    'bitacora': ['admin'],
+    // ─── Direccion (admin + directivo) ───
+    'grade-corrections': ['admin', 'directivo'],
+    'honor-roll': ['admin', 'orientador'],
+    // ─── Orientacion (admin + orientador) ───
     'boletas': ['admin', 'orientador'],
     'concentrado': ['admin', 'orientador'],
-    'reports-comparative': ['admin', 'orientador'],
+    'at-risk': ['admin', 'orientador'],
+    'student-profile': ['admin', 'orientador', 'maestro'],
     'reports': ['admin', 'orientador'],
-    // Admin + orientadores + maestros
+    'reports-comparative': ['admin', 'orientador'],
+    // ─── Docentes (admin + maestro) ───
+    'my-grades': ['admin', 'maestro'],
+    'grades-admin': ['admin', 'orientador', 'maestro'],
+    'my-lists': ['admin', 'maestro'],
     'indicadores': ['admin', 'orientador', 'maestro'],
     'attendance': ['admin', 'maestro'],
-    // Solo maestros
-    'my-grades': ['admin', 'maestro'],
-    'my-lists': ['maestro'],
-    'my-at-risk': ['maestro'],
-    // Todos
+    'my-at-risk': ['admin', 'maestro'],
+    // ─── Todos ───
     'dashboard': ['admin', 'orientador', 'maestro', 'directivo', 'consulta']
   },
 

@@ -192,5 +192,18 @@ service cloud.firestore {
       allow create, update: if isAuthenticated() && (isAdmin() || isMaestro());
       allow delete: if isAdmin();
     }
+
+    // ─── CORRECCIONES DE CALIFICACIONES ──────────────────
+    match /gradeCorrections/{correctionId} {
+      allow read: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
+      allow create, update: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
+      allow delete: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
+    }
+
+    // ─── NOTIFICACIONES ──────────────────────────────────
+    match /notifications/{notifId} {
+      allow read: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
+      allow create: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
+    }
   }
 }

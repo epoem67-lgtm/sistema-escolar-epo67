@@ -372,10 +372,10 @@ const CapturaProgressModule = (function () {
         h1 { font-size: 14pt; text-align: center; margin-bottom: 4px; }
         h2 { font-size: 11pt; text-align: center; color: #666; margin-bottom: 16px; }
         table { width: 100%; border-collapse: collapse; }
-        th { background: #2d3748; color: #fff; padding: 6px 8px; font-size: 9pt; text-align: left; }
+        th { background: #2d3748; color: #fff; padding: 6px 8px; font-size: 10pt; text-align: left; }
         td { padding: 5px 8px; border-bottom: 1px solid #ddd; font-size: 10pt; }
         tr:nth-child(even) { background: #f7fafc; }
-        .footer { text-align: center; font-size: 8pt; color: #999; margin-top: 20px; }
+        .footer { text-align: center; font-size: 9pt; color: #999; margin-top: 20px; }
       </style>
       <h1>ASIGNACIONES PENDIENTES DE CAPTURA</h1>
       <h2>EPO 67 &middot; ${new Date().toLocaleDateString('es-MX')} &middot; ${pending.length} asignaciones pendientes</h2>
@@ -419,12 +419,12 @@ const CapturaProgressModule = (function () {
         body { font-family: Arial, sans-serif; margin: 0; }
         h1 { font-size: 13pt; text-align: center; margin: 0 0 2px 0; }
         h2 { font-size: 10pt; text-align: center; color: #555; margin: 0 0 8px 0; font-weight: 400; }
-        .note { font-size: 8pt; color: #888; text-align: center; margin-bottom: 8px; }
+        .note { font-size: 9pt; color: #888; text-align: center; margin-bottom: 8px; }
         table { width: 100%; border-collapse: collapse; }
-        th { background: #2d3748; color: #fff; padding: 5px 6px; font-size: 8pt; text-align: left; }
+        th { background: #2d3748; color: #fff; padding: 5px 6px; font-size: 9pt; text-align: left; }
         td { padding: 3px 6px; border: 1px solid #ccc; font-size: 9pt; }
         tr:nth-child(even) { background: #f9f9f9; }
-        .footer { text-align: center; font-size: 7pt; color: #aaa; margin-top: 8px; }
+        .footer { text-align: center; font-size: 9pt; color: #aaa; margin-top: 8px; }
       </style>
       <h1>REGISTRO DE DATOS DE DOCENTES — EPO 67</h1>
       <h2>Formato para recopilar datos y habilitar cuentas de usuario en el sistema</h2>

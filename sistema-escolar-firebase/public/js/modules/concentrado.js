@@ -438,10 +438,10 @@ const ConcentradoModule = (() => {
 
     // Dynamic font based on students AND subjects count
     let fs;
-    if (n <= 35 && nSubs <= 10) { fs = '6.5pt'; }
-    else if (n <= 42) { fs = '6pt'; }
-    else if (n <= 48) { fs = '5.5pt'; }
-    else { fs = '5pt'; }
+    if (n <= 35 && nSubs <= 10) { fs = '7.5pt'; }
+    else if (n <= 42) { fs = '7pt'; }
+    else if (n <= 48) { fs = '6.5pt'; }
+    else { fs = '6pt'; }
 
     // Subject column width
     const nameColW = 18; // % for name
@@ -514,7 +514,7 @@ html, body { margin:0; padding:0; height:100%; }
 .PG {
     width:100%; height:100vh;
     font-family:Arial,Helvetica,sans-serif; color:#000; line-height:1.1;
-    font-size:6pt;
+    font-size:7pt;
     display:flex; flex-direction:column;
     overflow:hidden;
 }
@@ -525,20 +525,20 @@ html, body { margin:0; padding:0; height:100%; }
 .hdr-t { width:100%; margin-bottom:0.3mm; }
 .hdr-t td { vertical-align:middle; padding:0; }
 .hdr-t img { height:6.5mm; width:auto; }
-.hdr-r { text-align:right; font-size:5pt; line-height:1.25; color:#333; }
+.hdr-r { text-align:right; font-size:6pt; line-height:1.25; color:#333; }
 
-.ttl-esc { text-align:center; font-weight:bold; font-size:7.5pt; line-height:1.1; }
-.ttl-ctrl { text-align:center; font-weight:bold; font-size:7pt; line-height:1; margin:0.3mm 0;
+.ttl-esc { text-align:center; font-weight:bold; font-size:9pt; line-height:1.1; }
+.ttl-ctrl { text-align:center; font-weight:bold; font-size:8pt; line-height:1; margin:0.3mm 0;
     border-bottom:0.5pt solid #000; padding-bottom:0.3mm; }
 
-.nfo { width:100%; font-size:6pt; line-height:1.15; }
+.nfo { width:100%; font-size:7pt; line-height:1.15; }
 .nfo td { border:0.4pt solid #000; padding:0.4mm 0.8mm; height:3.5mm; vertical-align:middle; }
-.nfo .lb { font-size:5.5pt; color:#333; }
-.nfo .vl { font-weight:bold; font-size:6pt; }
-.nfo .sm { text-align:center; font-weight:bold; font-size:6.5pt; line-height:1.15; }
+.nfo .lb { font-size:6.5pt; color:#333; }
+.nfo .vl { font-weight:bold; font-size:7pt; }
+.nfo .sm { text-align:center; font-weight:bold; font-size:7.5pt; line-height:1.15; }
 
 .MT { width:100%; height:100%; table-layout:fixed; font-size:${fs}; line-height:1; }
-.MT th { border:0.5pt solid #000; padding:0.2mm; text-align:center; font-weight:bold; font-size:${nSubs > 10 ? '4pt' : '4.5pt'};
+.MT th { border:0.5pt solid #000; padding:0.2mm; text-align:center; font-weight:bold; font-size:${nSubs > 10 ? '5pt' : '5.5pt'};
     background:#000; color:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact;
     line-height:1.1; vertical-align:middle; height:5mm; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .MT td { border:0.4pt solid #000; font-size:${fs}; line-height:1;
@@ -546,19 +546,19 @@ html, body { margin:0; padding:0; height:100%; }
 .MT .c { text-align:center; padding:0; }
 .MT .nm { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 
-.ST td { border:0.4pt solid #000; padding:0.25mm 0.6mm; font-size:6pt; line-height:1.1; height:2.6mm; }
+.ST td { border:0.4pt solid #000; padding:0.25mm 0.6mm; font-size:7pt; line-height:1.1; height:2.6mm; }
 .ST .sl { font-weight:bold; }
-.ST .sv { text-align:center; font-weight:bold; font-size:6.5pt; width:10mm; }
+.ST .sv { text-align:center; font-weight:bold; font-size:7.5pt; width:10mm; }
 
 .SG-tbl { width:100%; border-collapse:collapse; }
 .SG-tbl td { width:25%; text-align:center; padding:0 1.5mm; }
 .SG-tbl .sg-line-row td { vertical-align:bottom; border-bottom:0.5pt solid #000; height:1mm; }
 .SG-tbl .sg-text-row td { vertical-align:top; padding-top:0.3mm; }
-.SG-tt { font-weight:bold; font-size:6pt; line-height:1.15; }
-.SG-nm { font-size:5.5pt; line-height:1.15; }
+.SG-tt { font-weight:bold; font-size:7pt; line-height:1.15; }
+.SG-nm { font-size:6.5pt; line-height:1.15; }
 
 .ftr img { width:100%; max-height:3mm; display:block; }
-.ftr-t { text-align:center; font-size:4.5pt; color:#333; line-height:1; margin-top:0.1mm; }
+.ftr-t { text-align:center; font-size:5.5pt; color:#333; line-height:1; margin-top:0.1mm; }
 </style>
 
 <div class="PG">
