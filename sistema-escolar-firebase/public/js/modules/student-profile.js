@@ -821,7 +821,7 @@ const StudentProfileModule = (() => {
         const faltas = g.faltas !== undefined && g.faltas !== null ? Math.round(g.faltas) : '';
         const cal = g.cal !== undefined && g.cal !== null ? g.cal : '';
         const calNum = parseFloat(cal);
-        const calBg = !isNaN(calNum) && calNum < 6 ? ' background:#ddd; font-weight:bold;' : ' font-weight:bold;';
+        const calBg = !isNaN(calNum) && calNum < 6 ? ' background:#D9D9D9; font-weight:bold;' : ' font-weight:bold;';
 
         rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:6.5pt;">${suma}</td>`;
         rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:6.5pt;">${faltas}</td>`;
@@ -831,7 +831,7 @@ const StudentProfileModule = (() => {
       });
 
       const avg = subCount > 0 ? (subTotal / subCount).toFixed(1) : '';
-      const avgBg = parseFloat(avg) < 6 ? ' background:#ddd; font-weight:bold;' : ' font-weight:bold;';
+      const avgBg = parseFloat(avg) < 6 ? ' background:#D9D9D9; font-weight:bold;' : ' font-weight:bold;';
       rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:7pt;${avgBg}">${avg}</td></tr>`;
     });
 

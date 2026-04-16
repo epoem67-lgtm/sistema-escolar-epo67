@@ -20,6 +20,38 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 const storage = firebase.storage();
 
+// ═══════════════════════════════════════════════════════════════
+// PERSISTENCIA OFFLINE
+// Cachea documentos en IndexedDB para reducir reads al servidor.
+// Reads repetidos se resuelven localmente (~70-80% menos consumo).
+// ═══════════════════════════════════════════════════════════════
+
+// Cache version — incrementar para forzar limpieza en todos los navegadores
+const FIRESTORE_CACHE_VERSION = 2;
+const _cacheKey = 'epo67_cache_v';
+const _storedVersion = localStorage.getItem(_cacheKey);
+if (_storedVersion !== String(FIRESTORE_CACHE_VERSION)) {
+  // Limpiar IndexedDB de Firestore para forzar datos frescos
+  if (indexedDB && indexedDB.databases) {
+    indexedDB.databases().then(dbs => {
+      dbs.filter(d => d.name && d.name.includes('firestore')).forEach(d => {
+        indexedDB.deleteDatabase(d.name);
+        console.log('Cache Firestore limpiado:', d.name);
+      });
+    }).catch(() => {});
+  }
+  localStorage.setItem(_cacheKey, String(FIRESTORE_CACHE_VERSION));
+}
+
+db.enablePersistence({ synchronizeTabs: true })
+  .catch(err => {
+    if (err.code === 'failed-precondition') {
+      console.warn('Persistencia offline: múltiples tabs abiertas, solo una puede habilitar persistencia');
+    } else if (err.code === 'unimplemented') {
+      console.warn('Persistencia offline no soportada en este navegador');
+    }
+  });
+
 // Nota: Se eliminó el proveedor de Google.
 // Ahora se usa autenticación por email/password.
 

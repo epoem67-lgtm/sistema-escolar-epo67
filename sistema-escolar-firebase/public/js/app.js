@@ -22,6 +22,9 @@ const App = {
       // Registrar módulos
       this.registerModules();
 
+      // Persistencia LOCAL — la sesión sobrevive al refresco de página
+      await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+
       // Configurar escuchador de autenticación
       Auth.setupAuthListener();
 
@@ -136,6 +139,10 @@ const Auth = {
    */
   setupAuthListener() {
     auth.onAuthStateChanged(async (firebaseUser) => {
+      // Ocultar splash de carga
+      const splash = document.getElementById('splashScreen');
+      if (splash) splash.style.display = 'none';
+
       if (firebaseUser) {
         console.log('🔐 Usuario detectado:', firebaseUser.email);
         await this.handleUserLogin(firebaseUser);
@@ -198,13 +205,18 @@ const Auth = {
       // Actualizar información del usuario en la UI
       this.updateUserUI();
 
-      // Navegar al dashboard
-      Router.navigate('dashboard');
+      // Restaurar la última ruta o ir al dashboard
+      const lastRoute = sessionStorage.getItem('epo67_lastRoute');
+      const target = (lastRoute && Router.modules[lastRoute]) ? lastRoute : 'dashboard';
+      Router.navigate(target);
 
     } catch (error) {
       console.error('❌ Error verificando usuario:', error);
-      this.showLoginError('Error al verificar tu cuenta. Intenta de nuevo.');
-      await auth.signOut();
+      // No cerrar sesión por error de red/Firestore — reintentar en 3 segundos
+      Toast.show('Error de conexión. Reintentando...', 'warning');
+      setTimeout(() => {
+        if (auth.currentUser) this.handleUserLogin(auth.currentUser);
+      }, 3000);
     }
   },
 
@@ -278,6 +290,7 @@ const Auth = {
       await auth.signOut();
       App.currentUser = null;
       Store.invalidateAll();
+      sessionStorage.removeItem('epo67_lastRoute');
       this.showLoginScreen();
       Toast.show('Sesión cerrada', 'info');
       console.log('👋 Logout completado');
@@ -413,8 +426,9 @@ const Router = {
         return;
       }
 
-      // Actualizar módulo actual
+      // Actualizar módulo actual y guardar para restaurar tras refresh
       this.currentModule = moduleName;
+      sessionStorage.setItem('epo67_lastRoute', moduleName);
 
       // Actualizar nav items activos
       document.querySelectorAll('.nav-item').forEach(item => {

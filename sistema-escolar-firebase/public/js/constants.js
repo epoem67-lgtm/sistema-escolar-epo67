@@ -167,12 +167,13 @@ const K = Object.freeze({
   },
 
   /** Calcula CAL (calificación final): redondeo especial EPO67
-   *  ≥6: redondeo normal. <6: truncar (floor). Min 5 si hay datos. Max 10. */
+   *  ≥6: redondeo normal. <6: truncar a 5 (calificación mínima). Max 10. */
   calcCal(suma) {
-    if (suma === null || suma === undefined || suma === 0) return '';
-    const s = Math.min(suma, 10);
+    if (suma === null || suma === undefined) return '';
+    const s = Math.min(Number(suma), 10);
+    if (isNaN(s)) return '';
     if (s >= 6) return Math.min(Math.round(s), 10);
-    return Math.max(5, Math.floor(s));
+    return 5; // Menor a 6 siempre es 5
   },
 
   /** Nombre oficial de UAC */

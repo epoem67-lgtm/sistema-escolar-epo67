@@ -321,15 +321,51 @@ const EnrollmentModule = (() => {
     if (!student) return;
 
     const newStatus = student.estatus === 'ACTIVO' ? 'BAJA' : 'ACTIVO';
-    const action = newStatus === 'BAJA' ? 'dar de baja' : 'reactivar';
 
-    Modal.confirm(
-      'Cambiar Estatus',
-      `\u00bfDeseas ${action} a ${student.nombreCompleto}?`,
-      async () => {
+    if (newStatus === 'BAJA') {
+      // Dar de baja: confirmacion tipada + motivo
+      const message = `
+        <div style="margin-bottom:12px;">
+          Alumno: <strong>${Utils.sanitize(student.nombreCompleto)}</strong>
+        </div>
+        <div class="form-group" style="margin-bottom:8px;">
+          <label>Motivo de Baja</label>
+          <select id="enrBajaReason">
+            <option value="">-- Seleccione motivo --</option>
+            <option value="Voluntaria">Voluntaria</option>
+            <option value="Disciplinaria">Disciplinaria</option>
+            <option value="Traslado">Traslado</option>
+            <option value="Enfermedad">Enfermedad</option>
+            <option value="Otra">Otra</option>
+          </select>
+        </div>
+        <div class="alert alert-danger" style="margin-top:8px;">
+          <strong>PRECAUCIÓN</strong> — Escriba <strong>BAJA</strong> para confirmar.
+        </div>
+      `;
+
+      Modal.confirmTyped('Dar de Baja', message, 'BAJA', async () => {
         try {
-          await db.collection('students').doc(studentId).update({ estatus: newStatus });
-          Toast.show(`Estatus cambiado a ${newStatus}`, 'success');
+          const reason = document.getElementById('enrBajaReason')?.value || '';
+          if (!reason) {
+            Toast.show('Seleccione un motivo de baja', 'warning');
+            return;
+          }
+
+          await db.collection('students').doc(studentId).update({
+            estatus: 'BAJA',
+            bajaReason: reason,
+            bajaDate: new Date(),
+            bajaBy: auth.currentUser.uid
+          });
+
+          DB.audit('editar', 'alumno', studentId, {
+            description: `Baja desde inscripciones: ${student.nombreCompleto}`,
+            before: { estatus: 'ACTIVO' },
+            after: { estatus: 'BAJA', bajaReason: reason }
+          });
+
+          Toast.show('Alumno dado de baja', 'success');
           Modal.close();
           Store.invalidate('students');
           allStudents = await Store.getStudents(true);
@@ -338,8 +374,38 @@ const EnrollmentModule = (() => {
           Toast.show('Error al cambiar estatus', 'error');
           console.error(error);
         }
-      }
-    );
+      });
+    } else {
+      // Reactivar: confirmacion simple
+      Modal.confirm(
+        'Reactivar Alumno',
+        `¿Reactivar a <strong>${Utils.sanitize(student.nombreCompleto)}</strong>?<br>Su estatus cambiará de <span class="badge badge-danger">BAJA</span> a <span class="badge badge-success">ACTIVO</span>.`,
+        async () => {
+          try {
+            await db.collection('students').doc(studentId).update({
+              estatus: 'ACTIVO',
+              reactivadoPor: auth.currentUser.uid,
+              reactivadoFecha: new Date()
+            });
+
+            DB.audit('editar', 'alumno', studentId, {
+              description: `Alumno reactivado desde inscripciones: ${student.nombreCompleto}`,
+              before: { estatus: 'BAJA' },
+              after: { estatus: 'ACTIVO' }
+            });
+
+            Toast.show('Alumno reactivado exitosamente', 'success');
+            Modal.close();
+            Store.invalidate('students');
+            allStudents = await Store.getStudents(true);
+            applyFilters();
+          } catch (error) {
+            Toast.show('Error al reactivar', 'error');
+            console.error(error);
+          }
+        }
+      );
+    }
   }
 
   function bindEvents() {

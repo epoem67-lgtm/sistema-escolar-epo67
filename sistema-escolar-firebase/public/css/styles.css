@@ -1195,10 +1195,10 @@ textarea {
   background: #ebf8ff !important;
 }
 .grade-editor-table tbody tr.row-reprobado {
-  background: #fff5f5 !important;
+  background: #FFC7CE !important;
 }
 .grade-editor-table tbody tr.row-reprobado:hover {
-  background: #fed7d7 !important;
+  background: #FFB0B9 !important;
 }
 .grade-editor-table tbody td.cell-num {
   text-align: center;

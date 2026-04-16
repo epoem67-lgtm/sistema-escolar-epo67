@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sistema Escolar</title>
-  <link rel="stylesheet" href="/css/styles.css?v=4.6">
+  <link rel="stylesheet" href="/css/styles.css?v=5.2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
@@ -20,8 +20,16 @@
 </head>
 <body>
 
+  <!-- ═══════ SPLASH DE CARGA (se muestra mientras Firebase restaura sesión) ═══════ -->
+  <div id="splashScreen" class="login-screen">
+    <div class="login-card" style="text-align:center;box-shadow:none;background:transparent;">
+      <span class="material-icons-round loading-spinner" style="font-size:48px;color:var(--color-primary);">autorenew</span>
+      <p style="margin-top:12px;color:var(--color-text-light);">Cargando sistema...</p>
+    </div>
+  </div>
+
   <!-- ═══════ PANTALLA DE LOGIN ═══════ -->
-  <div id="loginScreen" class="login-screen">
+  <div id="loginScreen" class="login-screen" style="display:none">
     <div class="login-card">
       <div class="login-logo">
         <span class="material-icons-round login-icon">school</span>
@@ -229,36 +237,36 @@
 
   <!-- ═══════ SCRIPTS ═══════ -->
   <!-- Core -->
-  <script src="/js/firebase-config.js?v=4.6"></script>
-  <script src="/js/constants.js?v=4.6"></script>
-  <script src="/js/data-store.js?v=4.6"></script>
-  <script src="/js/app.js?v=4.6"></script>
-  <script src="/js/components.js?v=4.6"></script>
-  <script src="/js/logos.js?v=4.6"></script>
-  <script src="/js/modules/student-profile.js?v=4.6"></script>
+  <script src="/js/firebase-config.js?v=5.2"></script>
+  <script src="/js/constants.js?v=5.2"></script>
+  <script src="/js/data-store.js?v=5.2"></script>
+  <script src="/js/app.js?v=5.2"></script>
+  <script src="/js/components.js?v=5.2"></script>
+  <script src="/js/logos.js?v=5.2"></script>
+  <script src="/js/modules/student-profile.js?v=5.2"></script>
 
   <!-- Módulos -->
-  <script src="/js/modules/dashboard.js?v=4.6"></script>
-  <script src="/js/modules/school-config.js?v=4.6"></script>
-  <script src="/js/modules/teachers.js?v=4.6"></script>
-  <script src="/js/modules/students.js?v=4.6"></script>
-  <script src="/js/modules/grades.js?v=4.6"></script>
-  <script src="/js/modules/partial-close.js?v=4.6"></script>
-  <script src="/js/modules/at-risk.js?v=4.6"></script>
-  <script src="/js/modules/users-mgmt.js?v=4.6"></script>
-  <script src="/js/modules/my-lists.js?v=4.6"></script>
-  <script src="/js/modules/enrollment.js?v=4.6"></script>
-  <script src="/js/modules/honor-roll.js?v=4.6"></script>
+  <script src="/js/modules/dashboard.js?v=5.2"></script>
+  <script src="/js/modules/school-config.js?v=5.2"></script>
+  <script src="/js/modules/teachers.js?v=5.2"></script>
+  <script src="/js/modules/students.js?v=5.2"></script>
+  <script src="/js/modules/grades.js?v=5.2"></script>
+  <script src="/js/modules/partial-close.js?v=5.2"></script>
+  <script src="/js/modules/at-risk.js?v=5.2"></script>
+  <script src="/js/modules/users-mgmt.js?v=5.2"></script>
+  <script src="/js/modules/my-lists.js?v=5.2"></script>
+  <script src="/js/modules/enrollment.js?v=5.2"></script>
+  <script src="/js/modules/honor-roll.js?v=5.2"></script>
 
   <!-- Nuevos módulos v3.1 -->
-  <script src="/js/modules/import-grades.js?v=4.6"></script>
-  <script src="/js/modules/import-students.js?v=4.6"></script>
-  <script src="/js/modules/boletas.js?v=4.6"></script>
-  <script src="/js/modules/indicadores.js?v=4.6"></script>
-  <script src="/js/modules/concentrado.js?v=4.6"></script>
-  <script src="/js/modules/attendance.js?v=4.6"></script>
-  <script src="/js/modules/reports-comparative.js?v=4.6"></script>
-  <script src="/js/modules/bitacora.js?v=4.6"></script>
-  <script src="/js/modules/captura-progress.js?v=4.6"></script>
+  <script src="/js/modules/import-grades.js?v=5.2"></script>
+  <script src="/js/modules/import-students.js?v=5.2"></script>
+  <script src="/js/modules/boletas.js?v=5.2"></script>
+  <script src="/js/modules/indicadores.js?v=5.2"></script>
+  <script src="/js/modules/concentrado.js?v=5.2"></script>
+  <script src="/js/modules/attendance.js?v=5.2"></script>
+  <script src="/js/modules/reports-comparative.js?v=5.2"></script>
+  <script src="/js/modules/bitacora.js?v=5.2"></script>
+  <script src="/js/modules/captura-progress.js?v=5.2"></script>
 </body>
 </html>

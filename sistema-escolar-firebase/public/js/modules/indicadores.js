@@ -236,13 +236,18 @@ const IndicadoresModule = (() => {
       `;
 
       // ─── AGGREGATE BY GROUP ───
+      // Usa groupId como clave y el nombre del grupo para display
+      const groupNameMap = {};
+      allGroups.forEach(g => { groupNameMap[g.id] = g.nombre || g.grupo || g.id; });
       const byGroup = {};
       studentAverages.forEach(sa => {
-        const grp = sa.student.grupo || 'Sin grupo';
-        if (!byGroup[grp]) byGroup[grp] = { students: [], totalAvg: 0, passed: 0, failed: 0 };
-        byGroup[grp].students.push(sa);
-        if (sa.average >= passGrade) byGroup[grp].passed++;
-        else byGroup[grp].failed++;
+        const gid = sa.student.groupId || sa.student.grupo || 'Sin grupo';
+        const grp = groupNameMap[gid] || gid;
+        const key = sa.student.turno + '_' + grp; // turno+nombre para evitar colisiones 1-1 mat vs 1-1 vesp
+        if (!byGroup[key]) byGroup[key] = { name: grp, turno: sa.student.turno || '', students: [], totalAvg: 0, passed: 0, failed: 0 };
+        byGroup[key].students.push(sa);
+        if (sa.average >= passGrade) byGroup[key].passed++;
+        else byGroup[key].failed++;
       });
       for (const key of Object.keys(byGroup)) {
         const g = byGroup[key];
@@ -285,7 +290,7 @@ const IndicadoresModule = (() => {
           return `
             <div class="mb-md">
               <div class="flex justify-between mb-sm">
-                <span class="font-semibold">${Utils.sanitize(name)}</span>
+                <span class="font-semibold">${Utils.sanitize(data.name || name)}</span>
                 <span class="font-semibold">${data.totalAvg.toFixed(2)}</span>
               </div>
               <div class="progress-bar">
@@ -332,7 +337,7 @@ const IndicadoresModule = (() => {
           return `
             <div class="mb-md">
               <div class="flex justify-between mb-sm">
-                <span class="font-semibold">${Utils.sanitize(name)}</span>
+                <span class="font-semibold">${Utils.sanitize(data.name || name)}</span>
                 <span class="font-semibold">${data.reprobPct}%</span>
               </div>
               <div class="progress-bar">
@@ -361,12 +366,12 @@ const IndicadoresModule = (() => {
                 </tr>
               </thead>
               <tbody>`;
-      groupEntries.forEach(([name, data]) => {
+      groupEntries.forEach(([key, data]) => {
         const avgClass = data.totalAvg >= metaPromedio ? 'grade-badge--good' : 'grade-badge--fail';
         const repClass = data.reprobPct <= metaReprob ? 'grade-badge--good' : 'grade-badge--fail';
         html += `
           <tr>
-            <td class="font-semibold">${Utils.sanitize(name)}</td>
+            <td class="font-semibold">${Utils.sanitize(data.name || key)}</td>
             <td class="text-center"><span class="grade-badge ${avgClass}">${data.totalAvg.toFixed(2)}</span></td>
             <td class="text-center">${data.passed}</td>
             <td class="text-center">${data.failed}</td>

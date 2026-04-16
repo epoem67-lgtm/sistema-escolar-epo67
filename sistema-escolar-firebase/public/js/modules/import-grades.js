@@ -534,7 +534,7 @@ const ImportGradesModule = (() => {
       });
 
       await batch.commit();
-      Store.invalidate('grades');
+      Store.invalidateGradesForGroup(grupo);
 
       DB.audit('importar', 'calificacion', '', {
         description: `Importación masiva: ${rowsToImport.length} calificaciones importadas desde Excel`,

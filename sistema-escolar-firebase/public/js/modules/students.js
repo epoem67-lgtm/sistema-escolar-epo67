@@ -400,6 +400,7 @@ const StudentsModule = (() => {
       <div class="btn-group">
         <button class="btn btn-primary" data-action="edit-student" data-student-id="${student.id}">Editar</button>
         ${isActive ? `<button class="btn btn-warning" data-action="baja-student" data-student-id="${student.id}">Dar de Baja</button>` : ''}
+        ${!isActive ? `<button class="btn btn-success" data-action="reactivar-student" data-student-id="${student.id}">Reactivar</button>` : ''}
         ${isAdmin ? `<button class="btn btn-danger" data-action="delete-student" data-student-id="${student.id}">Eliminar</button>` : ''}
         <button class="btn btn-outline" data-action="close-modal">Cerrar</button>
       </div>
@@ -416,6 +417,7 @@ const StudentsModule = (() => {
       if (action === 'close-modal') Modal.close();
       else if (action === 'edit-student') { Modal.close(); showEditStudentModal(sid); }
       else if (action === 'baja-student') { Modal.close(); showBajaModal(sid); }
+      else if (action === 'reactivar-student') { Modal.close(); reactivarStudent(sid); }
       else if (action === 'delete-student') { Modal.close(); confirmDeleteStudent(sid); }
     });
   }
@@ -557,15 +559,11 @@ const StudentsModule = (() => {
     const student = allStudents.find(s => s.id === studentId);
     if (!student) return;
 
-    const bodyHtml = `
+    const message = `
       <div class="modal-form-grid modal-form-grid--single">
         <div class="form-group">
           <label>Alumno</label>
           <div class="detail-value detail-value--lg">${Utils.sanitize(student.nombreCompleto || '-')}</div>
-        </div>
-        <div class="form-group">
-          <label>Estatus Actual</label>
-          <div class="detail-value">${Utils.sanitize(student.estatus || '-')}</div>
         </div>
         <div class="form-group">
           <label>Motivo de Baja</label>
@@ -582,40 +580,27 @@ const StudentsModule = (() => {
           <label>Detalle</label>
           <textarea id="bajaDetail" rows="3" placeholder="Detalle adicional sobre la baja..."></textarea>
         </div>
-        <div class="alert alert-danger">
-          Esta accion cambiara el estatus del alumno a BAJA
+        <div class="alert alert-danger" style="margin-top:8px;">
+          <strong>PRECAUCIÓN</strong> — El alumno será dado de baja. Escriba <strong>BAJA</strong> para confirmar.
         </div>
       </div>
     `;
 
-    const footerHtml = `
-      <div class="btn-group">
-        <button class="btn btn-outline" data-action="close-modal">Cancelar</button>
-        <button class="btn btn-warning" data-action="confirm-baja" data-student-id="${student.id}">Confirmar Baja</button>
-      </div>
-    `;
-
-    Modal.open(`Dar de Baja: ${Utils.sanitize(student.nombreCompleto || 'Estudiante')}`, bodyHtml, footerHtml);
-
-    document.getElementById('modalFooter').addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-action]');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const sid = btn.dataset.studentId;
-
-      if (action === 'close-modal') {
-        Modal.close();
-      } else if (action === 'confirm-baja') {
+    Modal.confirmTyped(
+      `Dar de Baja: ${Utils.sanitize(student.nombreCompleto || 'Estudiante')}`,
+      message,
+      'BAJA',
+      async () => {
         try {
-          const reason = document.getElementById('bajaReason').value;
-          const detail = document.getElementById('bajaDetail').value.trim();
+          const reason = document.getElementById('bajaReason')?.value || '';
+          const detail = document.getElementById('bajaDetail')?.value?.trim() || '';
 
           if (!reason) {
             Toast.show('Seleccione un motivo de baja', 'warning');
             return;
           }
 
-          await db.collection('students').doc(sid).update({
+          await db.collection('students').doc(studentId).update({
             estatus: 'BAJA',
             bajaReason: reason,
             bajaDetails: detail,
@@ -623,7 +608,7 @@ const StudentsModule = (() => {
             bajaBy: auth.currentUser.uid
           });
 
-          DB.audit('editar', 'alumno', sid, {
+          DB.audit('editar', 'alumno', studentId, {
             description: `Alumno dado de baja: ${student.nombreCompleto}`,
             before: { estatus: student.estatus },
             after: { estatus: 'BAJA', bajaReason: reason },
@@ -643,7 +628,46 @@ const StudentsModule = (() => {
           Toast.show('Error al procesar la baja: ' + error.message, 'error');
         }
       }
-    });
+    );
+  }
+
+  /**
+   * Reactivar un alumno dado de baja
+   */
+  function reactivarStudent(studentId) {
+    const student = allStudents.find(s => s.id === studentId);
+    if (!student) return;
+
+    Modal.confirm(
+      `Reactivar: ${Utils.sanitize(student.nombreCompleto)}`,
+      `¿Reactivar a <strong>${Utils.sanitize(student.nombreCompleto)}</strong>?<br>Su estatus cambiará de <span class="badge badge-danger">BAJA</span> a <span class="badge badge-success">ACTIVO</span>.`,
+      async () => {
+        try {
+          await db.collection('students').doc(studentId).update({
+            estatus: 'ACTIVO',
+            reactivadoPor: auth.currentUser.uid,
+            reactivadoFecha: new Date()
+          });
+
+          DB.audit('editar', 'alumno', studentId, {
+            description: `Alumno reactivado: ${student.nombreCompleto}`,
+            before: { estatus: 'BAJA', bajaReason: student.bajaReason || '' },
+            after: { estatus: 'ACTIVO' }
+          });
+
+          Store.invalidate('students');
+          Toast.show('Alumno reactivado exitosamente', 'success');
+
+          allStudents = await Store.getStudents(true);
+          allStudents.sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+          applyFilters();
+          render();
+        } catch (error) {
+          console.error('Error reactivando alumno:', error);
+          Toast.show('Error al reactivar: ' + error.message, 'error');
+        }
+      }
+    );
   }
 
   /**

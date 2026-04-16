@@ -6,19 +6,48 @@
 
 const Store = (() => {
   const _cache = {};
+  const _timestamps = {};
   const _promises = {};
+
+  // TTL en milisegundos por tipo de dato
+  const _ttl = {
+    students: 10 * 60 * 1000,    // 10 min — datos relativamente estáticos
+    teachers: 10 * 60 * 1000,
+    groups: 10 * 60 * 1000,
+    subjects: 10 * 60 * 1000,
+    assignments: 10 * 60 * 1000,
+    users: 10 * 60 * 1000,
+    partials: 5 * 60 * 1000,     // 5 min — cambian al cerrar parcial
+    atRisk: 5 * 60 * 1000,
+    grades_group_: 3 * 60 * 1000, // 3 min — cambian con captura de notas
+    allGrades: 5 * 60 * 1000,     // 5 min — para monitor de captura
+    teacherDocId: 30 * 60 * 1000, // 30 min — casi nunca cambia
+    orientadorGroups: 10 * 60 * 1000
+  };
+
+  function getTTL(key) {
+    if (_ttl[key]) return _ttl[key];
+    if (key.startsWith('grades_group_')) return _ttl['grades_group_'];
+    return 5 * 60 * 1000; // default 5 min
+  }
+
+  function isExpired(key) {
+    if (!_timestamps[key]) return true;
+    return (Date.now() - _timestamps[key]) > getTTL(key);
+  }
 
   /**
    * Obtiene datos de cache o los fetchea si no existen.
    * Deduplica requests en vuelo (si dos modulos piden students
    * al mismo tiempo, solo se hace un query).
+   * Respeta TTL: datos vencidos se re-fetchean automaticamente.
    * @param {string} key - Clave de cache
    * @param {Function} fetchFn - Funcion async que retorna los datos
    * @param {boolean} [force=false] - Forzar re-fetch ignorando cache
    * @returns {Promise<any>}
    */
   async function get(key, fetchFn, force = false) {
-    if (!force && _cache[key] !== undefined) {
+    if (!force && _cache[key] !== undefined && !isExpired(key)) {
       return _cache[key];
     }
 
@@ -29,6 +58,7 @@ const Store = (() => {
 
     _promises[key] = fetchFn().then(data => {
       _cache[key] = data;
+      _timestamps[key] = Date.now();
       delete _promises[key];
       return data;
     }).catch(err => {
@@ -87,13 +117,21 @@ const Store = (() => {
     },
 
     /**
-     * @deprecated Use getGradesByGroup(groupId) or getGradesByGroups(groupIds) instead.
-     * This reads ALL grades (10,000+ docs) and exhausts Firestore Spark quota quickly.
-     * Kept only as fallback — will log a warning.
+     * @deprecated Use getGradesByGroup(groupId) or getGradesByGroups(groupIds) instead for editing.
+     * For the capture monitor, use getAllGrades() which reads all grades with a longer cache.
      */
     getGrades(force) {
-      console.warn('⚠️ Store.getGrades() is deprecated — use Store.getGradesByGroup(groupId) instead. This reads ALL grades and wastes quota.');
-      return get('grades', async () => {
+      console.warn('⚠️ Store.getGrades() is deprecated — use Store.getGradesByGroup(groupId) instead.');
+      return this.getAllGrades(force);
+    },
+
+    /**
+     * Obtiene TODAS las calificaciones en una sola query.
+     * Solo para vistas de solo-lectura como el monitor de captura.
+     * Cache de 5 min para evitar exceso de reads.
+     */
+    getAllGrades(force) {
+      return get('allGrades', async () => {
         const snap = await db.collection('grades').get();
         return snapshotToArray(snap);
       }, force);
@@ -215,11 +253,36 @@ const Store = (() => {
 
     /**
      * Invalida el cache de una coleccion especifica.
+     * Si key es 'grades', tambien limpia todos los caches per-grupo.
      * Llamar despues de cualquier mutacion (create/update/delete).
      * @param {string} key - Nombre de la coleccion (ej: 'students', 'grades')
      */
     invalidate(key) {
       delete _cache[key];
+      delete _timestamps[key];
+      delete _promises[key];
+
+      // Si se invalida 'grades', limpiar TODOS los caches por grupo
+      if (key === 'grades') {
+        Object.keys(_cache).forEach(k => {
+          if (k.startsWith('grades_group_')) {
+            delete _cache[k];
+            delete _timestamps[k];
+            delete _promises[k];
+          }
+        });
+      }
+    },
+
+    /**
+     * Invalida el cache de calificaciones solo para un grupo especifico.
+     * Mas eficiente que invalidate('grades') cuando solo cambio un grupo.
+     * @param {string} groupId
+     */
+    invalidateGradesForGroup(groupId) {
+      const key = 'grades_group_' + groupId;
+      delete _cache[key];
+      delete _timestamps[key];
       delete _promises[key];
     },
 
@@ -228,6 +291,7 @@ const Store = (() => {
      */
     invalidateAll() {
       Object.keys(_cache).forEach(key => delete _cache[key]);
+      Object.keys(_timestamps).forEach(key => delete _timestamps[key]);
       Object.keys(_promises).forEach(key => delete _promises[key]);
     },
 
@@ -237,7 +301,7 @@ const Store = (() => {
      * @returns {boolean}
      */
     isCached(key) {
-      return _cache[key] !== undefined;
+      return _cache[key] !== undefined && !isExpired(key);
     }
   };
 })();

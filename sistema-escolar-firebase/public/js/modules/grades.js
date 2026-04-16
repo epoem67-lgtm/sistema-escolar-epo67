@@ -66,6 +66,9 @@ const GradesModule = (function () {
   // TEACHER VIEW — cards de asignaciones
   // ═══════════════════════════════════════════════════════════════
 
+  // ─── Cascade filter state for teacher/admin assignment selection ───
+  let _capAssignments = [];
+
   async function renderTeacher() {
     const container = _container();
     // Cleanup from previous editor session
@@ -87,63 +90,78 @@ const GradesModule = (function () {
       const allAssignments = await Store.getAssignments();
 
       if (isAdmin) {
-        // Admin: show all assignments with turno/grado filters
-        assignments = allAssignments;
+        _capAssignments = allAssignments;
       } else {
-        // Maestro: show only their assignments
         const teacherDocId = await Store.getTeacherDocId();
         if (!teacherDocId) {
           container.innerHTML = UI.moduleContainer(UI.emptyState('person_off', 'Tu cuenta no está vinculada a un registro de docente. Contacta al administrador.'));
           return;
         }
-        assignments = allAssignments.filter(a => a.teacherId === teacherDocId);
+        _capAssignments = allAssignments.filter(a => a.teacherId === teacherDocId);
       }
 
-      // Build filter bar for admin
-      let filterHtml = '';
-      if (isAdmin) {
-        const turnos = [...new Set(assignments.map(a => a.turno).filter(Boolean))].sort();
-        const grados = [...new Set(assignments.map(a => a.grado).filter(Boolean))].sort((a, b) => a - b);
-        filterHtml = `
-          <div class="card" style="margin-bottom:16px;">
-            <div class="filter-bar-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
-              <div class="form-group"><label>Turno</label>
-                <select id="cap-turno"><option value="">Todos</option>${turnos.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
-              </div>
-              <div class="form-group"><label>Grado</label>
-                <select id="cap-grado"><option value="">Todos</option>${grados.map(g => `<option value="${g}">${g}°</option>`).join('')}</select>
-              </div>
-            </div>
-          </div>`;
+      // If teacher has only 1 assignment, open editor directly
+      if (!isAdmin && _capAssignments.length === 1) {
+        const a = _capAssignments[0];
+        assignments = _capAssignments;
+        api.openGradeEditor(a.id, a.groupId, a.subjectId);
+        return;
+      }
+
+      if (_capAssignments.length === 0) {
+        container.innerHTML = UI.moduleContainer(UI.emptyState('assignment', 'No hay asignaciones disponibles'));
+        return;
       }
 
       const title = isAdmin ? 'Captura de Calificaciones' : 'Mis Asignaciones';
-      const subtitle = isAdmin
-        ? 'Selecciona una asignación para editar calificaciones'
-        : 'Selecciona una asignación para ingresar calificaciones';
+      const subtitle = 'Selecciona turno, grado, grupo y materia para abrir el editor';
+
+      // Extract turno options from available assignments
+      const turnos = [...new Set(_capAssignments.map(a => a.turno).filter(Boolean))].sort();
+      const turnoOptions = turnos.map(t => `<option value="${t}">${t}</option>`).join('');
 
       container.innerHTML = UI.moduleContainer(`
         ${UI.pageHeader(title, subtitle)}
-        ${filterHtml}
-        <div id="cap-cards"></div>
+        <div class="card filter-bar">
+          <div class="filter-bar-grid">
+            <div class="form-group">
+              <label for="cap-turno">Turno</label>
+              <select id="cap-turno">
+                <option value="">Selecciona turno</option>
+                ${turnoOptions}
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="cap-grado">Grado</label>
+              <select id="cap-grado" disabled>
+                <option value="">Selecciona grado</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="cap-grupo">Grupo</label>
+              <select id="cap-grupo" disabled>
+                <option value="">Selecciona grupo</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="cap-materia">Materia</label>
+              <select id="cap-materia" disabled>
+                <option value="">Selecciona materia</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div id="cap-preview"></div>
       `);
 
-      _renderAssignmentCards(assignments);
+      assignments = _capAssignments;
       _delegateClick(container);
+      _bindCascadeFilters();
 
-      // Bind filters for admin
-      if (isAdmin) {
-        const filterFn = () => {
-          const turno = document.getElementById('cap-turno')?.value || '';
-          const grado = document.getElementById('cap-grado')?.value || '';
-          let filtered = allAssignments;
-          if (turno) filtered = filtered.filter(a => a.turno === turno);
-          if (grado) filtered = filtered.filter(a => String(a.grado) === String(grado));
-          assignments = filtered;
-          _renderAssignmentCards(filtered);
-        };
-        document.getElementById('cap-turno')?.addEventListener('change', filterFn);
-        document.getElementById('cap-grado')?.addEventListener('change', filterFn);
+      // Auto-select turno if only one
+      if (turnos.length === 1) {
+        document.getElementById('cap-turno').value = turnos[0];
+        document.getElementById('cap-turno').dispatchEvent(new Event('change'));
       }
     } catch (error) {
       console.error('Error loading assignments:', error);
@@ -151,37 +169,115 @@ const GradesModule = (function () {
     }
   }
 
-  function _renderAssignmentCards(list) {
-    const cardsContainer = document.getElementById('cap-cards');
-    if (!cardsContainer) return;
+  function _bindCascadeFilters() {
+    const turnoEl = document.getElementById('cap-turno');
+    const gradoEl = document.getElementById('cap-grado');
+    const grupoEl = document.getElementById('cap-grupo');
+    const materiaEl = document.getElementById('cap-materia');
 
-    if (list.length === 0) {
-      cardsContainer.innerHTML = UI.emptyState('assignment', 'No hay asignaciones disponibles');
+    turnoEl.addEventListener('change', () => {
+      const turno = turnoEl.value;
+      // Reset downstream
+      grupoEl.innerHTML = '<option value="">Selecciona grupo</option>';
+      grupoEl.disabled = true;
+      materiaEl.innerHTML = '<option value="">Selecciona materia</option>';
+      materiaEl.disabled = true;
+      _updateCapPreview(null);
+
+      if (!turno) {
+        gradoEl.innerHTML = '<option value="">Selecciona grado</option>';
+        gradoEl.disabled = true;
+        return;
+      }
+      const filtered = _capAssignments.filter(a => a.turno === turno);
+      const grados = [...new Set(filtered.map(a => a.grado).filter(Boolean))].sort((a, b) => a - b);
+      gradoEl.innerHTML = '<option value="">Selecciona grado</option>' +
+        grados.map(g => `<option value="${g}">${g}° Grado</option>`).join('');
+      gradoEl.disabled = false;
+      // Auto-select if only one
+      if (grados.length === 1) { gradoEl.value = grados[0]; gradoEl.dispatchEvent(new Event('change')); }
+    });
+
+    gradoEl.addEventListener('change', () => {
+      const turno = turnoEl.value;
+      const grado = gradoEl.value;
+      materiaEl.innerHTML = '<option value="">Selecciona materia</option>';
+      materiaEl.disabled = true;
+      _updateCapPreview(null);
+
+      if (!grado) {
+        grupoEl.innerHTML = '<option value="">Selecciona grupo</option>';
+        grupoEl.disabled = true;
+        return;
+      }
+      const filtered = _capAssignments.filter(a => a.turno === turno && String(a.grado) === String(grado));
+      const grupos = [...new Map(filtered.map(a => [a.groupId, a.groupName || a.groupId])).entries()]
+        .sort((a, b) => a[1].localeCompare(b[1]));
+      grupoEl.innerHTML = '<option value="">Selecciona grupo</option>' +
+        grupos.map(([id, name]) => `<option value="${id}">${Utils.sanitize(name)}</option>`).join('');
+      grupoEl.disabled = false;
+      if (grupos.length === 1) { grupoEl.value = grupos[0][0]; grupoEl.dispatchEvent(new Event('change')); }
+    });
+
+    grupoEl.addEventListener('change', () => {
+      const turno = turnoEl.value;
+      const grado = gradoEl.value;
+      const groupId = grupoEl.value;
+      _updateCapPreview(null);
+
+      if (!groupId) {
+        materiaEl.innerHTML = '<option value="">Selecciona materia</option>';
+        materiaEl.disabled = true;
+        return;
+      }
+      const filtered = _capAssignments.filter(a => a.groupId === groupId);
+      filtered.sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
+      materiaEl.innerHTML = '<option value="">Selecciona materia</option>' +
+        filtered.map(a => `<option value="${a.subjectId}">${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId))}</option>`).join('');
+      materiaEl.disabled = false;
+      if (filtered.length === 1) { materiaEl.value = filtered[0].subjectId; materiaEl.dispatchEvent(new Event('change')); }
+    });
+
+    materiaEl.addEventListener('change', () => {
+      const groupId = grupoEl.value;
+      const subjectId = materiaEl.value;
+      if (!subjectId) { _updateCapPreview(null); return; }
+      const asg = _capAssignments.find(a => a.groupId === groupId && a.subjectId === subjectId);
+      _updateCapPreview(asg);
+    });
+  }
+
+  function _updateCapPreview(asg) {
+    const preview = document.getElementById('cap-preview');
+    if (!preview) return;
+
+    if (!asg) {
+      preview.innerHTML = `
+        <div class="empty-state" style="margin-top:24px;">
+          <span class="material-icons-round empty-state-icon">edit_note</span>
+          <p class="empty-state-text">Selecciona turno, grado, grupo y materia para abrir el editor de calificaciones</p>
+        </div>`;
       return;
     }
 
-    // Sort: by turno, then grado, then group name
-    list.sort((a, b) => (a.turno || '').localeCompare(b.turno || '') || (a.grado || 0) - (b.grado || 0) || (a.groupName || '').localeCompare(b.groupName || ''));
-
-    cardsContainer.innerHTML = '<div class="assignment-grid">' + list.map(asg => {
-      const turnoClass = (asg.turno || '').toUpperCase() === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino';
-      const teacherBadge = App.currentUser?.role === 'admin'
-        ? `<span class="badge" style="font-size:10px;background:rgba(0,0,0,0.06);">${Utils.sanitize(asg.teacherName || 'Sin docente')}</span>`
-        : '';
-      return `
-        <div class="assignment-card" data-action="open-editor" data-assignment-id="${asg.id}" data-group-id="${asg.groupId}" data-subject-id="${asg.subjectId}">
-          <div class="assignment-card-title">${Utils.sanitize(asg.groupName || asg.groupId)}</div>
-          <div class="assignment-card-subtitle">${Utils.sanitize(K.getUACNombre(asg.subjectName || asg.subjectId))}</div>
-          <div class="assignment-card-tags">
-            <span class="badge ${turnoClass}">${Utils.sanitize(asg.turno || '')}</span>
-            <span class="badge">Grado ${asg.grado || ''}</span>
-            ${teacherBadge}
+    const turnoClass = (asg.turno || '').toUpperCase() === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino';
+    preview.innerHTML = `
+      <div class="card" style="margin-top:16px;border-left:4px solid var(--color-primary);">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+          <div>
+            <div class="font-semibold" style="font-size:var(--font-size-lg);">${Utils.sanitize(K.getUACNombre(asg.subjectName || asg.subjectId))}</div>
+            <div class="text-muted" style="margin-top:4px;">
+              <span class="badge ${turnoClass}" style="margin-right:4px;">${Utils.sanitize(asg.turno || '')}</span>
+              <span class="badge">Grupo ${Utils.sanitize(asg.groupName || asg.groupId)}</span>
+              <span class="badge" style="background:rgba(0,0,0,0.06);margin-left:4px;">${Utils.sanitize(asg.teacherName || '')}</span>
+            </div>
           </div>
-        </div>`;
-    }).join('') + '</div>';
-
-    // Re-attach click delegation on new cards
-    _delegateClick(cardsContainer);
+          <button class="btn btn-primary" data-action="open-editor" data-assignment-id="${asg.id}" data-group-id="${asg.groupId}" data-subject-id="${asg.subjectId}">
+            <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">edit</span>
+            Abrir editor
+          </button>
+        </div>
+      </div>`;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -204,7 +300,7 @@ const GradesModule = (function () {
       students = allStudents
         .filter(s => s.groupId === groupId)
         .map(s => ({ docId: s.id, ...s }))
-        .sort((a, b) => (a.np || 0) - (b.np || 0) || (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+        .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
 
       // Detect turno from group
       const groupDoc = allGroups.find(g => g.id === groupId);
@@ -437,14 +533,17 @@ const GradesModule = (function () {
       }).join('');
 
       const suma = _calcRowSuma(gradeData, rubros);
-      const sumaDisplay = suma > 0 ? suma.toFixed(1) : '';
-      const cal = suma > 0 ? K.calcCal(suma) : '';
+      const storedCal = gradeData.cal !== undefined ? gradeData.cal : (gradeData.value !== undefined ? gradeData.value : null);
+      // Has saved data? (any rubro, cal, or value exists in Firestore)
+      const hasStoredData = storedCal !== null || rubros.some(r => gradeData[r.key] !== undefined);
+      const sumaDisplay = hasStoredData ? suma.toFixed(1) : '';
+      const cal = hasStoredData ? (K.calcCal(suma) || storedCal || 5) : '';
       const calClass = cal !== '' && cal < 6 ? 'cal-fail' : (cal !== '' ? 'cal-pass' : '');
-      const rowClass = cal !== '' && cal < 6 ? ' row-reprobado' : '';
+      const rowClass = cal !== '' && Number(cal) < 6 ? ' row-reprobado' : '';
       const faltas = gradeData.faltas !== undefined ? gradeData.faltas : '';
 
       rowsHtml += `<tr data-student-id="${s.docId}" class="${rowClass}">
-        <td class="cell-num">${s.np || (i + 1)}</td>
+        <td class="cell-num">${i + 1}</td>
         <td class="cell-name" title="${Utils.sanitize(s.nombreCompleto || '')}">${Utils.sanitize(s.nombreCompleto || '')}</td>
         ${inputCells}
         <td class="cell-suma col-suma">${sumaDisplay}</td>
@@ -735,8 +834,51 @@ const GradesModule = (function () {
     _updateUndoBtn();
     _bindInputModes(container);
 
+    // ═══ HIGHLIGHT EMPTY CELLS (when coming from monitor) ═══
+    if (sessionStorage.getItem('epo67_highlightEmpty') === '1') {
+      sessionStorage.removeItem('epo67_highlightEmpty');
+      _highlightEmptyCells();
+    }
+
     // ═══ CHECK FOR DRAFT RECOVERY ═══
     setTimeout(_checkDraftRecovery, 500);
+  }
+
+  // ─── HIGHLIGHT EMPTY ROWS/CELLS ───
+  function _highlightEmptyCells() {
+    document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]').forEach(row => {
+      const calCell = row.querySelector('.col-cal');
+      const hasCal = calCell && calCell.textContent.trim() !== '';
+      if (hasCal) return; // Row already has a grade, skip
+
+      // Mark entire row with a distinct background
+      row.style.background = 'rgba(128,90,213,0.08)';
+      row.style.borderLeft = '3px solid #805ad5';
+
+      row.querySelectorAll('.ge-input.grade-rubro').forEach(input => {
+        if (input.value.trim() === '') {
+          input.style.background = 'rgba(128,90,213,0.15)';
+          input.style.borderColor = '#805ad5';
+        }
+      });
+
+      // Watch all rubros in this row — when ALL have values, clear row highlight
+      const checkRowComplete = () => {
+        const allFilled = [...row.querySelectorAll('.ge-input.grade-rubro')].every(inp => inp.value.trim() !== '');
+        if (allFilled) {
+          row.style.background = '';
+          row.style.borderLeft = '';
+          row.querySelectorAll('.ge-input.grade-rubro').forEach(inp => {
+            inp.style.background = '';
+            inp.style.borderColor = '';
+            inp.removeEventListener('input', checkRowComplete);
+          });
+        }
+      };
+      row.querySelectorAll('.ge-input.grade-rubro').forEach(input => {
+        input.addEventListener('input', checkRowComplete);
+      });
+    });
   }
 
   // ─── PASTE FROM EXCEL ───
@@ -970,27 +1112,28 @@ const GradesModule = (function () {
   /** Auto-recalculate SUMA and CAL for a row when any rubro changes */
   function _recalcRow(input) {
     const row = input.closest('tr');
+    const sid = row.dataset.studentId;
     const rubros = K.getRubros(currentTurno);
     const data = {};
 
     rubros.forEach(r => {
       const el = row.querySelector(`input[data-field="${r.key}"]`);
-      const v = el ? parseFloat(el.value) : 0;
-      data[r.key] = isNaN(v) ? 0 : v;
+      const raw = el ? el.value.trim() : '';
+      data[r.key] = raw === '' ? 0 : (parseFloat(raw) || 0);
     });
 
+    // Always show suma/cal — vacío = 0, si todo es 0 la cal es 5
     const suma = K.calcSuma(data);
-    const cal = suma > 0 ? K.calcCal(suma) : '';
+    const cal = K.calcCal(suma);
 
     const sumaCell = row.querySelector('.col-suma');
     const calCell = row.querySelector('.col-cal');
-    if (sumaCell) sumaCell.textContent = suma > 0 ? suma.toFixed(1) : '';
+    if (sumaCell) sumaCell.textContent = suma.toFixed(1);
     if (calCell) {
       calCell.textContent = cal;
       calCell.className = 'cell-cal ' + (cal !== '' && cal < 6 ? 'cal-fail' : (cal !== '' ? 'cal-pass' : '')) + ' col-cal';
     }
 
-    // Highlight row if failing
     row.classList.toggle('row-reprobado', cal !== '' && cal < 6);
 
     _updateStats();
@@ -1045,22 +1188,25 @@ const GradesModule = (function () {
       return;
     }
 
-    // ═══ CHECK PARTIAL LOCK + OVERRIDE ═══
+    // ═══ CHECK PARTIAL LOCK + OVERRIDE (use cached partials) ═══
     try {
-      const partialDoc = await db.collection('partials').doc(currentPartial).get();
-      if (partialDoc.exists && partialDoc.data().locked) {
-        const teacherDocId = await Store.getTeacherDocId();
+      const cachedPartials = await Store.getPartials();
+      const partialDoc = cachedPartials.find(p => p.id === currentPartial);
+      if (partialDoc && partialDoc.locked) {
         let hasOverride = App.currentUser?.role === 'admin';
-        if (!hasOverride && teacherDocId) {
-          const snap = await db.collection('partialOverrides')
-            .where('partialId', '==', currentPartial)
-            .where('teacherId', '==', teacherDocId).limit(1).get();
-          if (!snap.empty) {
-            const ov = snap.docs[0].data();
-            if (!ov.expiresAt) hasOverride = true;
-            else {
-              const exp = ov.expiresAt.toDate ? ov.expiresAt.toDate() : new Date(ov.expiresAt);
-              hasOverride = exp > new Date();
+        if (!hasOverride) {
+          const teacherDocId = await Store.getTeacherDocId();
+          if (teacherDocId) {
+            const snap = await db.collection('partialOverrides')
+              .where('partialId', '==', currentPartial)
+              .where('teacherId', '==', teacherDocId).limit(1).get();
+            if (!snap.empty) {
+              const ov = snap.docs[0].data();
+              if (!ov.expiresAt) hasOverride = true;
+              else {
+                const exp = ov.expiresAt.toDate ? ov.expiresAt.toDate() : new Date(ov.expiresAt);
+                hasOverride = exp > new Date();
+              }
             }
           }
         }
@@ -1072,7 +1218,6 @@ const GradesModule = (function () {
       }
     } catch (e) {
       console.warn('Error verificando parcial:', e);
-      Toast.show('Error al verificar parcial. Intentando guardar...', 'warning');
     }
 
     // ═══ VALIDATE ALL INPUTS BEFORE SAVE ═══
@@ -1117,12 +1262,18 @@ const GradesModule = (function () {
       saveBtn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:18px;vertical-align:middle;margin-right:4px;">autorenew</span>Guardando...';
     }
 
-    // ═══ BUILD BATCH ═══
+    // ═══ BUILD BATCH (only changed rows) ═══
     const batch = db.batch();
     let count = 0;
 
     document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
       const studentId = row.dataset.studentId;
+      const key = `${studentId}_${selectedSubject}_${currentPartial}`;
+      const stored = grades[key] || {};
+
+      let hasData = false;
+      let hasChanges = false;
+
       const data = {
         studentId,
         subjectId: selectedSubject,
@@ -1132,34 +1283,47 @@ const GradesModule = (function () {
         updatedBy: auth.currentUser.uid
       };
 
-      let hasData = false;
-
       rubros.forEach(r => {
         const input = row.querySelector(`input[data-field="${r.key}"]`);
-        if (input && input.value.trim() !== '') {
-          const v = parseFloat(input.value);
-          data[r.key] = Math.max(0, Math.min(v, r.max));
-          hasData = true;
+        if (input) {
+          // Vacío = 0 (no capturado cuenta como cero)
+          const raw = input.value.trim();
+          const v = raw === '' ? 0 : Math.max(0, Math.min(parseFloat(raw) || 0, r.max));
+          data[r.key] = v;
+          // Mark as having data if the user typed anything (including 0)
+          if (raw !== '' || stored[r.key] !== undefined) hasData = true;
+          if (stored[r.key] === undefined || Math.abs((stored[r.key] || 0) - v) > 0.001) hasChanges = true;
         }
       });
 
       const faltasInput = row.querySelector('input[data-field="faltas"]');
       if (faltasInput && faltasInput.value.trim() !== '') {
-        data.faltas = parseInt(faltasInput.value);
+        const f = parseInt(faltasInput.value);
+        data.faltas = f;
+        if ((stored.faltas || 0) !== f) hasChanges = true;
       }
 
-      if (hasData) {
+      if (hasData && hasChanges) {
         const sumaData = {};
         rubros.forEach(r => { sumaData[r.key] = data[r.key]; });
         data.suma = K.calcSuma(sumaData);
         data.cal = K.calcCal(data.suma);
         data.value = data.cal;
 
-        const ref = db.collection('grades').doc(`${studentId}_${selectedSubject}_${currentPartial}`);
+        const ref = db.collection('grades').doc(key);
         batch.set(ref, data, { merge: true });
         count++;
       }
     });
+
+    // Nothing to save?
+    if (count === 0) {
+      _isSaving = false;
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
+      _markClean();
+      Toast.show('No hay cambios que guardar', 'info');
+      return;
+    }
 
     // ═══ COMMIT WITH RETRY ═══
     const maxRetries = 2;
@@ -1170,6 +1334,18 @@ const GradesModule = (function () {
       try {
         await batch.commit();
         success = true;
+        // Update local grades cache so next save detects changes correctly
+        document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+          const sid = row.dataset.studentId;
+          const k = `${sid}_${selectedSubject}_${currentPartial}`;
+          if (!grades[k]) grades[k] = {};
+          rubros.forEach(r => {
+            const input = row.querySelector(`input[data-field="${r.key}"]`);
+            if (input && input.value.trim() !== '') grades[k][r.key] = parseFloat(input.value);
+          });
+          const fi = row.querySelector('input[data-field="faltas"]');
+          if (fi && fi.value.trim() !== '') grades[k].faltas = parseInt(fi.value);
+        });
       } catch (error) {
         attempt++;
         console.error(`Error saving grades (attempt ${attempt}):`, error);
@@ -1187,44 +1363,34 @@ const GradesModule = (function () {
       }
     }
 
-    // ═══ SAVE TEACHER HOURS ═══
-    try {
-      const horasData = _getHorasData();
-      if (Object.keys(horasData).length > 0) {
-        const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
-        await db.collection('teacherHours').doc(horasDocId).set({
-          ...horasData,
-          groupId: selectedGroup,
-          subjectId: selectedSubject,
-          partial: currentPartial,
-          updatedBy: auth.currentUser.uid,
-          updatedAt: new Date()
-        }, { merge: true });
-      }
-    } catch (e) {
-      console.warn('Error saving horas (calificaciones sí se guardaron):', e);
-    }
-
-    // ═══ SUCCESS ═══
-    Store.invalidate('grades');
+    // ═══ SUCCESS — unlock UI immediately, fire-and-forget horas + audit ═══
+    Store.invalidateGradesForGroup(selectedGroup);
+    Store.invalidate('allGrades');
     _markClean();
     _isSaving = false;
     if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
 
-    // Success animation on button
     if (saveBtn) {
       saveBtn.classList.add('btn-save-success');
       setTimeout(() => saveBtn.classList.remove('btn-save-success'), 2000);
     }
 
-    // Bitácora
+    Toast.show(`${count} calificaciones guardadas`, 'success');
+
+    // Save horas + audit in background (don't block UI)
+    const horasData = _getHorasData();
+    if (Object.keys(horasData).length > 0) {
+      const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
+      db.collection('teacherHours').doc(horasDocId).set({
+        ...horasData, groupId: selectedGroup, subjectId: selectedSubject,
+        partial: currentPartial, updatedBy: auth.currentUser.uid, updatedAt: new Date()
+      }, { merge: true }).catch(e => console.warn('Error saving horas:', e));
+    }
     const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
     DB.audit('editar', 'calificacion', `${selectedGroup}_${selectedSubject}_${currentPartial}`, {
       description: `${count} calificaciones guardadas: ${asg?.subjectName || selectedSubject} · ${asg?.groupName || selectedGroup} · ${currentPartial}`,
       extra: { groupId: selectedGroup, subjectId: selectedSubject, partial: currentPartial, count }
     });
-
-    Toast.show(`✓ ${count} calificaciones guardadas correctamente`, 'success');
   }
 
   // ═══════════════════════════════════════════════════════════════

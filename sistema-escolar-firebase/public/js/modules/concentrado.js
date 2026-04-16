@@ -461,7 +461,7 @@ const ConcentradoModule = (() => {
       const isOdd = idx % 2 === 1;
       const isFail = row.gradeCount > 0 && row.average < 6;
       let rowBg = '';
-      if (isFail) { rowBg = ' background:#bbb;-webkit-print-color-adjust:exact;print-color-adjust:exact;'; }
+      if (isFail) { rowBg = ' background:#D9D9D9;-webkit-print-color-adjust:exact;print-color-adjust:exact;'; }
       else if (isOdd) { rowBg = ' background:#eee;-webkit-print-color-adjust:exact;print-color-adjust:exact;'; }
 
       rows += '<tr style="' + rowBg + '">';

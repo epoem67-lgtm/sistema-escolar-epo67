@@ -31,9 +31,8 @@ const CapturaProgressModule = (function () {
       });
       const currentPartialId = openPartial ? openPartial.id : K.PARCIALES[0].id;
 
-      // Load grades for all groups for current partial
-      const groupIds = groups.map(g => g.id);
-      const allGrades = await Store.getGradesByGroups(groupIds);
+      // Load all grades in a single query (cached 5 min)
+      const allGrades = await Store.getAllGrades();
       const partialGrades = allGrades.filter(g => g.partial === currentPartialId);
 
       // Build lookup maps
@@ -102,12 +101,16 @@ const CapturaProgressModule = (function () {
             name: p.teacherName,
             email: p.teacherEmail,
             turno: p.turno,
-            total: 0, completos: 0, pendientes: 0
+            total: 0, completos: 0, pendientes: 0,
+            pendingAssignments: []
           };
         }
         teacherSummary[p.teacherId].total++;
         if (p.status === 'completo') teacherSummary[p.teacherId].completos++;
-        else teacherSummary[p.teacherId].pendientes++;
+        else {
+          teacherSummary[p.teacherId].pendientes++;
+          teacherSummary[p.teacherId].pendingAssignments.push(p);
+        }
       });
 
       const teacherList = Object.values(teacherSummary).sort((a, b) => b.pendientes - a.pendientes);
@@ -219,9 +222,12 @@ const CapturaProgressModule = (function () {
                     const tPct = t.total > 0 ? Math.round((t.completos / t.total) * 100) : 0;
                     const statusClass = tPct >= 100 ? 'cp-status-completo' : tPct > 0 ? 'cp-status-parcial' : 'cp-status-pendiente';
                     const statusLabel = tPct >= 100 ? 'Listo' : tPct > 0 ? `${tPct}%` : 'Pendiente';
+                    const pendingLinks = t.pendingAssignments.map(p =>
+                      `<span class="link-button" data-action="open-capture" data-assignment-id="${p.assignmentId}" data-group-id="${p.groupId}" data-subject-id="${p.subjectId}" style="font-size:11px;margin:2px 4px 2px 0;display:inline-block;cursor:pointer;color:var(--color-primary);text-decoration:underline;">${Utils.sanitize(p.groupName)} - ${Utils.sanitize(p.subjectName)}</span>`
+                    ).join('');
                     return `<tr>
                       <td>${i + 1}</td>
-                      <td class="font-semibold">${Utils.sanitize(t.name)}</td>
+                      <td class="font-semibold">${Utils.sanitize(t.name)}${pendingLinks ? '<div style="margin-top:4px;">' + pendingLinks + '</div>' : ''}</td>
                       <td>${Utils.sanitize(t.turno)}</td>
                       <td style="text-align:center;">${t.total}</td>
                       <td style="text-align:center;color:#38a169;font-weight:600;">${t.completos}</td>
@@ -260,15 +266,37 @@ const CapturaProgressModule = (function () {
         });
       });
 
-      // Filters
+      // Filters — default to showing only incomplete
+      const statusEl = document.getElementById('cp-status');
+      if (statusEl && pendientes + parciales > 0) {
+        // Don't pre-filter, but hint user
+      }
       document.getElementById('cp-turno')?.addEventListener('change', () => _filterTable(progress));
-      document.getElementById('cp-status')?.addEventListener('change', () => _filterTable(progress));
+      statusEl?.addEventListener('change', () => _filterTable(progress));
 
       // Print pending
       document.getElementById('cp-print-pending')?.addEventListener('click', () => _printPending(progress));
 
       // Print teacher form
       document.getElementById('cp-print-teacher-form')?.addEventListener('click', () => _printTeacherForm(teachers));
+
+      // Click on row to open grade editor for that assignment
+      container.addEventListener('click', (e) => {
+        const row = e.target.closest('[data-action="open-capture"]');
+        if (!row) return;
+        const groupId = row.dataset.groupId;
+        const subjectId = row.dataset.subjectId;
+        const assignmentId = row.dataset.assignmentId;
+        // Navigate to grades module and open editor with highlight-empty flag
+        sessionStorage.setItem('epo67_highlightEmpty', '1');
+        Router.navigate('my-grades');
+        // Wait for module render then open editor
+        setTimeout(() => {
+          if (typeof GradesModule !== 'undefined' && GradesModule.openGradeEditor) {
+            GradesModule.openGradeEditor(assignmentId, groupId, subjectId);
+          }
+        }, 300);
+      });
 
     } catch (error) {
       console.error('Error loading capture progress:', error);
@@ -289,10 +317,11 @@ const CapturaProgressModule = (function () {
       const barColor = p.pct >= 100 ? '#38a169' : p.pct > 0 ? '#d69e2e' : '#e2e8f0';
       const statusClass = p.status === 'completo' ? 'cp-status-completo' : p.status === 'parcial' ? 'cp-status-parcial' : 'cp-status-pendiente';
       const statusLabel = p.status === 'completo' ? 'Listo' : p.status === 'parcial' ? `${p.pct}%` : 'Pendiente';
+      const clickable = p.status !== 'completo';
 
-      return `<tr>
+      return `<tr ${clickable ? `data-action="open-capture" data-assignment-id="${p.assignmentId}" data-group-id="${p.groupId}" data-subject-id="${p.subjectId}" style="cursor:pointer;" title="Clic para abrir editor"` : ''}>
         <td>${i + 1}</td>
-        <td class="font-semibold">${Utils.sanitize(p.teacherName)}</td>
+        <td class="font-semibold">${Utils.sanitize(p.teacherName)}${clickable ? ' <span class="material-icons-round" style="font-size:14px;vertical-align:middle;color:var(--color-primary);opacity:0.6;">open_in_new</span>' : ''}</td>
         <td>${Utils.sanitize(p.groupName)}</td>
         <td style="font-size:12px;">${Utils.sanitize(p.subjectName)}</td>
         <td style="text-align:center;">${p.totalStudents}</td>

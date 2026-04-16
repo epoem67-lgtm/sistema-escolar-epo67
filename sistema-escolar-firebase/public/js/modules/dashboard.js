@@ -219,15 +219,23 @@ const DashboardModule = (() => {
   // ─── SECTION 3: ESTADO DE GRUPOS ──────────────────────────
 
   function renderGroupTable(activeStudents, grades, groups) {
-    // Build student-to-grupo map
+    // Build group name lookup: groupId -> nombre
+    const groupNameById = {};
+    const groupInfoById = {};
+    groups.forEach(g => {
+      groupNameById[g.id] = g.nombre || g.grupo || g.id;
+      groupInfoById[g.id] = { turno: g.turno || '', grado: g.grado || '', nombre: g.nombre || g.grupo || g.id };
+    });
+
+    // Build student-to-grupo map using groupId → nombre (not student.grupo which can be stale)
     const studentsByGrupo = {};
     activeStudents.forEach(s => {
-      const key = s.grupo || 'Sin grupo';
+      const key = groupNameById[s.groupId] || s.grupo || 'Sin grupo';
       if (!studentsByGrupo[key]) studentsByGrupo[key] = [];
       studentsByGrupo[key].push(s);
     });
 
-    // Build grades-by-grupo using student grupo field
+    // Build grades-by-grupo using student groupId field
     const gradesByGrupo = {};
     const studentMap = {};
     activeStudents.forEach(s => { studentMap[s.id] = s; });
@@ -235,12 +243,12 @@ const DashboardModule = (() => {
     grades.forEach(g => {
       const student = studentMap[g.studentId];
       if (!student) return;
-      const key = student.grupo || 'Sin grupo';
+      const key = groupNameById[student.groupId] || student.grupo || 'Sin grupo';
       if (!gradesByGrupo[key]) gradesByGrupo[key] = [];
       gradesByGrupo[key].push(g);
     });
 
-    // Build group info from groups collection, fallback to student data
+    // Build group info from groups collection
     const groupInfoMap = {};
     groups.forEach(g => {
       const name = g.nombre || g.grupo;
@@ -249,14 +257,12 @@ const DashboardModule = (() => {
       }
     });
 
-    // Collect all unique group names
-    const allGrupos = [...new Set([
-      ...Object.keys(studentsByGrupo),
-      ...groups.map(g => g.nombre || g.grupo).filter(Boolean)
-    ])].filter(g => g !== 'Sin grupo').sort((a, b) => {
+    // Collect all unique group names (from groups collection, canonical)
+    const allGrupos = [...new Set(
+      groups.map(g => g.nombre || g.grupo).filter(Boolean)
+    )].sort((a, b) => {
       const infoA = groupInfoMap[a] || {};
       const infoB = groupInfoMap[b] || {};
-      // Sort by turno first, then by name
       const turnoComp = (infoA.turno || '').localeCompare(infoB.turno || '');
       if (turnoComp !== 0) return turnoComp;
       return a.localeCompare(b);
