@@ -404,91 +404,112 @@ const HonorRollModule = (() => {
 
       Toast.show('Generando documento con ' + sortedGroups.length + ' cuadros de honor + Top 3...', 'info');
 
-      // Build single HTML document with all groups + top 5
+      // Build single HTML document with all groups + top 3
       let allPagesHtml = '';
+      const MAX_PER_PAGE = 15;
+      const chunk = (arr, size) => {
+        const out = [];
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+        return out;
+      };
 
-      // One page per group
-      sortedGroups.forEach((group, idx) => {
+      // One or more pages per group (paginar si > 15 alumnos por empates)
+      sortedGroups.forEach((group) => {
         const sorted = group.students.sort((a, b) => b.promedio - a.promedio);
         // Ranking denso a 1 decimal (la tabla muestra .toFixed(1))
         const top = assignDenseRanks(sorted, 1).filter(s => s.rank <= topCount);
+        const pages = chunk(top, MAX_PER_PAGE);
         const medalImgs = [MEDAL1, MEDAL2, MEDAL3];
-        const rows = top.map((s) => {
-          const medal = s.rank <= 3 ? `<span class="medal">${medalImgs[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
-          const avgClass = s.promedio >= 9 ? 'avg-high' : s.promedio >= 8 ? 'avg-good' : 'avg-ok';
-          return `<tr${s.rank <= 3 ? ' class="top3"' : ''}>
-            <td class="rank">${medal}</td>
-            <td class="name">${Utils.sanitize(s.nombreCompleto)}</td>
-            <td class="mat">${s.numMaterias}</td>
-            <td><span class="avg ${avgClass}">${s.promedio.toFixed(1)}</span></td>
+
+        pages.forEach((pageStudents, pageIdx) => {
+          const rows = pageStudents.map((s) => {
+            const medal = s.rank <= 3 ? `<span class="medal">${medalImgs[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
+            const avgClass = s.promedio >= 9 ? 'avg-high' : s.promedio >= 8 ? 'avg-good' : 'avg-ok';
+            return `<tr${s.rank <= 3 ? ' class="top3"' : ''}>
+              <td class="rank">${medal}</td>
+              <td class="name">${Utils.sanitize(s.nombreCompleto)}</td>
+              <td class="mat">${s.numMaterias}</td>
+              <td><span class="avg ${avgClass}">${s.promedio.toFixed(1)}</span></td>
+            </tr>`;
+          }).join('');
+
+          const pageLabel = pages.length > 1 ? ` &mdash; P&aacute;gina ${pageIdx + 1} de ${pages.length}` : '';
+
+          allPagesHtml += `
+            <section class="page">
+              <div class="hdr">
+                <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
+                <h2>CUADRO DE HONOR</h2>
+                <div class="info">${Utils.sanitize(partialLabel).toUpperCase()} &mdash; TURNO ${Utils.sanitize(turno)}</div>
+                <div class="info subtle">Ciclo Escolar 2025-2026</div>
+              </div>
+              <div class="group-card">
+                <div class="group-header">
+                  <span>${TROFEO} GRUPO ${Utils.sanitize(group.grupo)}${pageLabel}</span>
+                  <span class="badge-g">${group.grado}&ordm; GRADO</span>
+                </div>
+                <table>
+                  <thead>
+                    <tr><th style="width:50px;">#</th><th>Alumno</th><th style="width:60px;text-align:center;">Mat.</th><th style="width:90px;text-align:center;">Promedio</th></tr>
+                  </thead>
+                  <tbody>${rows}</tbody>
+                </table>
+              </div>
+            </section>`;
+        });
+      });
+
+      // Top 3 Institucional — ranking denso + paginacion de 15 por hoja
+      const top3Pages = chunk(top3, MAX_PER_PAGE);
+      const medalsT5 = [MEDAL1, MEDAL2, MEDAL3];
+
+      top3Pages.forEach((pageStudents, pageIdx) => {
+        const pageRows = pageStudents.map((s) => {
+          const medal = `<span class="t5-medal">${medalsT5[s.rank - 1]}</span>`;
+          return `<tr>
+            <td class="t5-rank">${medal}</td>
+            <td class="t5-name">${Utils.sanitize(s.nombreCompleto)}</td>
+            <td class="t5-group">${Utils.sanitize(s.grupo)}</td>
+            <td class="t5-avg"><span class="t5-avg-badge">${s.promedio.toFixed(2)}</span></td>
           </tr>`;
         }).join('');
 
+        const pageLabel = top3Pages.length > 1 ? ` &mdash; P&aacute;gina ${pageIdx + 1} de ${top3Pages.length}` : '';
+        const showFooter = pageIdx === top3Pages.length - 1;
+
         allPagesHtml += `
-          <section class="page">
-            <div class="hdr">
-              <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
-              <h2>CUADRO DE HONOR</h2>
-              <div class="info">${Utils.sanitize(partialLabel).toUpperCase()} &mdash; TURNO ${Utils.sanitize(turno)}</div>
-              <div class="info subtle">Ciclo Escolar 2025-2026</div>
+          <section class="page t5-page">
+            <div class="t5-ornament"></div>
+            <div class="t5-head">
+              <div class="t5-school">ESCUELA PREPARATORIA OFICIAL NUM. 67</div>
+              <div class="t5-trophy">${TROFEO}</div>
+              <h1 class="t5-title">TOP 3 INSTITUCIONAL${pageLabel}</h1>
+              <div class="t5-subtitle">Excelencia Acad&eacute;mica &mdash; Turno ${Utils.sanitize(turno)}</div>
+              <div class="t5-partial">${Utils.sanitize(partialLabel).toUpperCase()}</div>
+              <div class="t5-cycle">Ciclo Escolar 2025-2026</div>
             </div>
-            <div class="group-card">
-              <div class="group-header">
-                <span>${TROFEO} GRUPO ${Utils.sanitize(group.grupo)}</span>
-                <span class="badge-g">${group.grado}&ordm; GRADO</span>
+            <table class="t5-table">
+              <thead>
+                <tr>
+                  <th style="width:60px;">Lugar</th>
+                  <th>Alumno</th>
+                  <th style="width:90px;">Grupo</th>
+                  <th style="width:110px;">Promedio</th>
+                </tr>
+              </thead>
+              <tbody>${pageRows}</tbody>
+            </table>
+            ${showFooter ? `
+              <div class="t5-footer">
+                <div class="t5-signature">
+                  <div class="t5-sig-line"></div>
+                  <div>DIRECCI&Oacute;N ESCOLAR</div>
+                </div>
               </div>
-              <table>
-                <thead>
-                  <tr><th style="width:50px;">#</th><th>Alumno</th><th style="width:60px;text-align:center;">Mat.</th><th style="width:90px;text-align:center;">Promedio</th></tr>
-                </thead>
-                <tbody>${rows}</tbody>
-              </table>
-            </div>
+              <div class="t5-ornament bottom"></div>
+            ` : ''}
           </section>`;
       });
-
-      // Top 3 Institucional — ranking denso: empates comparten lugar
-      const top3Rows = top3.map((s) => {
-        const medals = [MEDAL1, MEDAL2, MEDAL3];
-        const medal = `<span class="t5-medal">${medals[s.rank - 1]}</span>`;
-        return `<tr>
-          <td class="t5-rank">${medal}</td>
-          <td class="t5-name">${Utils.sanitize(s.nombreCompleto)}</td>
-          <td class="t5-group">${Utils.sanitize(s.grupo)}</td>
-          <td class="t5-avg"><span class="t5-avg-badge">${s.promedio.toFixed(2)}</span></td>
-        </tr>`;
-      }).join('');
-
-      allPagesHtml += `
-        <section class="page t5-page">
-          <div class="t5-ornament"></div>
-          <div class="t5-head">
-            <div class="t5-school">ESCUELA PREPARATORIA OFICIAL NUM. 67</div>
-            <div class="t5-trophy">${TROFEO}</div>
-            <h1 class="t5-title">TOP 3 INSTITUCIONAL</h1>
-            <div class="t5-subtitle">Excelencia Acad&eacute;mica &mdash; Turno ${Utils.sanitize(turno)}</div>
-            <div class="t5-partial">${Utils.sanitize(partialLabel).toUpperCase()}</div>
-            <div class="t5-cycle">Ciclo Escolar 2025-2026</div>
-          </div>
-          <table class="t5-table">
-            <thead>
-              <tr>
-                <th style="width:60px;">Lugar</th>
-                <th>Alumno</th>
-                <th style="width:90px;">Grupo</th>
-                <th style="width:110px;">Promedio</th>
-              </tr>
-            </thead>
-            <tbody>${top3Rows}</tbody>
-          </table>
-          <div class="t5-footer">
-            <div class="t5-signature">
-              <div class="t5-sig-line"></div>
-              <div>DIRECCI&Oacute;N ESCOLAR</div>
-            </div>
-          </div>
-          <div class="t5-ornament bottom"></div>
-        </section>`;
 
       const fullHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
         <title>Cuadros de Honor ${turno}</title>
