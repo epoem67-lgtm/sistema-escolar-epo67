@@ -517,9 +517,7 @@ const HonorRollModule = (() => {
           * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
           body { font-family: Arial, Helvetica, sans-serif; color: #000; }
 
-          /* Centrar verticalmente el contenido en la hoja sin romper si llega al tope */
-          .page { page-break-after: always; page-break-inside: avoid;
-                  min-height: 240mm; display: flex; flex-direction: column; justify-content: center; }
+          .page { page-break-after: always; page-break-inside: avoid; padding-top: 8mm; }
           .page:last-child { page-break-after: auto; }
           .group-card, .t5-table { page-break-inside: avoid; }
           table, tr { page-break-inside: avoid; }
@@ -550,40 +548,40 @@ const HonorRollModule = (() => {
           .group-card td .avg-ok { background:#6b7280; }
 
           /* ─── TOP 3 INSTITUCIONAL PAGE ─── */
-          .t5-page { padding: 10px; }
+          .t5-page { padding: 0; }
 
-          .t5-ornament { height: 6px; background: linear-gradient(90deg, transparent, #d4782a 20%, #1b3a5c 50%, #d4782a 80%, transparent); border-radius:3px; margin: 0 0 24px 0; }
-          .t5-ornament.bottom { margin: 30px 0 0 0; }
+          .t5-ornament { height: 5px; background: linear-gradient(90deg, transparent, #d4782a 20%, #1b3a5c 50%, #d4782a 80%, transparent); border-radius:3px; margin: 0 0 14px 0; }
+          .t5-ornament.bottom { margin: 18px 0 0 0; }
 
-          .t5-head { text-align:center; margin-bottom:28px; }
-          .t5-school { font-size:13pt; font-weight:700; color:#1b3a5c; letter-spacing:1px; margin-bottom:14px; }
-          .t5-trophy { font-size:54pt; line-height:1; margin:6px 0; }
-          .t5-title { font-size:28pt; font-weight:900; color:#1b3a5c; letter-spacing:2px; margin:8px 0; }
-          .t5-subtitle { font-size:13pt; color:#d4782a; font-weight:600; font-style:italic; margin-bottom:10px; }
-          .t5-partial { font-size:12pt; color:#333; font-weight:600; letter-spacing:1px; }
-          .t5-cycle { font-size:10pt; color:#888; margin-top:4px; }
+          .t5-head { text-align:center; margin-bottom:14px; }
+          .t5-school { font-size:12pt; font-weight:700; color:#1b3a5c; letter-spacing:1px; margin-bottom:6px; }
+          .t5-trophy { font-size:38pt; line-height:1; margin:4px 0; }
+          .t5-title { font-size:22pt; font-weight:900; color:#1b3a5c; letter-spacing:2px; margin:4px 0; }
+          .t5-subtitle { font-size:11pt; color:#d4782a; font-weight:600; font-style:italic; margin-bottom:4px; }
+          .t5-partial { font-size:11pt; color:#333; font-weight:600; letter-spacing:1px; }
+          .t5-cycle { font-size:9pt; color:#888; margin-top:2px; }
 
-          .t5-table { width:100%; border-collapse:separate; border-spacing:0 5px; margin:16px 0; }
-          .t5-table th { background:#1b3a5c; color:#fff; padding:10px 14px; font-size:11pt; text-align:center; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
+          .t5-table { width:100%; border-collapse:separate; border-spacing:0 4px; margin:10px 0; }
+          .t5-table th { background:#1b3a5c; color:#fff; padding:8px 12px; font-size:10pt; text-align:center; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
           .t5-table th:nth-child(2) { text-align:left; }
           .t5-table th:first-child { border-radius:8px 0 0 8px; }
           .t5-table th:last-child { border-radius:0 8px 8px 0; }
 
-          .t5-table td { background:#fff; padding:10px 14px; font-size:12pt; border-top:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; }
+          .t5-table td { background:#fff; padding:7px 12px; font-size:11pt; border-top:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; line-height:1.2; }
           .t5-table td:first-child { border-left:1px solid #e2e8f0; border-radius:8px 0 0 8px; text-align:center; }
           .t5-table td:last-child { border-right:1px solid #e2e8f0; border-radius:0 8px 8px 0; text-align:center; }
 
-          .t5-rank { font-size:18pt; }
-          .t5-medal { font-size:22pt; line-height:1; }
-          .t5-name { font-size:12pt; font-weight:700; color:#1b3a5c; }
-          .t5-group { text-align:center; font-size:11pt; color:#64748b; font-weight:600; }
+          .t5-rank { font-size:15pt; }
+          .t5-medal { font-size:18pt; line-height:1; }
+          .t5-name { font-size:11pt; font-weight:700; color:#1b3a5c; }
+          .t5-group { text-align:center; font-size:10pt; color:#64748b; font-weight:600; }
 
-          .t5-avg-badge { display:inline-block; padding:6px 16px; background:#1b5e20; color:#fff; font-weight:800; font-size:13pt; border-radius:8px; letter-spacing:1px; }
+          .t5-avg-badge { display:inline-block; padding:4px 12px; background:#1b5e20; color:#fff; font-weight:800; font-size:11pt; border-radius:6px; letter-spacing:1px; }
 
-          .t5-footer { text-align:center; margin-top:36px; }
-          .t5-signature { display:inline-block; min-width:260px; }
-          .t5-sig-line { border-bottom:1.5px solid #1b3a5c; height:40px; margin-bottom:6px; }
-          .t5-signature div:last-child { font-weight:700; font-size:11pt; color:#1b3a5c; letter-spacing:1px; }
+          .t5-footer { text-align:center; margin-top:20px; }
+          .t5-signature { display:inline-block; min-width:240px; }
+          .t5-sig-line { border-bottom:1.5px solid #1b3a5c; height:32px; margin-bottom:4px; }
+          .t5-signature div:last-child { font-weight:700; font-size:10pt; color:#1b3a5c; letter-spacing:1px; }
         </style>
       </head><body>
         ${allPagesHtml}
