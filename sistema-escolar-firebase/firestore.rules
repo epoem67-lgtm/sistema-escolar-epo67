@@ -1,5 +1,25 @@
 rules_version = '2';
 
+// ════════════════════════════════════════════════════════════════════════
+// PROPUESTA v5.9-security — NO DESPLEGAR SIN PROBAR EN EMULATOR PRIMERO
+//
+// Cambios respecto a firestore.rules activo:
+//   C-1: bootstrap de users fuerza role='consulta'
+//   C-2: grades valida que el maestro tenga assignment del grupo+materia
+//   A-1: attendance valida assignment del maestro con el grupo
+//   A-2: gradeCorrections requiere campos mínimos (studentId, subjectId, newGrade)
+//   A-3: emailAlerts restringe create a admin/orientador/directivo
+//   M-1: isDirectivo() helper agregado
+//   M-2: activityLog valida que userId = request.auth.uid
+//
+// Probar con:
+//   npx firebase-tools emulators:start --only firestore
+//
+// Desplegar sólo cuando TODAS las pruebas pasen y el usuario lo apruebe:
+//   cp firestore.rules.proposed firestore.rules
+//   npx firebase-tools deploy --only firestore:rules
+// ════════════════════════════════════════════════════════════════════════
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -12,124 +32,124 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
-    function isAdmin() {
-      return isAuthenticated() && getUserData().role == 'admin';
-    }
-
-    function isOrientador() {
-      return isAuthenticated() && getUserData().role == 'orientador';
-    }
-
-    function isMaestro() {
-      return isAuthenticated() && getUserData().role == 'maestro';
-    }
+    function isAdmin()       { return isAuthenticated() && getUserData().role == 'admin'; }
+    function isOrientador()  { return isAuthenticated() && getUserData().role == 'orientador'; }
+    function isMaestro()     { return isAuthenticated() && getUserData().role == 'maestro'; }
+    function isDirectivo()   { return isAuthenticated() && getUserData().role == 'directivo'; }
 
     function getTeacherId() {
       return getUserData().teacherId;
     }
 
     function teacherHasGroup(groupId) {
-      return isAuthenticated() && isMaestro() &&
-        exists(/databases/$(database)/documents/assignments/$(getTeacherId() + '_' + groupId));
+      return isMaestro() &&
+        exists(/databases/$(database)/documents/assignmentsByGroup/$(groupId + '_' + getTeacherId()));
+    }
+
+    // Para calificaciones: valida asignación triple (teacher + group + subject)
+    function teacherHasAssignment(groupId, subjectId) {
+      return isMaestro() &&
+        exists(/databases/$(database)/documents/assignments/$(getTeacherId() + '_' + groupId + '_' + subjectId));
     }
 
     function isPartialLocked(partial) {
       return get(/databases/$(database)/documents/partials/$(partial)).data.locked == true;
     }
 
-    // ─── CONFIGURACION DE ESCUELA ──────────────────────
+    // ─── CONFIGURACION ──────────────────────
     match /config/{docId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
 
-    // ─── USUARIOS ──────────────────────────────────────
+    // ─── USUARIOS ──────────────────────────
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
       allow write: if isAdmin();
-      // Bootstrap: usuario puede crear su propio doc si no existe aun
+
+      // C-1 FIX: bootstrap sólo permite crear con role='consulta'.
+      // Admin debe promover manualmente tras verificación.
       allow create: if isAuthenticated()
         && request.auth.uid == userId
-        && !exists(/databases/$(database)/documents/users/$(userId));
+        && !exists(/databases/$(database)/documents/users/$(userId))
+        && request.resource.data.role == 'consulta';
     }
 
-    // ─── DOCENTES ──────────────────────────────────────
+    // ─── DOCENTES ──────────────────────────
     match /teachers/{teacherId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || isOrientador() || getTeacherId() == teacherId
+        isAdmin() || isOrientador() || isDirectivo() || getTeacherId() == teacherId
       );
       allow write: if isAdmin();
     }
 
-    // ─── GRUPOS ────────────────────────────────────────
+    // ─── GRUPOS / MATERIAS / ASIGNACIONES ──
     match /groups/{groupId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
 
-    // ─── MATERIAS ──────────────────────────────────────
     match /subjects/{subjectId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
 
-    // ─── ASIGNACIONES (docente-materia-grupo) ──────────
     match /assignments/{assignmentId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || isOrientador() ||
+        isAdmin() || isOrientador() || isDirectivo() ||
         resource.data.teacherId == getTeacherId()
       );
       allow write: if isAdmin();
     }
 
-    // ─── ALUMNOS ───────────────────────────────────────
-    match /students/{studentId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || isOrientador() ||
-        (isMaestro() && exists(/databases/$(database)/documents/assignmentsByGroup/$(resource.data.groupId + '_' + getTeacherId())))
-      );
-      allow create: if isAdmin();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
-    }
-
-    // ─── INDICE DE ASIGNACIONES POR GRUPO ──────────────
     match /assignmentsByGroup/{docId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
 
-    // ─── CALIFICACIONES ────────────────────────────────
-    // Maestros leen calificaciones de sus grupos/materias asignadas
-    // Maestros solo escriben cuando el parcial está abierto
+    // ─── ALUMNOS ───────────────────────────
+    match /students/{studentId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || isOrientador() || isDirectivo() ||
+        (isMaestro() && teacherHasGroup(resource.data.groupId))
+      );
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ─── CALIFICACIONES ────────────────────
+    // C-2 FIX: maestro solo escribe grades si tiene assignment de ese grupo+materia.
     match /grades/{gradeId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || isOrientador() || isMaestro()
+        isAdmin() || isOrientador() || isDirectivo() || isMaestro()
       );
 
       allow create: if isAuthenticated() && (
         isAdmin() ||
-        (isMaestro() && !isPartialLocked(request.resource.data.partial))
+        (isMaestro()
+          && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId)
+          && !isPartialLocked(request.resource.data.partial))
       );
 
       allow update: if isAuthenticated() && (
         isAdmin() ||
-        (isMaestro() && !isPartialLocked(resource.data.partial))
+        (isMaestro()
+          && teacherHasAssignment(resource.data.groupId, resource.data.subjectId)
+          && !isPartialLocked(resource.data.partial))
       );
 
       allow delete: if isAdmin();
     }
 
-    // ─── ESTADO DE PARCIALES (abierto/cerrado) ─────────
+    // ─── PARCIALES ─────────────────────────
     match /partials/{partialId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
 
-    // ─── SEGUIMIENTO DE ALUMNOS EN RIESGO ──────────────
+    // ─── AT RISK ───────────────────────────
     match /atRisk/{docId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || isOrientador() ||
+        isAdmin() || isOrientador() || isDirectivo() ||
         (isMaestro() && resource.data.teacherId == getTeacherId())
       );
       allow create: if isAuthenticated() && (
@@ -143,42 +163,51 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ─── REGISTRO DE ACTIVIDAD / BITÁCORA ─────────────
+    // ─── ACTIVITY LOG ──────────────────────
+    // M-2 FIX: forzar userId == auth.uid para no suplantar
     match /activityLog/{logId} {
-      allow read: if isAdmin();
-      allow create: if isAuthenticated();
+      allow read: if isAdmin() || isDirectivo();
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid;
       allow update, delete: if false;
     }
 
-    // ─── ALERTAS POR CORREO (cola de emails) ─────────────
+    // ─── EMAIL ALERTS ──────────────────────
+    // A-3 FIX: solo roles de gestión pueden encolar emails
     match /emailAlerts/{alertId} {
       allow read: if isAdmin();
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() && (isAdmin() || isOrientador() || isDirectivo());
       allow update: if isAdmin();
       allow delete: if false;
     }
 
-    // ─── INSCRIPCIONES ─────────────────────────────────
+    // ─── INSCRIPCIONES ─────────────────────
     match /enrollments/{enrollmentId} {
-      allow read: if isAuthenticated() && (isAdmin() || isOrientador());
+      allow read: if isAuthenticated() && (isAdmin() || isOrientador() || isDirectivo());
       allow write: if isAdmin();
     }
 
-    // Override de parciales por docente (admin crea, todos leen para verificar)
     match /partialOverrides/{overrideId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
 
-    // Asistencia (maestros y admin pueden registrar, todos autenticados leen)
+    // ─── ASISTENCIA ────────────────────────
+    // A-1 FIX: maestro sólo puede registrar de su grupo
     match /attendance/{attendanceId} {
       allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && (isAdmin() || isMaestro());
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (isMaestro() && teacherHasGroup(request.resource.data.groupId))
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isMaestro() && teacherHasGroup(resource.data.groupId))
+      );
       allow delete: if isAdmin();
     }
 
-    // ─── INCIDENCIAS ──────────────────────────────────────
-    // Maestros, orientadores y admin pueden crear; admin y orientador pueden eliminar
+    // ─── INCIDENCIAS ───────────────────────
     match /incidents/{incidentId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && (isAdmin() || isOrientador() || isMaestro());
@@ -186,24 +215,30 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && (isAdmin() || isOrientador());
     }
 
-    // ─── HORAS DE MAESTRO ─────────────────────────────────
+    // ─── HORAS DE MAESTRO ──────────────────
     match /teacherHours/{docId} {
       allow read: if isAuthenticated();
       allow create, update: if isAuthenticated() && (isAdmin() || isMaestro());
       allow delete: if isAdmin();
     }
 
-    // ─── CORRECCIONES DE CALIFICACIONES ──────────────────
+    // ─── CORRECCIONES DE CALIFICACIONES ────
+    // A-2 FIX: validar payload mínimo
     match /gradeCorrections/{correctionId} {
-      allow read: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
-      allow create, update: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
-      allow delete: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
+      allow read: if isAuthenticated() && (isAdmin() || isDirectivo());
+      allow create: if isAuthenticated() && (isAdmin() || isDirectivo())
+        && request.resource.data.keys().hasAll(['studentId', 'subjectId', 'partial', 'newGrade', 'reason'])
+        && request.resource.data.newGrade is number
+        && request.resource.data.newGrade >= 5
+        && request.resource.data.newGrade <= 10;
+      allow update: if isAuthenticated() && (isAdmin() || isDirectivo());
+      allow delete: if isAdmin();
     }
 
-    // ─── NOTIFICACIONES ──────────────────────────────────
+    // ─── NOTIFICACIONES ────────────────────
     match /notifications/{notifId} {
-      allow read: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
-      allow create: if isAuthenticated() && (isAdmin() || getUserData().role == 'directivo');
+      allow read: if isAuthenticated() && (isAdmin() || isDirectivo());
+      allow create: if isAuthenticated() && (isAdmin() || isDirectivo());
     }
   }
 }

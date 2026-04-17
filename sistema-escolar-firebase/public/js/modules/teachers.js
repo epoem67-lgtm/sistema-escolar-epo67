@@ -409,8 +409,10 @@ const TeachersModule = (() => {
             });
             Toast.show('Asignacion actualizada', 'success');
           } else {
-            const ref = await db.collection('assignments').add(data);
-            DB.audit('crear', 'asignacion', ref.id, {
+            // ID deterministico para que las rules puedan validar permisos de maestro
+            const assignmentId = `${data.teacherId}_${data.groupId}_${data.subjectId}`;
+            await db.collection('assignments').doc(assignmentId).set(data);
+            DB.audit('crear', 'asignacion', assignmentId, {
               description: `Asignación creada: ${data.teacherName} → ${data.subjectName} (${data.groupName})`,
               after: data
             });
@@ -889,8 +891,10 @@ const TeachersModule = (() => {
           DB.audit('editar', 'asignacion', existingAsgId, { description: `Asignaci\u00f3n actualizada: ${teacherName} \u2192 ${subjectName} (${groupName})` });
           Toast.show('Asignaci\u00f3n actualizada', 'success');
         } else {
-          const ref = await db.collection('assignments').add(data);
-          DB.audit('crear', 'asignacion', ref.id, { description: `Asignaci\u00f3n creada: ${teacherName} \u2192 ${subjectName} (${groupName})` });
+          // ID deterministico para que las rules puedan validar permisos de maestro
+          const assignmentId = `${data.teacherId}_${data.groupId}_${data.subjectId}`;
+          await db.collection('assignments').doc(assignmentId).set(data);
+          DB.audit('crear', 'asignacion', assignmentId, { description: `Asignaci\u00f3n creada: ${teacherName} \u2192 ${subjectName} (${groupName})` });
           Toast.show('Asignaci\u00f3n creada', 'success');
         }
         await invalidateAndReload('assignments');
