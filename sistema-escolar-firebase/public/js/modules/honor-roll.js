@@ -474,7 +474,6 @@ const HonorRollModule = (() => {
           </tr>`;
         }).join('');
 
-        const pageLabel = top3Pages.length > 1 ? ` &mdash; P&aacute;gina ${pageIdx + 1} de ${top3Pages.length}` : '';
         const showFooter = pageIdx === top3Pages.length - 1;
 
         allPagesHtml += `
@@ -483,7 +482,7 @@ const HonorRollModule = (() => {
             <div class="t5-head">
               <div class="t5-school">ESCUELA PREPARATORIA OFICIAL NUM. 67</div>
               <div class="t5-trophy">${TROFEO}</div>
-              <h1 class="t5-title">TOP 3 INSTITUCIONAL${pageLabel}</h1>
+              <h1 class="t5-title">TOP 3 INSTITUCIONAL</h1>
               <div class="t5-subtitle">Excelencia Acad&eacute;mica &mdash; Turno ${Utils.sanitize(turno)}</div>
               <div class="t5-partial">${Utils.sanitize(partialLabel).toUpperCase()}</div>
               <div class="t5-cycle">Ciclo Escolar 2025-2026</div>
