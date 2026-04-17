@@ -517,32 +517,34 @@ const HonorRollModule = (() => {
           * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
           body { font-family: Arial, Helvetica, sans-serif; color: #000; }
 
-          .page { page-break-after: always; page-break-inside: avoid; }
+          /* Centrar verticalmente el contenido en la hoja sin romper si llega al tope */
+          .page { page-break-after: always; page-break-inside: avoid;
+                  min-height: 240mm; display: flex; flex-direction: column; justify-content: center; }
           .page:last-child { page-break-after: auto; }
           .group-card, .t5-table { page-break-inside: avoid; }
           table, tr { page-break-inside: avoid; }
 
-          /* ─── GROUP PAGES (compacto para que quepan 15 filas + header) ─── */
-          .hdr { text-align:center; margin-bottom:10px; }
-          .hdr h1 { font-size:13pt; font-weight:700; margin-bottom:2px; }
-          .hdr h2 { font-size:12pt; font-weight:700; margin-bottom:3px; color:#1b3a5c; }
-          .hdr .info { font-size:10pt; color:#333; margin-bottom:2px; }
-          .hdr .subtle { font-size:9pt; color:#888; }
+          /* ─── GROUP PAGES (dimensionado para 15 filas + header sin huecos) ─── */
+          .hdr { text-align:center; margin-bottom:16px; margin-top:6px; }
+          .hdr h1 { font-size:16pt; font-weight:700; margin-bottom:4px; }
+          .hdr h2 { font-size:14pt; font-weight:700; margin-bottom:6px; color:#1b3a5c; }
+          .hdr .info { font-size:11pt; color:#333; margin-bottom:2px; }
+          .hdr .subtle { font-size:10pt; color:#888; }
 
           .group-card { border:1.5px solid #1b3a5c; border-radius:8px; overflow:hidden; }
-          .group-header { background:#1b3a5c; color:#fff; padding:7px 14px; display:flex; justify-content:space-between; align-items:center; font-size:12pt; font-weight:700; }
-          .group-header .badge-g { background:rgba(255,255,255,.2); padding:2px 10px; border-radius:4px; font-size:10pt; }
+          .group-header { background:#1b3a5c; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; font-size:14pt; font-weight:700; }
+          .group-header .badge-g { background:rgba(255,255,255,.2); padding:3px 12px; border-radius:4px; font-size:11pt; }
 
           .group-card table { width:100%; border-collapse:collapse; }
-          .group-card th { background:#e8ecf1; padding:5px 10px; text-align:left; font-size:10pt; font-weight:700; color:#1b3a5c; border-bottom:1.5px solid #1b3a5c; }
-          .group-card td { padding:5px 10px; font-size:11pt; border-bottom:1px solid #ddd; line-height:1.2; }
+          .group-card th { background:#e8ecf1; padding:8px 12px; text-align:left; font-size:11pt; font-weight:700; color:#1b3a5c; border-bottom:1.5px solid #1b3a5c; }
+          .group-card td { padding:9px 12px; font-size:12pt; border-bottom:1px solid #ddd; line-height:1.25; }
           .group-card tr:nth-child(even) { background:#f7f9fb; }
           .group-card .top3 { font-weight:700; }
-          .group-card .rank { text-align:center; font-size:11pt; }
-          .group-card .medal { font-size:14pt; }
+          .group-card .rank { text-align:center; font-size:13pt; }
+          .group-card .medal { font-size:17pt; }
           .group-card .name { font-weight:600; }
           .group-card .mat { text-align:center; color:#666; }
-          .group-card td .avg { display:inline-block; padding:2px 10px; border-radius:5px; font-weight:800; font-size:10.5pt; color:#fff; }
+          .group-card td .avg { display:inline-block; padding:3px 12px; border-radius:5px; font-weight:800; font-size:12pt; color:#fff; }
           .group-card td .avg-high { background:#1b5e20; }
           .group-card td .avg-good { background:#1b3a5c; }
           .group-card td .avg-ok { background:#6b7280; }
