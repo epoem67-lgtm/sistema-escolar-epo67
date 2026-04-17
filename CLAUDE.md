@@ -13,7 +13,16 @@ Aplicacion web SPA desplegada en Firebase Hosting.
 - **Repositorio GitHub:** https://github.com/devdaalper/sistema-escolar-epo67 (privado)
 - **Responsable:** Dario (dev.daalper@gmail.com)
 - **Ciclo escolar:** 2025-2026
-- **Version actual:** v4.6
+- **Version actual:** v5.9
+
+## Documentacion adicional (leer antes de trabajar)
+
+- `AGENTS.md` (raiz) — Reglas inviolables para agentes IA
+- `sistema-escolar-firebase/docs/ARCHITECTURE.md` — Arquitectura y patron IIFE
+- `sistema-escolar-firebase/docs/CONVENTIONS.md` — Convenciones de codigo
+- `sistema-escolar-firebase/docs/SECURITY_AUDIT.md` — Hallazgos de seguridad pendientes
+- `sistema-escolar-firebase/docs/TROUBLESHOOTING.md` — Problemas comunes
+- `sistema-escolar-firebase/scripts/README.md` — Scripts administrativos
 
 ## Datos de la escuela
 
