@@ -436,7 +436,7 @@ const HonorRollModule = (() => {
           const pageLabel = pages.length > 1 ? ` &mdash; P&aacute;gina ${pageIdx + 1} de ${pages.length}` : '';
 
           allPagesHtml += `
-            <section class="page">
+            <section class="page group-page">
               <div class="hdr">
                 <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
                 <h2>CUADRO DE HONOR</h2>
@@ -519,6 +519,8 @@ const HonorRollModule = (() => {
 
           .page { page-break-after: always; page-break-inside: avoid; padding-top: 8mm; }
           .page:last-child { page-break-after: auto; }
+          /* Paginas de grupo: centradas verticalmente en la hoja */
+          .group-page { padding-top: 0; min-height: 240mm; display: flex; flex-direction: column; justify-content: center; }
           .group-card, .t5-table { page-break-inside: avoid; }
           table, tr { page-break-inside: avoid; }
 
