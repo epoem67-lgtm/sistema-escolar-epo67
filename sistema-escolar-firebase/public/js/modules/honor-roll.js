@@ -72,6 +72,7 @@ const HonorRollModule = (() => {
             <div class="form-group">
               <label for="hr-top">Cantidad</label>
               <select id="hr-top">
+                <option value="3">Top 3</option>
                 <option value="5">Top 5</option>
                 <option value="10" selected>Top 10</option>
                 <option value="15">Top 15</option>
