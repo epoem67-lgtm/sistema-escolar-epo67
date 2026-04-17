@@ -228,16 +228,16 @@ const HonorRollModule = (() => {
 
       html += '</div>';
 
-      // ── TOP 10 INSTITUCIONAL POR TURNO (ranking denso, empates comparten lugar) ──
+      // ── TOP 3 INSTITUCIONAL POR TURNO (ranking denso, empates comparten lugar) ──
       const turnos = [...new Set(studentAverages.map(s => s.turno))].sort();
-      html += '<h2 class="section-title" style="margin-top:24px;">Top 10 Institucional por Turno</h2>';
+      html += '<h2 class="section-title" style="margin-top:24px;">Top 3 Institucional por Turno</h2>';
       for (const t of turnos) {
-        // Top 10 institucional a 2 decimales (coincide con la visualización .toFixed(2))
+        // Top 3 institucional a 2 decimales (coincide con .toFixed(2))
         const ranked = assignDenseRanks(studentAverages.filter(s => s.turno === t), 2);
-        const top10 = ranked.filter(s => s.rank <= 10);
-        if (top10.length === 0) continue;
+        const top3 = ranked.filter(s => s.rank <= 3);
+        if (top3.length === 0) continue;
         const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
-        const rows10 = top10.map((s) => {
+        const rows10 = top3.map((s) => {
           const medal = s.rank <= 3 ? `<span style="font-size:20px;">${medals[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
           const gradeStyle = s.promedio >= 9 ? 'background:#1b5e20;color:#fff;' : s.promedio >= 8 ? 'background:#1b3a5c;color:#fff;' : 'background:#6b7280;color:#fff;';
           return `<tr style="font-size:15px;${s.rank <= 3 ? 'font-weight:700;' : ''}">
@@ -253,7 +253,7 @@ const HonorRollModule = (() => {
           <div class="card" style="margin-bottom:16px;border:2px solid #1b3a5c;">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
               <span style="font-size:28px;">&#127942;</span>
-              <h3 class="section-title" style="margin:0;">TOP 10 INSTITUCIONAL</h3>
+              <h3 class="section-title" style="margin:0;">TOP 3 INSTITUCIONAL</h3>
               <span class="badge ${tClass}" style="font-size:13px;">${Utils.sanitize(t)}</span>
             </div>
             <table class="table-light">
@@ -391,9 +391,9 @@ const HonorRollModule = (() => {
       });
 
       const sortedGroups = Object.values(byGroup).sort((a, b) => (a.grado || 0) - (b.grado || 0) || a.grupo.localeCompare(b.grupo));
-      // Top 10 institucional: ranking denso a 2 decimales (la tabla muestra .toFixed(2))
+      // Top 3 institucional: ranking denso a 2 decimales (la tabla muestra .toFixed(2))
       const rankedAll = assignDenseRanks(studentAverages, 2);
-      const top10 = rankedAll.filter(s => s.rank <= 10);
+      const top3 = rankedAll.filter(s => s.rank <= 3);
 
       if (sortedGroups.length === 0) {
         Toast.show('No hay calificaciones capturadas para este turno y parcial', 'warning');
@@ -401,7 +401,7 @@ const HonorRollModule = (() => {
         return;
       }
 
-      Toast.show('Generando documento con ' + sortedGroups.length + ' cuadros de honor + Top 10...', 'info');
+      Toast.show('Generando documento con ' + sortedGroups.length + ' cuadros de honor + Top 3...', 'info');
 
       // Build single HTML document with all groups + top 5
       let allPagesHtml = '';
@@ -446,12 +446,11 @@ const HonorRollModule = (() => {
           </section>`;
       });
 
-      // Top 10 Institucional — ranking denso: empates comparten lugar
-      const top10Rows = top10.map((s) => {
+      // Top 3 Institucional — ranking denso: empates comparten lugar
+      const top3Rows = top3.map((s) => {
         const medals = [MEDAL1, MEDAL2, MEDAL3];
-        const medal = s.rank <= 3 ? `<span class="t5-medal">${medals[s.rank - 1]}</span>` : `<span class="t5-num">${s.rank}</span>`;
-        const highlight = s.rank === 1 ? 'gold-row' : s.rank === 2 ? 'silver-row' : s.rank === 3 ? 'bronze-row' : '';
-        return `<tr class="${highlight}">
+        const medal = `<span class="t5-medal">${medals[s.rank - 1]}</span>`;
+        return `<tr>
           <td class="t5-rank">${medal}</td>
           <td class="t5-name">${Utils.sanitize(s.nombreCompleto)}</td>
           <td class="t5-group">${Utils.sanitize(s.grupo)}</td>
@@ -465,7 +464,7 @@ const HonorRollModule = (() => {
           <div class="t5-head">
             <div class="t5-school">ESCUELA PREPARATORIA OFICIAL NUM. 67</div>
             <div class="t5-trophy">${TROFEO}</div>
-            <h1 class="t5-title">TOP 10 INSTITUCIONAL</h1>
+            <h1 class="t5-title">TOP 3 INSTITUCIONAL</h1>
             <div class="t5-subtitle">Excelencia Acad&eacute;mica &mdash; Turno ${Utils.sanitize(turno)}</div>
             <div class="t5-partial">${Utils.sanitize(partialLabel).toUpperCase()}</div>
             <div class="t5-cycle">Ciclo Escolar 2025-2026</div>
@@ -479,7 +478,7 @@ const HonorRollModule = (() => {
                 <th style="width:110px;">Promedio</th>
               </tr>
             </thead>
-            <tbody>${top10Rows}</tbody>
+            <tbody>${top3Rows}</tbody>
           </table>
           <div class="t5-footer">
             <div class="t5-signature">
@@ -497,9 +496,8 @@ const HonorRollModule = (() => {
           * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
           body { font-family: Arial, Helvetica, sans-serif; color: #000; }
 
-          .page { page-break-after: always; height: 245mm; display:flex; flex-direction:column; justify-content:center; }
+          .page { page-break-after: always; }
           .page:last-child { page-break-after: auto; }
-          .t5-page { justify-content: center; }
 
           /* ─── GROUP PAGES ─── */
           .hdr { text-align:center; margin-bottom:20px; }
@@ -526,49 +524,40 @@ const HonorRollModule = (() => {
           .group-card td .avg-good { background:#1b3a5c; }
           .group-card td .avg-ok { background:#6b7280; }
 
-          /* ─── TOP 5 INSTITUCIONAL PAGE ─── */
-          .t5-page { background: linear-gradient(180deg, #fff 0%, #f8fafb 100%); padding: 10px; }
+          /* ─── TOP 3 INSTITUCIONAL PAGE ─── */
+          .t5-page { padding: 10px; }
 
-          .t5-ornament { height: 8px; background: linear-gradient(90deg, transparent, #d4782a 20%, #1b3a5c 50%, #d4782a 80%, transparent); border-radius:4px; margin: 0 0 30px 0; }
-          .t5-ornament.bottom { margin: 40px 0 0 0; }
+          .t5-ornament { height: 6px; background: linear-gradient(90deg, transparent, #d4782a 20%, #1b3a5c 50%, #d4782a 80%, transparent); border-radius:3px; margin: 0 0 24px 0; }
+          .t5-ornament.bottom { margin: 30px 0 0 0; }
 
-          .t5-head { text-align:center; margin-bottom:40px; }
-          .t5-school { font-size:14pt; font-weight:700; color:#1b3a5c; letter-spacing:1px; margin-bottom:20px; }
-          .t5-trophy { font-size:60pt; line-height:1; margin:10px 0; }
-          .t5-title { font-size:30pt; font-weight:900; color:#1b3a5c; letter-spacing:2px; margin:10px 0; }
-          .t5-subtitle { font-size:14pt; color:#d4782a; font-weight:600; font-style:italic; margin-bottom:12px; }
-          .t5-partial { font-size:13pt; color:#333; font-weight:600; letter-spacing:1px; }
-          .t5-cycle { font-size:11pt; color:#888; margin-top:4px; }
+          .t5-head { text-align:center; margin-bottom:28px; }
+          .t5-school { font-size:13pt; font-weight:700; color:#1b3a5c; letter-spacing:1px; margin-bottom:14px; }
+          .t5-trophy { font-size:54pt; line-height:1; margin:6px 0; }
+          .t5-title { font-size:28pt; font-weight:900; color:#1b3a5c; letter-spacing:2px; margin:8px 0; }
+          .t5-subtitle { font-size:13pt; color:#d4782a; font-weight:600; font-style:italic; margin-bottom:10px; }
+          .t5-partial { font-size:12pt; color:#333; font-weight:600; letter-spacing:1px; }
+          .t5-cycle { font-size:10pt; color:#888; margin-top:4px; }
 
-          .t5-table { width:100%; border-collapse:separate; border-spacing:0 6px; margin:20px 0; }
-          .t5-table th { background:#1b3a5c; color:#fff; padding:12px 16px; font-size:12pt; text-align:center; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
+          .t5-table { width:100%; border-collapse:separate; border-spacing:0 5px; margin:16px 0; }
+          .t5-table th { background:#1b3a5c; color:#fff; padding:10px 14px; font-size:11pt; text-align:center; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
           .t5-table th:nth-child(2) { text-align:left; }
           .t5-table th:first-child { border-radius:8px 0 0 8px; }
           .t5-table th:last-child { border-radius:0 8px 8px 0; }
 
-          .t5-table td { background:#fff; padding:14px 16px; font-size:14pt; border-top:1.5px solid #e2e8f0; border-bottom:1.5px solid #e2e8f0; }
-          .t5-table td:first-child { border-left:1.5px solid #e2e8f0; border-radius:8px 0 0 8px; text-align:center; }
-          .t5-table td:last-child { border-right:1.5px solid #e2e8f0; border-radius:0 8px 8px 0; text-align:center; }
+          .t5-table td { background:#fff; padding:10px 14px; font-size:12pt; border-top:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; }
+          .t5-table td:first-child { border-left:1px solid #e2e8f0; border-radius:8px 0 0 8px; text-align:center; }
+          .t5-table td:last-child { border-right:1px solid #e2e8f0; border-radius:0 8px 8px 0; text-align:center; }
 
-          .t5-table .gold-row td { background:#fff8e1; border-color:#d4782a; }
-          .t5-table .silver-row td { background:#f5f5f5; border-color:#9ca3af; }
-          .t5-table .bronze-row td { background:#fef0e4; border-color:#a16207; }
+          .t5-rank { font-size:18pt; }
+          .t5-medal { font-size:22pt; line-height:1; }
+          .t5-name { font-size:12pt; font-weight:700; color:#1b3a5c; }
+          .t5-group { text-align:center; font-size:11pt; color:#64748b; font-weight:600; }
 
-          .t5-rank { font-size:20pt; }
-          .t5-medal { font-size:24pt; }
-          .t5-num { font-weight:800; color:#1b3a5c; font-size:18pt; }
-          .t5-name { font-size:14pt; font-weight:700; color:#1b3a5c; }
-          .gold-row .t5-name { color:#b5651d; }
-          .t5-group { text-align:center; font-size:13pt; color:#64748b; font-weight:600; }
+          .t5-avg-badge { display:inline-block; padding:6px 16px; background:#1b5e20; color:#fff; font-weight:800; font-size:13pt; border-radius:8px; letter-spacing:1px; }
 
-          .t5-avg-badge { display:inline-block; padding:8px 20px; background:#1b5e20; color:#fff; font-weight:800; font-size:16pt; border-radius:10px; letter-spacing:1px; }
-          .gold-row .t5-avg-badge { background:#d4782a; }
-          .silver-row .t5-avg-badge { background:#64748b; }
-          .bronze-row .t5-avg-badge { background:#a16207; }
-
-          .t5-footer { text-align:center; margin-top:50px; }
-          .t5-signature { display:inline-block; min-width:280px; }
-          .t5-sig-line { border-bottom:1.5px solid #1b3a5c; height:50px; margin-bottom:6px; }
+          .t5-footer { text-align:center; margin-top:36px; }
+          .t5-signature { display:inline-block; min-width:260px; }
+          .t5-sig-line { border-bottom:1.5px solid #1b3a5c; height:40px; margin-bottom:6px; }
           .t5-signature div:last-child { font-weight:700; font-size:11pt; color:#1b3a5c; letter-spacing:1px; }
         </style>
       </head><body>
