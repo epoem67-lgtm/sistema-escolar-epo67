@@ -11,15 +11,22 @@ const HonorRollModule = (() => {
    * Asigna ranking denso: alumnos con el mismo promedio comparten lugar,
    * y el siguiente promedio distinto avanza un solo número.
    * Ej: 10.0, 10.0, 10.0, 9.8, 9.5  →  1, 1, 1, 2, 3
-   * Requiere array previamente ordenado desc por promedio.
+   *
+   * IMPORTANTE: compara al mismo nivel de precisión que se muestra al usuario.
+   * Ej: 9.83 y 9.77 se muestran como "9.8" con decimals=1 → deben compartir lugar.
+   *
+   * @param {Array} arr - previamente ordenado desc por promedio
+   * @param {number} decimals - precisión de comparación (1 = 9.8, 2 = 9.83)
    */
-  function assignDenseRanks(arr) {
+  function assignDenseRanks(arr, decimals = 2) {
+    const factor = Math.pow(10, decimals);
     let currentRank = 0;
-    let lastPromedio = null;
+    let lastKey = null;
     return arr.map(s => {
-      if (s.promedio !== lastPromedio) {
+      const key = Math.round(s.promedio * factor) / factor;
+      if (key !== lastKey) {
         currentRank++;
-        lastPromedio = s.promedio;
+        lastKey = key;
       }
       return { ...s, rank: currentRank };
     });
@@ -166,8 +173,8 @@ const HonorRollModule = (() => {
 
       Object.values(byGroup).forEach(g => {
         g.students.sort((a, b) => b.promedio - a.promedio);
-        // Ranking denso + filtrar por top N lugares (empates comparten lugar)
-        g.students = assignDenseRanks(g.students).filter(s => s.rank <= topCount);
+        // Ranking denso a 1 decimal (coincide con la visualización .toFixed(1))
+        g.students = assignDenseRanks(g.students, 1).filter(s => s.rank <= topCount);
       });
 
       const sortedGroups = Object.values(byGroup).sort((a, b) => {
@@ -225,7 +232,8 @@ const HonorRollModule = (() => {
       const turnos = [...new Set(studentAverages.map(s => s.turno))].sort();
       html += '<h2 class="section-title" style="margin-top:24px;">Top 10 Institucional por Turno</h2>';
       for (const t of turnos) {
-        const ranked = assignDenseRanks(studentAverages.filter(s => s.turno === t));
+        // Top 10 institucional a 2 decimales (coincide con la visualización .toFixed(2))
+        const ranked = assignDenseRanks(studentAverages.filter(s => s.turno === t), 2);
         const top10 = ranked.filter(s => s.rank <= 10);
         if (top10.length === 0) continue;
         const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
@@ -383,8 +391,8 @@ const HonorRollModule = (() => {
       });
 
       const sortedGroups = Object.values(byGroup).sort((a, b) => (a.grado || 0) - (b.grado || 0) || a.grupo.localeCompare(b.grupo));
-      // Top 10 institucional con ranking denso (empates comparten lugar)
-      const rankedAll = assignDenseRanks(studentAverages);
+      // Top 10 institucional: ranking denso a 2 decimales (la tabla muestra .toFixed(2))
+      const rankedAll = assignDenseRanks(studentAverages, 2);
       const top10 = rankedAll.filter(s => s.rank <= 10);
 
       if (sortedGroups.length === 0) {
@@ -401,8 +409,8 @@ const HonorRollModule = (() => {
       // One page per group
       sortedGroups.forEach((group, idx) => {
         const sorted = group.students.sort((a, b) => b.promedio - a.promedio);
-        // Ranking denso + filtrar por top N lugares (empates comparten lugar)
-        const top = assignDenseRanks(sorted).filter(s => s.rank <= topCount);
+        // Ranking denso a 1 decimal (la tabla muestra .toFixed(1))
+        const top = assignDenseRanks(sorted, 1).filter(s => s.rank <= topCount);
         const medalImgs = [MEDAL1, MEDAL2, MEDAL3];
         const rows = top.map((s) => {
           const medal = s.rank <= 3 ? `<span class="medal">${medalImgs[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
