@@ -68,6 +68,12 @@ const BoletasModule = (() => {
               <label for="bol-fecha">Fecha de boleta</label>
               <input type="date" id="bol-fecha" value="${new Date().toISOString().split('T')[0]}">
             </div>
+            <div class="form-group" style="display:flex;align-items:flex-end;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;margin-bottom:8px;" title="Oculta las columnas de EC, Transversal, Examen y Extras. Solo muestra materia, faltas y calificacion final.">
+                <input type="checkbox" id="bol-sin-desglose" style="width:16px;height:16px;">
+                Sin desglose (solo calificaci&oacute;n y faltas)
+              </label>
+            </div>
           </div>
           <div class="filter-bar-actions" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
             <button class="btn btn-primary" data-action="generate">Generar Boleta</button>
@@ -248,8 +254,9 @@ const BoletasModule = (() => {
       const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
       const fechaTexto = `Cuautitl\u00e1n Izcalli, M\u00e9x. A ${fechaObj.getDate()} de ${meses[fechaObj.getMonth()]} de ${fechaObj.getFullYear()}.`;
 
+      const sinDesglose = document.getElementById('bol-sin-desglose')?.checked || false;
       const meta = {
-        cicloEscolar, groupName, turno, grado, parcialMode, orientador, fechaTexto
+        cicloEscolar, groupName, turno, grado, parcialMode, orientador, fechaTexto, sinDesglose
       };
 
       // Filtro por estatus academico (reprobados/aprobados)
@@ -393,6 +400,48 @@ const BoletasModule = (() => {
         <td colspan="4" style="text-align:right;font-weight:700;padding:4px 8px;">PROMEDIO</td>
         ${promedioCells}<td></td>
       </tr>`;
+
+    } else if (meta.sinDesglose) {
+      // ═══ SIMPLIFIED FORMAT: parcial individual sin rubros (solo faltas + cal) ═══
+      tableHeader = `<tr>
+          <th style="width:30px;text-align:center;">N\u00b0</th>
+          <th>UNIDAD DE APRENDIZAJE CURRICULAR</th>
+          <th style="text-align:center;width:70px;">FALTAS</th>
+          <th style="text-align:center;width:70px;">CALIFICACI\u00d3N</th>
+        </tr>`;
+      tableRows = subjectsList.map((subj, idx) => {
+        const sg = studentGrades[subj.id] || {};
+        const gradeDoc = sg[parcialMode] || {};
+        const faltas = gradeDoc.faltas !== undefined ? gradeDoc.faltas : '-';
+        const cal = gradeDoc.cal !== undefined ? gradeDoc.cal : (gradeDoc.value !== undefined ? gradeDoc.value : '-');
+        if (cal !== '-' && cal !== '' && cal !== null) { grandTotal += Number(cal); grandCount++; }
+        const isFail = cal !== '-' && cal !== '' && cal !== null && Number(cal) < K.THRESHOLDS.PASS_GRADE;
+        const bg = isFail ? 'background:#D9D9D9;-webkit-print-color-adjust:exact;print-color-adjust:exact;' : (idx % 2 === 1 ? 'background:#f5f5f5;' : '');
+        return `<tr style="${bg}">
+          <td style="text-align:center;font-size:10px;">${idx + 1}</td>
+          <td style="font-size:10px;">${Utils.sanitize(K.getUACNombre(subj.nombre || subj.id))}</td>
+          <td style="text-align:center;font-size:11px;">${faltas}</td>
+          <td style="text-align:center;font-weight:700;font-size:12px;${isFail ? 'background:#ddd;' : ''}">${cal}</td>
+        </tr>`;
+      }).join('');
+      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(2) : '-';
+      const promedioFail = promedio !== '-' && parseFloat(promedio) < K.THRESHOLDS.PASS_GRADE;
+      promedioRow = `<tr style="border-top:2px solid #333;">
+        <td colspan="3" style="text-align:right;font-weight:700;font-size:11px;padding:6px 8px;">PROMEDIO GENERAL:</td>
+        <td style="text-align:center;font-weight:700;font-size:12px;${promedioFail ? 'background:#ddd;' : ''}">${promedio}</td>
+      </tr>`;
+
+      // Resumen de riesgo (mismo calculo que formato con rubros)
+      subjectsList.forEach(subj => {
+        const sg = studentGrades[subj.id] || {};
+        const gd = sg[parcialMode] || {};
+        const cal = gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null);
+        if (cal !== null && cal < K.THRESHOLDS.PASS_GRADE) parcialReprobadas++;
+        if (gd.faltas !== undefined && !isNaN(gd.faltas)) parcialFaltasTotal += Number(gd.faltas);
+      });
+      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#c62828', bg: '#ffebee', border: '#c62828' }
+        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#e65100', bg: '#fff3e0', border: '#e65100' }
+        : { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
 
     } else {
       // ═══ LEGACY FORMAT: Single parcial with rubros ═══
