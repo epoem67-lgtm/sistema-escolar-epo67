@@ -707,21 +707,27 @@ const TeachersModule = (() => {
     // Filter controls
     let html = `
       <div class="card" style="margin-bottom:16px;">
-        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
-          <div class="form-group" style="margin:0;">
-            <label style="font-weight:600;">Turno</label>
-            <select id="cargaTurno">
-              <option value="">Selecciona turno</option>
-              ${K.TURNOS.map(t => `<option value="${t}" ${turno === t ? 'selected' : ''}>${S(t)}</option>`).join('')}
-            </select>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:space-between;">
+          <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+            <div class="form-group" style="margin:0;">
+              <label style="font-weight:600;">Turno</label>
+              <select id="cargaTurno">
+                <option value="">Selecciona turno</option>
+                ${K.TURNOS.map(t => `<option value="${t}" ${turno === t ? 'selected' : ''}>${S(t)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-weight:600;">Grado</label>
+              <select id="cargaGrado" ${!turno ? 'disabled' : ''}>
+                <option value="">Selecciona grado</option>
+                ${K.GRADOS.map(g => `<option value="${g}" ${String(grado) === String(g) ? 'selected' : ''}>${g}\u00ba</option>`).join('')}
+              </select>
+            </div>
           </div>
-          <div class="form-group" style="margin:0;">
-            <label style="font-weight:600;">Grado</label>
-            <select id="cargaGrado" ${!turno ? 'disabled' : ''}>
-              <option value="">Selecciona grado</option>
-              ${K.GRADOS.map(g => `<option value="${g}" ${String(grado) === String(g) ? 'selected' : ''}>${g}\u00ba</option>`).join('')}
-            </select>
-          </div>
+          <button class="btn btn-success" data-action="print-carga-masiva" title="Imprime la carga academica completa de ambos turnos">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>
+            Imprimir Carga Acad&eacute;mica (Ambos Turnos)
+          </button>
         </div>
       </div>`;
 
@@ -911,6 +917,134 @@ const TeachersModule = (() => {
   };
 
 
+  // ── Impresion masiva de Carga Academica (ambos turnos) ────────
+
+  const printCargaMasiva = () => {
+    if (!state.groups.length || !state.subjects.length) {
+      Toast.show('Espera a que carguen los datos', 'warning');
+      return;
+    }
+
+    // Mapa subjectId_groupId -> assignment
+    const asgMap = {};
+    state.assignments.forEach(a => {
+      asgMap[a.subjectId + '_' + a.groupId] = a;
+    });
+
+    const today = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+
+    let body = '';
+
+    // Iterar por turno -> grado -> grupo -> materia (en orden oficial)
+    for (const turno of K.TURNOS) {
+      const gruposTurno = state.groups.filter(g => g.turno === turno);
+      if (gruposTurno.length === 0) continue;
+
+      body += `
+        <section class="turno-page">
+          <div class="turno-header">
+            <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
+            <h2>CARGA ACAD&Eacute;MICA &mdash; TURNO ${S(turno)}</h2>
+            <div class="turno-meta">Ciclo Escolar 2025-2026 &mdash; Generado el ${today}</div>
+          </div>
+      `;
+
+      for (const grado of K.GRADOS) {
+        const gruposGrado = gruposTurno
+          .filter(g => String(g.grado) === String(grado))
+          .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+        if (gruposGrado.length === 0) continue;
+
+        const subjectsGrado = state.subjects.filter(s => String(s.grado) === String(grado));
+        const subjectsOrdered = K.sortSubjectsByGrado(subjectsGrado, grado);
+
+        body += `<h3 class="grado-title">${grado}&ordm; GRADO</h3>`;
+
+        for (const grp of gruposGrado) {
+          const rows = subjectsOrdered.map(sub => {
+            const asg = asgMap[sub.id + '_' + grp.id];
+            const maestro = asg ? asg.teacherName : '';
+            const rowClass = asg ? '' : ' class="vacante"';
+            const maestroCell = asg ? S(maestro) : '<em>SIN ASIGNAR</em>';
+            return `<tr${rowClass}>
+              <td class="mat">${S(K.getUACNombre(sub.nombre))}</td>
+              <td class="doc">${maestroCell}</td>
+            </tr>`;
+          }).join('');
+
+          const totalMat = subjectsOrdered.length;
+          const asignadas = subjectsOrdered.filter(s => asgMap[s.id + '_' + grp.id]).length;
+          const vacantes = totalMat - asignadas;
+
+          body += `
+            <div class="grupo-card">
+              <div class="grupo-head">
+                <strong>GRUPO ${S(grp.nombre)}</strong>
+                <span class="grupo-stats">${asignadas}/${totalMat} asignadas${vacantes > 0 ? ` &bull; ${vacantes} vacantes` : ''}</span>
+              </div>
+              <table>
+                <thead><tr><th style="width:60%;">Materia</th><th>Docente asignado</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          `;
+        }
+      }
+
+      body += `</section>`;
+    }
+
+    const fullHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+      <title>Carga Acad&eacute;mica - Ambos Turnos</title>
+      <style>
+        @page { size: letter portrait; margin: 14mm 16mm; }
+        * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #000; }
+
+        .turno-page { page-break-after: always; }
+        .turno-page:last-child { page-break-after: auto; }
+
+        .turno-header { text-align:center; margin-bottom:14px; padding-bottom:10px; border-bottom:2px solid #1b3a5c; }
+        .turno-header h1 { font-size:14pt; font-weight:700; margin-bottom:4px; }
+        .turno-header h2 { font-size:13pt; font-weight:700; color:#1b3a5c; margin-bottom:4px; letter-spacing:1px; }
+        .turno-header .turno-meta { font-size:9.5pt; color:#666; }
+
+        .grado-title { font-size:13pt; font-weight:700; color:#fff; background:#1b3a5c;
+          padding:6px 12px; margin:14px 0 10px 0; border-radius:4px; letter-spacing:1px; }
+
+        .grupo-card { border:1.5px solid #1b3a5c; border-radius:6px; margin-bottom:12px;
+          page-break-inside: avoid; overflow:hidden; }
+        .grupo-head { background:#e8ecf1; padding:6px 12px; display:flex;
+          justify-content:space-between; align-items:center; font-size:11pt; border-bottom:1.5px solid #1b3a5c; }
+        .grupo-stats { font-size:9.5pt; color:#555; font-weight:600; }
+
+        table { width:100%; border-collapse:collapse; }
+        th { background:#f7f9fb; padding:5px 10px; text-align:left; font-size:10pt;
+          font-weight:700; color:#1b3a5c; border-bottom:1px solid #ccc; }
+        td { padding:5px 10px; font-size:10pt; border-bottom:1px solid #eee; line-height:1.3; }
+        tr:last-child td { border-bottom:none; }
+        tr.vacante td.doc em { color:#c53030; font-style:italic; font-weight:600; }
+        td.mat { font-weight:500; }
+        td.doc { font-weight:600; color:#1b3a5c; }
+      </style>
+      </head><body>
+        ${body}
+        <script>
+          document.title = 'Carga_Academica_Ambos_Turnos';
+          setTimeout(() => window.print(), 500);
+        <\/script>
+      </body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) {
+      Toast.show('El navegador bloque\u00f3 la ventana emergente. Permite pop-ups e intenta de nuevo.', 'error');
+      return;
+    }
+    w.document.write(fullHtml);
+    w.document.close();
+    Toast.show('Documento generado. Gu\u00e1rdalo como PDF desde la ventana de impresi\u00f3n.', 'success');
+  };
+
   // ── Render & Events ───────────────────────────────────────────
 
   const switchTab = (tabName) => {
@@ -979,6 +1113,10 @@ const TeachersModule = (() => {
         }
         case 'assign-cell': {
           _handleCellAssign(action);
+          break;
+        }
+        case 'print-carga-masiva': {
+          printCargaMasiva();
           break;
         }
       }
