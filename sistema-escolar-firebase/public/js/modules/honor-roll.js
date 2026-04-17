@@ -166,7 +166,8 @@ const HonorRollModule = (() => {
 
       Object.values(byGroup).forEach(g => {
         g.students.sort((a, b) => b.promedio - a.promedio);
-        g.students = g.students.slice(0, topCount);
+        // Ranking denso + filtrar por top N lugares (empates comparten lugar)
+        g.students = assignDenseRanks(g.students).filter(s => s.rank <= topCount);
       });
 
       const sortedGroups = Object.values(byGroup).sort((a, b) => {
@@ -181,12 +182,12 @@ const HonorRollModule = (() => {
       html += '<div class="stats-grid">';
 
       for (const group of sortedGroups) {
-        const rows = group.students.map((s, i) => {
-          const medalOrRank = i < 3 ? medals[i] : `<span class="text-muted font-bold">${i + 1}</span>`;
+        const rows = group.students.map((s) => {
+          const medalOrRank = s.rank <= 3 ? medals[s.rank - 1] : `<span class="text-muted font-bold">${s.rank}</span>`;
           const gradeStyle = s.promedio >= 9 ? 'background:#1b5e20;color:#fff;' : s.promedio >= 8 ? 'background:#1b3a5c;color:#fff;' : 'background:#6b7280;color:#fff;';
 
           return `
-            <tr${i < 3 ? ' class="font-semibold"' : ''}>
+            <tr${s.rank <= 3 ? ' class="font-semibold"' : ''}>
               <td class="text-center">${medalOrRank}</td>
               <td>${Utils.sanitize(s.nombreCompleto)}</td>
               <td class="text-center text-muted">${s.numMaterias}</td>
@@ -399,12 +400,14 @@ const HonorRollModule = (() => {
 
       // One page per group
       sortedGroups.forEach((group, idx) => {
-        const top = group.students.sort((a, b) => b.promedio - a.promedio).slice(0, topCount);
+        const sorted = group.students.sort((a, b) => b.promedio - a.promedio);
+        // Ranking denso + filtrar por top N lugares (empates comparten lugar)
+        const top = assignDenseRanks(sorted).filter(s => s.rank <= topCount);
         const medalImgs = [MEDAL1, MEDAL2, MEDAL3];
-        const rows = top.map((s, i) => {
-          const medal = i < 3 ? `<span class="medal">${medalImgs[i]}</span>` : `<strong>${i + 1}</strong>`;
+        const rows = top.map((s) => {
+          const medal = s.rank <= 3 ? `<span class="medal">${medalImgs[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
           const avgClass = s.promedio >= 9 ? 'avg-high' : s.promedio >= 8 ? 'avg-good' : 'avg-ok';
-          return `<tr${i < 3 ? ' class="top3"' : ''}>
+          return `<tr${s.rank <= 3 ? ' class="top3"' : ''}>
             <td class="rank">${medal}</td>
             <td class="name">${Utils.sanitize(s.nombreCompleto)}</td>
             <td class="mat">${s.numMaterias}</td>
