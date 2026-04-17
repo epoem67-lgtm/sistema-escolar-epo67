@@ -7,6 +7,24 @@ const HonorRollModule = (() => {
   let groups = [];
   let students = [];
 
+  /**
+   * Asigna ranking denso: alumnos con el mismo promedio comparten lugar,
+   * y el siguiente promedio distinto avanza un solo número.
+   * Ej: 10.0, 10.0, 10.0, 9.8, 9.5  →  1, 1, 1, 2, 3
+   * Requiere array previamente ordenado desc por promedio.
+   */
+  function assignDenseRanks(arr) {
+    let currentRank = 0;
+    let lastPromedio = null;
+    return arr.map(s => {
+      if (s.promedio !== lastPromedio) {
+        currentRank++;
+        lastPromedio = s.promedio;
+      }
+      return { ...s, rank: currentRank };
+    });
+  }
+
   async function render() {
     const container = document.getElementById('moduleContainer');
     if (!container) return;
@@ -202,17 +220,18 @@ const HonorRollModule = (() => {
 
       html += '</div>';
 
-      // ── TOP 5 INSTITUCIONAL POR TURNO ──
+      // ── TOP 10 INSTITUCIONAL POR TURNO (ranking denso, empates comparten lugar) ──
       const turnos = [...new Set(studentAverages.map(s => s.turno))].sort();
-      html += '<h2 class="section-title" style="margin-top:24px;">Top 5 Institucional por Turno</h2>';
+      html += '<h2 class="section-title" style="margin-top:24px;">Top 10 Institucional por Turno</h2>';
       for (const t of turnos) {
-        const top5 = studentAverages.filter(s => s.turno === t).slice(0, 5);
-        if (top5.length === 0) continue;
+        const ranked = assignDenseRanks(studentAverages.filter(s => s.turno === t));
+        const top10 = ranked.filter(s => s.rank <= 10);
+        if (top10.length === 0) continue;
         const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
-        const rows5 = top5.map((s, i) => {
-          const medal = i < 3 ? `<span style="font-size:20px;">${medals[i]}</span>` : `<strong>${i + 1}</strong>`;
+        const rows10 = top10.map((s) => {
+          const medal = s.rank <= 3 ? `<span style="font-size:20px;">${medals[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
           const gradeStyle = s.promedio >= 9 ? 'background:#1b5e20;color:#fff;' : s.promedio >= 8 ? 'background:#1b3a5c;color:#fff;' : 'background:#6b7280;color:#fff;';
-          return `<tr style="font-size:15px;${i < 3 ? 'font-weight:700;' : ''}">
+          return `<tr style="font-size:15px;${s.rank <= 3 ? 'font-weight:700;' : ''}">
             <td style="text-align:center;width:50px;">${medal}</td>
             <td>${Utils.sanitize(s.nombreCompleto)}</td>
             <td style="text-align:center;">${Utils.sanitize(s.grupo)}</td>
@@ -225,18 +244,18 @@ const HonorRollModule = (() => {
           <div class="card" style="margin-bottom:16px;border:2px solid #1b3a5c;">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
               <span style="font-size:28px;">&#127942;</span>
-              <h3 class="section-title" style="margin:0;">TOP 5 INSTITUCIONAL</h3>
+              <h3 class="section-title" style="margin:0;">TOP 10 INSTITUCIONAL</h3>
               <span class="badge ${tClass}" style="font-size:13px;">${Utils.sanitize(t)}</span>
             </div>
             <table class="table-light">
               <thead><tr>
-                <th style="text-align:center;width:50px;">#</th>
+                <th style="text-align:center;width:50px;">Lugar</th>
                 <th>Alumno</th>
                 <th style="text-align:center;">Grupo</th>
                 <th style="text-align:center;">Mat.</th>
                 <th style="text-align:center;">Promedio</th>
               </tr></thead>
-              <tbody>${rows5}</tbody>
+              <tbody>${rows10}</tbody>
             </table>
           </div>`;
       }
@@ -363,7 +382,9 @@ const HonorRollModule = (() => {
       });
 
       const sortedGroups = Object.values(byGroup).sort((a, b) => (a.grado || 0) - (b.grado || 0) || a.grupo.localeCompare(b.grupo));
-      const top5 = studentAverages.slice(0, 5);
+      // Top 10 institucional con ranking denso (empates comparten lugar)
+      const rankedAll = assignDenseRanks(studentAverages);
+      const top10 = rankedAll.filter(s => s.rank <= 10);
 
       if (sortedGroups.length === 0) {
         Toast.show('No hay calificaciones capturadas para este turno y parcial', 'warning');
@@ -371,7 +392,7 @@ const HonorRollModule = (() => {
         return;
       }
 
-      Toast.show('Generando documento con ' + sortedGroups.length + ' cuadros de honor + Top 5...', 'info');
+      Toast.show('Generando documento con ' + sortedGroups.length + ' cuadros de honor + Top 10...', 'info');
 
       // Build single HTML document with all groups + top 5
       let allPagesHtml = '';
@@ -414,11 +435,11 @@ const HonorRollModule = (() => {
           </section>`;
       });
 
-      // Top 5 Institucional page — new elegant design
-      const top5Rows = top5.map((s, i) => {
+      // Top 10 Institucional — ranking denso: empates comparten lugar
+      const top10Rows = top10.map((s) => {
         const medals = [MEDAL1, MEDAL2, MEDAL3];
-        const medal = i < 3 ? `<span class="t5-medal">${medals[i]}</span>` : `<span class="t5-num">${i + 1}</span>`;
-        const highlight = i === 0 ? 'gold-row' : i === 1 ? 'silver-row' : i === 2 ? 'bronze-row' : '';
+        const medal = s.rank <= 3 ? `<span class="t5-medal">${medals[s.rank - 1]}</span>` : `<span class="t5-num">${s.rank}</span>`;
+        const highlight = s.rank === 1 ? 'gold-row' : s.rank === 2 ? 'silver-row' : s.rank === 3 ? 'bronze-row' : '';
         return `<tr class="${highlight}">
           <td class="t5-rank">${medal}</td>
           <td class="t5-name">${Utils.sanitize(s.nombreCompleto)}</td>
@@ -433,7 +454,7 @@ const HonorRollModule = (() => {
           <div class="t5-head">
             <div class="t5-school">ESCUELA PREPARATORIA OFICIAL NUM. 67</div>
             <div class="t5-trophy">${TROFEO}</div>
-            <h1 class="t5-title">TOP 5 INSTITUCIONAL</h1>
+            <h1 class="t5-title">TOP 10 INSTITUCIONAL</h1>
             <div class="t5-subtitle">Excelencia Acad&eacute;mica &mdash; Turno ${Utils.sanitize(turno)}</div>
             <div class="t5-partial">${Utils.sanitize(partialLabel).toUpperCase()}</div>
             <div class="t5-cycle">Ciclo Escolar 2025-2026</div>
@@ -447,7 +468,7 @@ const HonorRollModule = (() => {
                 <th style="width:110px;">Promedio</th>
               </tr>
             </thead>
-            <tbody>${top5Rows}</tbody>
+            <tbody>${top10Rows}</tbody>
           </table>
           <div class="t5-footer">
             <div class="t5-signature">
@@ -551,7 +572,7 @@ const HonorRollModule = (() => {
       w.document.write(fullHtml);
       w.document.close();
 
-      Toast.show('Documento generado con ' + sortedGroups.length + ' grupos + Top 5 institucional. Guarda como PDF.', 'success');
+      Toast.show('Documento generado con ' + sortedGroups.length + ' grupos + Top 10 institucional. Guarda como PDF.', 'success');
     } catch (e) {
       console.error('Error:', e);
       Toast.show('Error: ' + e.message, 'error');
