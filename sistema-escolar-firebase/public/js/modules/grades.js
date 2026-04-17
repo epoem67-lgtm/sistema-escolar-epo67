@@ -294,7 +294,7 @@ const GradesModule = (function () {
         Store.getStudents(),
         Store.getPartials(),
         Store.getGroups(),
-        Store.getGradesByGroup(groupId)
+        Store.getGradesByGroup(groupId, true)
       ]);
 
       students = allStudents
@@ -2011,7 +2011,7 @@ html, body { margin:0; padding:0; height:100%; }
 
     // Load grades for selected group(s) on demand
     try {
-      _admin.allGrades = await Store.getGradesByGroup(_admin.grupo);
+      _admin.allGrades = await Store.getGradesByGroup(_admin.grupo, true);
     } catch (err) {
       console.error('Error loading grades:', err);
       tableContainer.innerHTML = UI.emptyState('error', 'Error al cargar calificaciones');

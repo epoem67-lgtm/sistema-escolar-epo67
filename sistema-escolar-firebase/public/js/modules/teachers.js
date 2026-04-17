@@ -181,10 +181,30 @@ const TeachersModule = (() => {
 
   // ── CRUD: Orientador ──────────────────────────────────────────
 
+  // Orientadores oficiales por nombre (del listado de subdirección)
+  const ORIENTADOR_NAMES = [
+    'CORREA SALGADO ANA ISABEL',
+    'DIAZ CAMARENA SANDRA',
+    'MORLAN ORTIZ NEFTALI MARGARITA',
+    'RANGEL PALACIOS JUANA',
+    'SALAZAR ZUNIGA JOSE EDGAR',
+    'VALDES ESCALONA ROSALVA',
+    'CEDILLO POLO IVONNE GABRIELA',
+    'GARCIA GONZALEZ BEATRIZ ALEJANDRA',
+    'MARTINEZ PEREZ LAURITA',
+    'RODRIGUEZ VIVAS FERNANDA CITLALLI'
+  ];
+
+  function _normalize(s) { return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim(); }
+
   const openOrientadorModal = (group) => {
-    const matchingTeachers = state.teachers.filter(t =>
-      t.turno === group.turno || t.turno === 'AMBOS'
-    );
+    // Filter to only official orientadores that match the turno
+    const orientadorNamesNorm = ORIENTADOR_NAMES.map(n => _normalize(n));
+    const matchingTeachers = state.teachers.filter(t => {
+      const turnoMatch = t.turno === group.turno || t.turno === 'AMBOS';
+      const isOrientador = orientadorNamesNorm.some(on => _normalize(t.nombre).includes(on) || on.includes(_normalize(t.nombre)));
+      return turnoMatch && isOrientador;
+    });
 
     const body = `
       <div class="form-group">
@@ -541,56 +561,47 @@ const TeachersModule = (() => {
     K.TURNOS.forEach(turno => {
       groupsByTurno[turno] = state.groups
         .filter(g => g.turno === turno)
-        .sort((a, b) => a.grado - b.grado || (a.letra || '').localeCompare(b.letra || ''));
+        .sort((a, b) => a.grado - b.grado || (a.nombre || '').localeCompare(b.nombre || ''));
     });
 
     return `
-      <div class="stats-grid">
-        <div class="stat-card--compact">
-          <div class="stat-number">${state.groups.length}</div>
-          <div class="stat-label">Total Grupos</div>
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;gap:20px;align-items:center;">
+          <span class="font-semibold" style="font-size:var(--font-size-lg);">${state.groups.length} grupos</span>
+          ${K.GRADOS.map(g => `<span class="badge" style="font-size:13px;">${state.groups.filter(gr => gr.grado === g).length} de ${g}\u00ba</span>`).join('')}
         </div>
-        ${K.GRADOS.map(g => `
-          <div class="stat-card--compact">
-            <div class="stat-number">${state.groups.filter(gr => gr.grado === g).length}</div>
-            <div class="stat-label">${g}&#176; Grado</div>
-          </div>
-        `).join('')}
       </div>
 
       ${K.TURNOS.map(turno => {
         const grupos = groupsByTurno[turno];
         if (!grupos || grupos.length === 0) return '';
         return `
-          <div class="card">
-            <h3 class="section-title">
-              ${turnoBadge(turno)}
-            </h3>
+          <div class="card" style="margin-bottom:12px;">
+            <h3 class="section-title">${S(turno)}</h3>
             <div class="table-container">
-              <table class="table-light">
-                <thead>
-                  <tr>
-                    <th>Grupo</th>
-                    <th>Grado</th>
-                    <th>Letra</th>
-                    <th>Orientador</th>
-                    <th>Estado</th>
-                    <th>Acciones</th>
-                  </tr>
-                </thead>
+              <table class="table-light" style="font-size:13px;">
+                <thead><tr>
+                  <th style="width:70px;">Grupo</th>
+                  <th style="width:60px;">Grado</th>
+                  <th>Orientador(a)</th>
+                  <th style="width:100px;text-align:center;">Acci\u00f3n</th>
+                </tr></thead>
                 <tbody>
-                  ${grupos.map(g => `
-                    <tr>
-                      <td><strong>${S(g.nombre) || 'N/A'}</strong></td>
-                      <td>${g.grado || 'N/A'}&#176;</td>
-                      <td>${S(g.letra) || 'N/A'}</td>
-                      <td>${S(g.orientador) || 'Sin asignar'}</td>
-                      <td><span class="badge badge-success">${S(g.status) || 'N/A'}</span></td>
-                      <td>
-                        <button class="btn btn-sm btn-primary" data-action="assign-orientador" data-id="${S(g.id)}">Asignar Orientador</button>
+                  ${grupos.map(g => {
+                    const hasOrientador = g.orientador && g.orientador.trim();
+                    return `<tr>
+                      <td class="font-semibold">${S(g.nombre)}</td>
+                      <td>${g.grado}\u00ba</td>
+                      <td>${hasOrientador
+                        ? `<span class="font-semibold" style="color:var(--color-primary);">${S(g.orientador)}</span>`
+                        : '<span style="color:var(--color-danger);font-weight:600;">Sin asignar</span>'}</td>
+                      <td style="text-align:center;">
+                        <button class="btn btn-sm ${hasOrientador ? 'btn-outline' : 'btn-warning'}" data-action="assign-orientador" data-id="${S(g.id)}" style="font-size:11px;">
+                          ${hasOrientador ? 'Cambiar' : 'Asignar'}
+                        </button>
                       </td>
-                    </tr>
-                  `).join('')}
+                    </tr>`;
+                  }).join('')}
                 </tbody>
               </table>
             </div>
@@ -610,98 +621,296 @@ const TeachersModule = (() => {
         .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
     });
 
-    // Build a map: subjectId -> array of teacher info from assignments
+    // Build map: subjectId -> { turno -> [{teacherName, groupName}] }
     const teachersBySubject = {};
     state.assignments.forEach(a => {
-      if (!teachersBySubject[a.subjectId]) {
-        teachersBySubject[a.subjectId] = [];
-      }
-      // Filter by turno if active
-      if (state.materiasFilterTurno === 'all' || a.turno === state.materiasFilterTurno) {
-        const exists = teachersBySubject[a.subjectId].some(
-          x => x.teacherId === a.teacherId && x.turno === a.turno
-        );
-        if (!exists) {
-          teachersBySubject[a.subjectId].push({
-            teacherId: a.teacherId,
-            teacherName: a.teacherName,
-            turno: a.turno
-          });
-        }
+      if (!teachersBySubject[a.subjectId]) teachersBySubject[a.subjectId] = {};
+      const turno = a.turno || 'SIN TURNO';
+      if (state.materiasFilterTurno !== 'all' && turno !== state.materiasFilterTurno) return;
+      if (!teachersBySubject[a.subjectId][turno]) teachersBySubject[a.subjectId][turno] = [];
+      const exists = teachersBySubject[a.subjectId][turno].some(x => x.teacherName === a.teacherName && x.groupName === a.groupName);
+      if (!exists) {
+        teachersBySubject[a.subjectId][turno].push({
+          teacherName: a.teacherName || 'Sin asignar',
+          groupName: a.groupName || a.groupId || ''
+        });
       }
     });
 
     return `
-      <div class="stats-grid">
-        <div class="stat-card--compact">
-          <div class="stat-number">${state.subjects.length}</div>
-          <div class="stat-label">Total Materias</div>
-        </div>
-        ${K.GRADOS.map(g => `
-          <div class="stat-card--compact">
-            <div class="stat-number">${subjectsByGrado[g].length}</div>
-            <div class="stat-label">${g}&#176; Grado</div>
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+          <div style="display:flex;gap:20px;align-items:center;">
+            <span class="font-semibold" style="font-size:var(--font-size-lg);">${state.subjects.length} materias</span>
+            ${K.GRADOS.map(g => `<span class="badge" style="font-size:13px;">${subjectsByGrado[g].length} de ${g}&#176;</span>`).join('')}
           </div>
-        `).join('')}
-      </div>
-
-      <div class="card">
-        <div class="filter-bar">
-          <div class="form-group">
-            <label>Filtrar docentes por turno:</label>
-            <select id="materiasFilterTurno">
-              <option value="all" ${state.materiasFilterTurno === 'all' ? 'selected' : ''}>Todos los turnos</option>
-              ${K.TURNOS.map(t => `
-                <option value="${t}" ${state.materiasFilterTurno === t ? 'selected' : ''}>${S(t)}</option>
-              `).join('')}
-            </select>
-          </div>
+          <select id="materiasFilterTurno" style="min-width:160px;">
+            <option value="all" ${state.materiasFilterTurno === 'all' ? 'selected' : ''}>Todos los turnos</option>
+            ${K.TURNOS.map(t => `<option value="${t}" ${state.materiasFilterTurno === t ? 'selected' : ''}>${S(t)}</option>`).join('')}
+          </select>
         </div>
       </div>
 
       ${K.GRADOS.map(grado => {
         const subjects = subjectsByGrado[grado];
+        if (subjects.length === 0) return '';
+
+        const rows = subjects.map((s, i) => {
+          const assigned = teachersBySubject[s.id] || {};
+          const turnos = Object.keys(assigned).sort();
+          const docentesHtml = turnos.length > 0
+            ? turnos.map(t => {
+                const teachers = assigned[t];
+                return teachers.map(tc =>
+                  `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                    <span class="font-semibold" style="font-size:12px;">${S(tc.teacherName)}</span>
+                    <span class="badge ${t === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino'}" style="font-size:10px;">${S(t).substring(0,3)}</span>
+                    <span class="text-muted" style="font-size:11px;">${S(tc.groupName)}</span>
+                  </div>`
+                ).join('');
+              }).join('')
+            : '<span class="text-muted" style="font-size:12px;">Sin asignar</span>';
+
+          return `<tr>
+            <td style="text-align:center;color:var(--color-text-lighter);width:30px;">${i + 1}</td>
+            <td class="font-semibold" style="font-size:13px;">${S(K.getUACNombre(s.nombre))}</td>
+            <td>${docentesHtml}</td>
+          </tr>`;
+        }).join('');
+
         return `
-          <div class="card">
-            <h3 class="section-title">${grado}&#176; Grado</h3>
-            ${subjects.length > 0 ? `
-              <div class="subject-grid">
-                ${subjects.map(s => {
-                  const assigned = teachersBySubject[s.id] || [];
-                  return `
-                    <div class="subject-card">
-                      <div class="subject-card-name">${S(s.nombre) || 'N/A'}</div>
-                      <div class="subject-card-meta">
-                        <span>${s.grado}&#176; Grado</span>
-                        <span class="badge badge-success">Activa</span>
-                      </div>
-                      ${assigned.length > 0 ? `
-                        <div class="subject-card-teachers" style="margin-top:6px;font-size:0.85em;color:var(--text-secondary);">
-                          ${assigned.map(a => `
-                            <div>${S(a.teacherName)} ${turnoBadge(a.turno)}</div>
-                          `).join('')}
-                        </div>
-                      ` : `
-                        <div style="margin-top:6px;font-size:0.85em;color:var(--text-secondary);">Sin docentes asignados</div>
-                      `}
-                    </div>
-                  `;
-                }).join('')}
-              </div>
-            ` : `
-              <div class="empty-state">
-                <div class="empty-state-text">No hay materias para este grado</div>
-              </div>
-            `}
-          </div>
-        `;
+          <div class="card" style="margin-bottom:12px;">
+            <h3 class="section-title">${grado}&#176; Grado <span class="text-muted" style="font-weight:400;font-size:14px;">(${subjects.length} materias)</span></h3>
+            <div class="table-container">
+              <table class="table-light" style="font-size:13px;">
+                <thead><tr>
+                  <th style="width:30px;">#</th>
+                  <th style="width:40%;">Materia</th>
+                  <th>Docentes asignados</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </div>`;
       }).join('')}
     `;
   };
 
-  // ── Tab: Asignaciones ─────────────────────────────────────────
+  // ── Tab: Carga Académica (cuadrícula visual) ──────────────────
 
-  const renderAsignacionesTab = () => {
+  const renderCargaTab = () => {
+    const turno = state.assignmentFilterTurno === 'all' ? '' : state.assignmentFilterTurno;
+    const grado = state.assignmentFilterGrado === 'all' ? '' : state.assignmentFilterGrado;
+
+    // Filter controls
+    let html = `
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+          <div class="form-group" style="margin:0;">
+            <label style="font-weight:600;">Turno</label>
+            <select id="cargaTurno">
+              <option value="">Selecciona turno</option>
+              ${K.TURNOS.map(t => `<option value="${t}" ${turno === t ? 'selected' : ''}>${S(t)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label style="font-weight:600;">Grado</label>
+            <select id="cargaGrado" ${!turno ? 'disabled' : ''}>
+              <option value="">Selecciona grado</option>
+              ${K.GRADOS.map(g => `<option value="${g}" ${String(grado) === String(g) ? 'selected' : ''}>${g}\u00ba</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </div>`;
+
+    if (!turno || !grado) {
+      html += `<div class="empty-state"><span class="material-icons-round empty-state-icon">grid_on</span><p class="empty-state-text">Selecciona turno y grado para ver la cuadr\u00edcula de carga acad\u00e9mica</p></div>`;
+      return html;
+    }
+
+    // Get groups and subjects for this turno+grado
+    const groups = state.groups.filter(g => g.turno === turno && String(g.grado) === String(grado))
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    const subjects = state.subjects.filter(s => String(s.grado) === String(grado))
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+
+    if (groups.length === 0 || subjects.length === 0) {
+      html += `<div class="empty-state"><span class="material-icons-round empty-state-icon">info</span><p class="empty-state-text">No hay grupos o materias para ${S(turno)} ${grado}\u00ba</p></div>`;
+      return html;
+    }
+
+    // Build assignment lookup: subjectId_groupId -> assignment
+    const asgMap = {};
+    state.assignments.forEach(a => {
+      const key = a.subjectId + '_' + a.groupId;
+      asgMap[key] = a;
+    });
+
+    // Stats
+    const totalCells = subjects.length * groups.length;
+    const assigned = Object.keys(asgMap).filter(k => {
+      const [sid, gid] = k.split('_');
+      return subjects.some(s => s.id === sid) && groups.some(g => g.id === gid);
+    }).length;
+    const vacant = totalCells - assigned;
+
+    // Teachers available for this turno
+    const availableTeachers = state.teachers.filter(t => t.turno === turno || t.turno === 'AMBOS')
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+
+    // Stats bar
+    const pct = totalCells > 0 ? Math.round(assigned / totalCells * 100) : 0;
+    html += `
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span class="font-semibold">${assigned} de ${totalCells} asignaciones completas (${pct}%)</span>
+          ${vacant > 0 ? `<span style="color:var(--color-danger);font-weight:600;">${vacant} vacantes</span>` : '<span style="color:var(--color-success);font-weight:600;">Carga completa</span>'}
+        </div>
+        <div class="progress-bar" style="height:10px;border-radius:5px;">
+          <div class="progress-fill" style="width:${pct}%;background:${pct >= 100 ? 'var(--color-success)' : pct > 50 ? '#d69e2e' : 'var(--color-danger)'};border-radius:5px;"></div>
+        </div>
+      </div>`;
+
+    // Grid table
+    const headerCols = groups.map(g => `<th style="text-align:center;min-width:140px;font-size:13px;">${S(g.nombre)}</th>`).join('');
+
+    const rows = subjects.map(sub => {
+      const cells = groups.map(grp => {
+        const key = sub.id + '_' + grp.id;
+        const asg = asgMap[key];
+        if (asg) {
+          // Assigned — show teacher name, clickeable to change
+          const shortName = (asg.teacherName || '').split(' ').slice(0, 2).join(' ');
+          return `<td style="text-align:center;cursor:pointer;padding:6px 4px;" data-action="assign-cell" data-subject-id="${sub.id}" data-subject-name="${S(sub.nombre)}" data-group-id="${grp.id}" data-group-name="${S(grp.nombre)}" data-grado="${grado}" data-turno="${turno}" data-asg-id="${asg.id}" title="Clic para cambiar: ${S(asg.teacherName)}">
+            <span style="font-size:11px;font-weight:600;color:var(--color-primary);">${S(shortName)}</span>
+          </td>`;
+        } else {
+          // Vacant — red + button
+          return `<td style="text-align:center;cursor:pointer;background:rgba(229,62,62,0.06);padding:6px 4px;" data-action="assign-cell" data-subject-id="${sub.id}" data-subject-name="${S(sub.nombre)}" data-group-id="${grp.id}" data-group-name="${S(grp.nombre)}" data-grado="${grado}" data-turno="${turno}" data-asg-id="" title="Clic para asignar">
+            <span style="font-size:18px;color:var(--color-danger);opacity:0.4;">+</span>
+          </td>`;
+        }
+      }).join('');
+
+      return `<tr>
+        <td class="font-semibold" style="font-size:12px;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;" title="${S(K.getUACNombre(sub.nombre))}">${S(K.getUACNombre(sub.nombre))}</td>
+        ${cells}
+      </tr>`;
+    }).join('');
+
+    html += `
+      <div class="card">
+        <div class="table-container" style="overflow-x:auto;">
+          <table class="table-light" style="font-size:13px;">
+            <thead><tr>
+              <th style="min-width:200px;">Materia</th>
+              ${headerCols}
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+
+    // Hidden select template for inline assignment
+    html += `
+      <div id="carga-select-tpl" style="display:none;">
+        <select id="carga-teacher-select" style="font-size:11px;width:130px;padding:2px;">
+          <option value="">-- Elegir --</option>
+          <option value="__remove__" style="color:var(--color-danger);">Quitar asignaci\u00f3n</option>
+          ${availableTeachers.map(t => `<option value="${t.id}" data-name="${S(t.nombre)}">${S(t.nombre)}</option>`).join('')}
+        </select>
+      </div>`;
+
+    return html;
+  };
+
+  // Handle inline assignment from grid cell click
+  const _handleCellAssign = async (cell) => {
+    const subjectId = cell.dataset.subjectId;
+    const subjectName = cell.dataset.subjectName;
+    const groupId = cell.dataset.groupId;
+    const groupName = cell.dataset.groupName;
+    const grado = cell.dataset.grado;
+    const turno = cell.dataset.turno;
+    const existingAsgId = cell.dataset.asgId;
+
+    // Clone select template into cell
+    const tpl = document.getElementById('carga-select-tpl');
+    if (!tpl) return;
+    const select = tpl.querySelector('select').cloneNode(true);
+    select.id = '';
+    select.style.display = '';
+
+    // Pre-select current teacher if exists
+    if (existingAsgId) {
+      const asg = state.assignments.find(a => a.id === existingAsgId);
+      if (asg) {
+        for (const opt of select.options) {
+          if (opt.value === asg.teacherId) { opt.selected = true; break; }
+        }
+      }
+    }
+
+    cell.innerHTML = '';
+    cell.appendChild(select);
+    select.focus();
+
+    const cleanup = async () => {
+      select.removeEventListener('change', onChange);
+      select.removeEventListener('blur', onBlur);
+    };
+
+    const onChange = async () => {
+      const teacherId = select.value;
+      await cleanup();
+
+      if (!teacherId) { render(); return; }
+
+      if (teacherId === '__remove__' && existingAsgId) {
+        // Remove assignment
+        try {
+          await db.collection('assignments').doc(existingAsgId).delete();
+          DB.audit('eliminar', 'asignacion', existingAsgId, { description: `Asignaci\u00f3n eliminada: ${subjectName} (${groupName})` });
+          Toast.show('Asignaci\u00f3n eliminada', 'info');
+          await invalidateAndReload('assignments');
+        } catch (e) { Toast.show('Error: ' + e.message, 'error'); render(); }
+        return;
+      }
+
+      if (teacherId === '__remove__') { render(); return; }
+
+      const teacherName = select.options[select.selectedIndex]?.getAttribute('data-name') || '';
+
+      const data = { teacherId, teacherName, subjectId, subjectName, groupId, groupName, grado, turno };
+
+      try {
+        if (existingAsgId) {
+          await db.collection('assignments').doc(existingAsgId).update(data);
+          DB.audit('editar', 'asignacion', existingAsgId, { description: `Asignaci\u00f3n actualizada: ${teacherName} \u2192 ${subjectName} (${groupName})` });
+          Toast.show('Asignaci\u00f3n actualizada', 'success');
+        } else {
+          const ref = await db.collection('assignments').add(data);
+          DB.audit('crear', 'asignacion', ref.id, { description: `Asignaci\u00f3n creada: ${teacherName} \u2192 ${subjectName} (${groupName})` });
+          Toast.show('Asignaci\u00f3n creada', 'success');
+        }
+        await invalidateAndReload('assignments');
+      } catch (e) {
+        Toast.show('Error: ' + e.message, 'error');
+        render();
+      }
+    };
+
+    const onBlur = () => { setTimeout(() => { if (document.activeElement !== select) render(); }, 200); };
+
+    select.addEventListener('change', onChange);
+    select.addEventListener('blur', onBlur);
+  };
+
+  // Legacy renderAsignacionesTab — redirect to carga
+  const renderAsignacionesTab = () => renderCargaTab();
+
+  // ── OLD ASIGNACIONES CODE (disabled) ──
+  const _oldAsignacionesTab_DISABLED = () => {
     let filtered = state.selectedGroup === 'all'
       ? [...state.assignments]
       : state.assignments.filter(a => a.groupId === state.selectedGroup);
@@ -913,6 +1122,10 @@ const TeachersModule = (() => {
           if (assignment) deleteAssignment(assignment);
           break;
         }
+        case 'assign-cell': {
+          _handleCellAssign(action);
+          break;
+        }
       }
     });
 
@@ -948,6 +1161,15 @@ const TeachersModule = (() => {
         state.assignmentFilterGrado = e.target.value;
         render();
       }
+      if (e.target.id === 'cargaTurno') {
+        state.assignmentFilterTurno = e.target.value;
+        state.assignmentFilterGrado = 'all';
+        render();
+      }
+      if (e.target.id === 'cargaGrado') {
+        state.assignmentFilterGrado = e.target.value;
+        render();
+      }
     });
   };
 
@@ -964,14 +1186,14 @@ const TeachersModule = (() => {
       case 'docentes':     tabContent = renderTeachersTab();     break;
       case 'grupos':       tabContent = renderGruposTab();       break;
       case 'materias':     tabContent = renderMateriasTab();     break;
-      case 'asignaciones': tabContent = renderAsignacionesTab(); break;
+      case 'carga':        tabContent = renderCargaTab();        break;
     }
 
     const tabs = [
       { id: 'docentes',     label: 'Docentes' },
-      { id: 'grupos',       label: 'Grupos' },
-      { id: 'materias',     label: 'Materias' },
-      { id: 'asignaciones', label: 'Asignaciones' }
+      { id: 'grupos',       label: 'Grupos y Orientadores' },
+      { id: 'carga',        label: 'Carga Acad\u00e9mica' },
+      { id: 'materias',     label: 'Materias' }
     ];
 
     container.innerHTML = `

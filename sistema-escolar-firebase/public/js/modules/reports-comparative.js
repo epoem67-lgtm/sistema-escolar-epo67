@@ -86,7 +86,7 @@ const ReportsComparativeModule = (() => {
       ]);
       // Load grades per-group instead of entire collection
       const relevantGroupIds = (oriGroups || allGroups.map(g => g.id));
-      const allGrades = await Store.getGradesByGroups(relevantGroupIds);
+      const allGrades = await Store.getGradesByGroups(relevantGroupIds, true);
 
       // Apply filters
       let students = allStudents.filter(s => s.estatus === 'ACTIVO');
@@ -244,7 +244,7 @@ const ReportsComparativeModule = (() => {
 
     // Need all grades (not filtered by parcial) — use cached per-group grades
     const relevantGroupIds = [...new Set(students.map(s => s.groupId).filter(Boolean))];
-    Store.getGradesByGroups(relevantGroupIds).then(allGrades => {
+    Store.getGradesByGroups(relevantGroupIds, true).then(allGrades => {
       const studentIds = new Set(students.map(s => s.id));
       const filteredGrades = allGrades.filter(g => studentIds.has(g.studentId));
 

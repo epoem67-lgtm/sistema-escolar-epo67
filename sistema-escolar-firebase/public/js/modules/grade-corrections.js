@@ -196,7 +196,7 @@ const GradeCorrectionsModule = (function () {
 
     try {
       const [gradesList, corrSnap] = await Promise.all([
-        Store.getGradesByGroup(groupId),
+        Store.getGradesByGroup(groupId, true),
         db.collection('gradeCorrections').where('groupId', '==', groupId).where('partial', '==', partial).get()
       ]);
 

@@ -32,7 +32,7 @@ const CapturaProgressModule = (function () {
       const currentPartialId = openPartial ? openPartial.id : K.PARCIALES[0].id;
 
       // Load all grades in a single query (cached 5 min)
-      const allGrades = await Store.getAllGrades();
+      const allGrades = await Store.getAllGrades(true);
       const partialGrades = allGrades.filter(g => g.partial === currentPartialId);
 
       // Build lookup maps

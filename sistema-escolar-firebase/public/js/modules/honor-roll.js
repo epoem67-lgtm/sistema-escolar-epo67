@@ -56,7 +56,8 @@ const HonorRollModule = (() => {
           </div>
           <div class="filter-bar-actions">
             <button class="btn btn-primary" data-action="generate">Generar</button>
-            <button class="btn btn-success" data-action="print">Imprimir</button>
+            <button class="btn btn-outline" data-action="print"><span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>Imprimir</button>
+            <button class="btn btn-success" data-action="mass-print"><span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">file_download</span>Masiva por Grupo</button>
           </div>
         </div>
 
@@ -108,7 +109,7 @@ const HonorRollModule = (() => {
 
       // Get grades via Store cache (per-group), filtered to relevant groups only
       const relevantGroupIds = [...new Set(filtered.map(s => s.groupId).filter(Boolean))];
-      const allGrades = await Store.getGradesByGroups(relevantGroupIds);
+      const allGrades = await Store.getGradesByGroups(relevantGroupIds, true);
 
       const gradesByStudent = {};
       for (const g of allGrades) {
@@ -164,14 +165,14 @@ const HonorRollModule = (() => {
       for (const group of sortedGroups) {
         const rows = group.students.map((s, i) => {
           const medalOrRank = i < 3 ? medals[i] : `<span class="text-muted font-bold">${i + 1}</span>`;
-          const gradeClass = s.promedio >= 9 ? 'grade-badge--excellent' : s.promedio >= 8 ? 'grade-badge--good' : s.promedio >= 7 ? 'grade-badge--fair' : 'grade-badge--fail';
+          const gradeStyle = s.promedio >= 9 ? 'background:#1b5e20;color:#fff;' : s.promedio >= 8 ? 'background:#1b3a5c;color:#fff;' : 'background:#6b7280;color:#fff;';
 
           return `
             <tr${i < 3 ? ' class="font-semibold"' : ''}>
               <td class="text-center">${medalOrRank}</td>
               <td>${Utils.sanitize(s.nombreCompleto)}</td>
               <td class="text-center text-muted">${s.numMaterias}</td>
-              <td class="text-center"><span class="grade-badge ${gradeClass}">${s.promedio.toFixed(1)}</span></td>
+              <td class="text-center"><span style="display:inline-block;padding:4px 12px;border-radius:6px;font-weight:700;font-size:14px;${gradeStyle}">${s.promedio.toFixed(1)}</span></td>
             </tr>
           `;
         }).join('');
@@ -200,6 +201,46 @@ const HonorRollModule = (() => {
       }
 
       html += '</div>';
+
+      // ── TOP 5 INSTITUCIONAL POR TURNO ──
+      const turnos = [...new Set(studentAverages.map(s => s.turno))].sort();
+      html += '<h2 class="section-title" style="margin-top:24px;">Top 5 Institucional por Turno</h2>';
+      for (const t of turnos) {
+        const top5 = studentAverages.filter(s => s.turno === t).slice(0, 5);
+        if (top5.length === 0) continue;
+        const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
+        const rows5 = top5.map((s, i) => {
+          const medal = i < 3 ? `<span style="font-size:20px;">${medals[i]}</span>` : `<strong>${i + 1}</strong>`;
+          const gradeStyle = s.promedio >= 9 ? 'background:#1b5e20;color:#fff;' : s.promedio >= 8 ? 'background:#1b3a5c;color:#fff;' : 'background:#6b7280;color:#fff;';
+          return `<tr style="font-size:15px;${i < 3 ? 'font-weight:700;' : ''}">
+            <td style="text-align:center;width:50px;">${medal}</td>
+            <td>${Utils.sanitize(s.nombreCompleto)}</td>
+            <td style="text-align:center;">${Utils.sanitize(s.grupo)}</td>
+            <td style="text-align:center;">${s.numMaterias}</td>
+            <td style="text-align:center;"><span style="display:inline-block;padding:6px 16px;border-radius:8px;font-weight:800;font-size:16px;${gradeStyle}">${s.promedio.toFixed(2)}</span></td>
+          </tr>`;
+        }).join('');
+        const tClass = t === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino';
+        html += `
+          <div class="card" style="margin-bottom:16px;border:2px solid #1b3a5c;">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+              <span style="font-size:28px;">&#127942;</span>
+              <h3 class="section-title" style="margin:0;">TOP 5 INSTITUCIONAL</h3>
+              <span class="badge ${tClass}" style="font-size:13px;">${Utils.sanitize(t)}</span>
+            </div>
+            <table class="table-light">
+              <thead><tr>
+                <th style="text-align:center;width:50px;">#</th>
+                <th>Alumno</th>
+                <th style="text-align:center;">Grupo</th>
+                <th style="text-align:center;">Mat.</th>
+                <th style="text-align:center;">Promedio</th>
+              </tr></thead>
+              <tbody>${rows5}</tbody>
+            </table>
+          </div>`;
+      }
+
       resultsDiv.innerHTML = html;
     } catch (e) {
       console.error('Error generando cuadro de honor:', e);
@@ -219,18 +260,303 @@ const HonorRollModule = (() => {
     const grado = document.getElementById('hr-grado').value;
     const partial = document.getElementById('hr-partial').value;
     const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
-    const filterDesc = `${turno || 'Todos los turnos'} - ${grado ? `Grado ${grado}` : 'Todos los grados'} - ${partialLabel}`;
+    const turnoLabel = turno || 'AMBOS TURNOS';
+    const gradoLabel = grado ? `${grado}\u00ba GRADO` : 'TODOS LOS GRADOS';
 
     const printWindow = window.open('', '_blank');
-    printWindow.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Cuadro de Honor - EPO 67</title>
-      <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;padding:20px;color:#1f2937}h1{text-align:center;font-size:24px;margin-bottom:8px}
-      .filter-info{text-align:center;font-size:13px;color:#6b7280;margin-bottom:20px}.honor-card{page-break-inside:avoid;margin-bottom:24px;border:1px solid #e5e7eb;padding:16px;border-radius:8px}
-      table{width:100%;border-collapse:collapse}th{background:#f3f4f6;padding:8px;text-align:left;font-weight:600;font-size:12px;color:#6b7280;border-bottom:1px solid #e5e7eb}
-      td{padding:8px;border-bottom:1px solid #f3f4f6}.school-footer{margin-top:30px;text-align:center;font-size:12px;color:#9ca3af}@media print{body{padding:0}}</style>
-      </head><body><h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1><p class="filter-info">Cuadro de Honor - ${Utils.sanitize(filterDesc)}</p>
-      ${results.innerHTML}<div class="school-footer"><p>Generado por el Sistema Escolar EPO 67</p></div>
-      <script>setTimeout(()=>window.print(),500)<\/script></body></html>`);
+    printWindow.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+      <title>Cuadro de Honor EPO 67</title>
+      <style>
+        @page { size: letter portrait; margin: 14mm 16mm; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #000; }
+        -webkit-print-color-adjust: exact; print-color-adjust: exact;
+
+        .header { text-align:center; margin-bottom:16px; }
+        .header h1 { font-size:16pt; font-weight:700; margin-bottom:4px; }
+        .header h2 { font-size:14pt; font-weight:700; margin-bottom:4px; }
+        .header .info { font-size:12pt; color:#333; margin-bottom:4px; }
+
+        .group-card { page-break-inside:avoid; margin-bottom:20px; border:2px solid #1b3a5c; border-radius:8px; overflow:hidden; }
+        .group-header { background:#1b3a5c; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center;
+          -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+        .group-header h3 { font-size:14pt; font-weight:700; }
+        .group-header .turno { font-size:11pt; background:rgba(255,255,255,.2); padding:3px 10px; border-radius:4px; }
+
+        table { width:100%; border-collapse:collapse; }
+        th { background:#e8ecf1; padding:8px 12px; text-align:left; font-size:11pt; font-weight:700; color:#1b3a5c; border-bottom:2px solid #1b3a5c;
+          -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+        td { padding:8px 12px; font-size:12pt; border-bottom:1px solid #ddd; }
+        tr:nth-child(even) { background:#f7f9fb; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+
+        .rank { font-size:14pt; font-weight:800; text-align:center; width:40px; }
+        .rank-1 { color:#d4782a; }
+        .rank-2 { color:#1b3a5c; }
+        .rank-3 { color:#6b7280; }
+        .name { font-weight:600; }
+        .top3 { font-weight:700; }
+        .avg { font-size:13pt; font-weight:800; text-align:center; }
+        .avg-high { color:#1b5e20; }
+        .avg-good { color:#1b3a5c; }
+        .avg-ok { color:#6b7280; }
+
+        .medal { font-size:16pt; text-align:center; width:40px; }
+
+        .footer { text-align:center; margin-top:20px; font-size:9pt; color:#888; }
+      </style>
+      </head><body>
+        <div class="header">
+          <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
+          <h2>CUADRO DE HONOR</h2>
+          <div class="info">${Utils.sanitize(partialLabel).toUpperCase()} &mdash; ${Utils.sanitize(turnoLabel)} &mdash; ${Utils.sanitize(gradoLabel)}</div>
+          <div class="info" style="font-size:10pt;color:#666;">Ciclo Escolar 2025-2026</div>
+        </div>
+        ${results.innerHTML}
+        <div class="footer">Generado por Sistema Escolar EPO 67 &mdash; ${new Date().toLocaleDateString('es-MX')}</div>
+        <script>document.title=' ';setTimeout(()=>window.print(),500)<\/script>
+      </body></html>`);
     printWindow.document.close();
+  }
+
+  let _massPrinting = false;
+  async function massPrintHonorRoll() {
+    if (_massPrinting) return;
+    _massPrinting = true;
+
+    const turno = document.getElementById('hr-turno').value;
+    const partial = document.getElementById('hr-partial').value;
+    const topCount = parseInt(document.getElementById('hr-top').value);
+
+    if (!turno) { Toast.show('Selecciona un turno', 'warning'); _massPrinting = false; return; }
+
+    const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
+    // Medallas como caracteres reales (surrogate pairs)
+    const TROFEO = '\uD83C\uDFC6';  // 🏆
+    const MEDAL1 = '\uD83E\uDD47';  // 🥇
+    const MEDAL2 = '\uD83E\uDD48';  // 🥈
+    const MEDAL3 = '\uD83E\uDD49';  // 🥉
+
+    try {
+      const filtered = students.filter(s => s.turno === turno);
+      const relevantGroupIds = [...new Set(filtered.map(s => s.groupId).filter(Boolean))];
+      const allGrades = await Store.getGradesByGroups(relevantGroupIds, true);
+
+      const gradesByStudent = {};
+      for (const g of allGrades) {
+        if (g.partial !== partial) continue;
+        if (!gradesByStudent[g.studentId]) gradesByStudent[g.studentId] = [];
+        gradesByStudent[g.studentId].push(g.value || 0);
+      }
+
+      const studentAverages = filtered.map(s => {
+        const grades = gradesByStudent[s.id] || [];
+        const avg = grades.length > 0 ? grades.reduce((a, b) => a + b, 0) / grades.length : 0;
+        return { ...s, promedio: Math.round(avg * 100) / 100, numMaterias: grades.length };
+      }).filter(s => s.numMaterias > 0).sort((a, b) => b.promedio - a.promedio);
+
+      // Group by grupo
+      const byGroup = {};
+      studentAverages.forEach(s => {
+        const key = s.grupo;
+        if (!byGroup[key]) byGroup[key] = { turno: s.turno, grupo: s.grupo, grado: s.grado, students: [] };
+        byGroup[key].students.push(s);
+      });
+
+      const sortedGroups = Object.values(byGroup).sort((a, b) => (a.grado || 0) - (b.grado || 0) || a.grupo.localeCompare(b.grupo));
+      const top5 = studentAverages.slice(0, 5);
+
+      if (sortedGroups.length === 0) {
+        Toast.show('No hay calificaciones capturadas para este turno y parcial', 'warning');
+        _massPrinting = false;
+        return;
+      }
+
+      Toast.show('Generando documento con ' + sortedGroups.length + ' cuadros de honor + Top 5...', 'info');
+
+      // Build single HTML document with all groups + top 5
+      let allPagesHtml = '';
+
+      // One page per group
+      sortedGroups.forEach((group, idx) => {
+        const top = group.students.sort((a, b) => b.promedio - a.promedio).slice(0, topCount);
+        const medalImgs = [MEDAL1, MEDAL2, MEDAL3];
+        const rows = top.map((s, i) => {
+          const medal = i < 3 ? `<span class="medal">${medalImgs[i]}</span>` : `<strong>${i + 1}</strong>`;
+          const avgClass = s.promedio >= 9 ? 'avg-high' : s.promedio >= 8 ? 'avg-good' : 'avg-ok';
+          return `<tr${i < 3 ? ' class="top3"' : ''}>
+            <td class="rank">${medal}</td>
+            <td class="name">${Utils.sanitize(s.nombreCompleto)}</td>
+            <td class="mat">${s.numMaterias}</td>
+            <td><span class="avg ${avgClass}">${s.promedio.toFixed(1)}</span></td>
+          </tr>`;
+        }).join('');
+
+        allPagesHtml += `
+          <section class="page">
+            <div class="hdr">
+              <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
+              <h2>CUADRO DE HONOR</h2>
+              <div class="info">${Utils.sanitize(partialLabel).toUpperCase()} &mdash; TURNO ${Utils.sanitize(turno)}</div>
+              <div class="info subtle">Ciclo Escolar 2025-2026</div>
+            </div>
+            <div class="group-card">
+              <div class="group-header">
+                <span>${TROFEO} GRUPO ${Utils.sanitize(group.grupo)}</span>
+                <span class="badge-g">${group.grado}&ordm; GRADO</span>
+              </div>
+              <table>
+                <thead>
+                  <tr><th style="width:50px;">#</th><th>Alumno</th><th style="width:60px;text-align:center;">Mat.</th><th style="width:90px;text-align:center;">Promedio</th></tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </section>`;
+      });
+
+      // Top 5 Institucional page — new elegant design
+      const top5Rows = top5.map((s, i) => {
+        const medals = [MEDAL1, MEDAL2, MEDAL3];
+        const medal = i < 3 ? `<span class="t5-medal">${medals[i]}</span>` : `<span class="t5-num">${i + 1}</span>`;
+        const highlight = i === 0 ? 'gold-row' : i === 1 ? 'silver-row' : i === 2 ? 'bronze-row' : '';
+        return `<tr class="${highlight}">
+          <td class="t5-rank">${medal}</td>
+          <td class="t5-name">${Utils.sanitize(s.nombreCompleto)}</td>
+          <td class="t5-group">${Utils.sanitize(s.grupo)}</td>
+          <td class="t5-avg"><span class="t5-avg-badge">${s.promedio.toFixed(2)}</span></td>
+        </tr>`;
+      }).join('');
+
+      allPagesHtml += `
+        <section class="page t5-page">
+          <div class="t5-ornament"></div>
+          <div class="t5-head">
+            <div class="t5-school">ESCUELA PREPARATORIA OFICIAL NUM. 67</div>
+            <div class="t5-trophy">${TROFEO}</div>
+            <h1 class="t5-title">TOP 5 INSTITUCIONAL</h1>
+            <div class="t5-subtitle">Excelencia Acad&eacute;mica &mdash; Turno ${Utils.sanitize(turno)}</div>
+            <div class="t5-partial">${Utils.sanitize(partialLabel).toUpperCase()}</div>
+            <div class="t5-cycle">Ciclo Escolar 2025-2026</div>
+          </div>
+          <table class="t5-table">
+            <thead>
+              <tr>
+                <th style="width:60px;">Lugar</th>
+                <th>Alumno</th>
+                <th style="width:90px;">Grupo</th>
+                <th style="width:110px;">Promedio</th>
+              </tr>
+            </thead>
+            <tbody>${top5Rows}</tbody>
+          </table>
+          <div class="t5-footer">
+            <div class="t5-signature">
+              <div class="t5-sig-line"></div>
+              <div>DIRECCI&Oacute;N ESCOLAR</div>
+            </div>
+          </div>
+          <div class="t5-ornament bottom"></div>
+        </section>`;
+
+      const fullHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+        <title>Cuadros de Honor ${turno}</title>
+        <style>
+          @page { size: letter portrait; margin: 14mm 16mm; }
+          * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+          body { font-family: Arial, Helvetica, sans-serif; color: #000; }
+
+          .page { page-break-after: always; height: 245mm; display:flex; flex-direction:column; justify-content:center; }
+          .page:last-child { page-break-after: auto; }
+          .t5-page { justify-content: center; }
+
+          /* ─── GROUP PAGES ─── */
+          .hdr { text-align:center; margin-bottom:20px; }
+          .hdr h1 { font-size:18pt; font-weight:700; margin-bottom:6px; }
+          .hdr h2 { font-size:16pt; font-weight:700; margin-bottom:8px; color:#1b3a5c; }
+          .hdr .info { font-size:12pt; color:#333; margin-bottom:4px; }
+          .hdr .subtle { font-size:10pt; color:#888; }
+
+          .group-card { border:2px solid #1b3a5c; border-radius:10px; overflow:hidden; }
+          .group-header { background:#1b3a5c; color:#fff; padding:12px 18px; display:flex; justify-content:space-between; align-items:center; font-size:15pt; font-weight:700; }
+          .group-header .badge-g { background:rgba(255,255,255,.2); padding:4px 12px; border-radius:4px; font-size:12pt; }
+
+          .group-card table { width:100%; border-collapse:collapse; }
+          .group-card th { background:#e8ecf1; padding:10px 14px; text-align:left; font-size:12pt; font-weight:700; color:#1b3a5c; border-bottom:2px solid #1b3a5c; }
+          .group-card td { padding:10px 14px; font-size:13pt; border-bottom:1px solid #ddd; }
+          .group-card tr:nth-child(even) { background:#f7f9fb; }
+          .group-card .top3 { font-weight:700; }
+          .group-card .rank { text-align:center; font-size:14pt; }
+          .group-card .medal { font-size:18pt; }
+          .group-card .name { font-weight:600; }
+          .group-card .mat { text-align:center; color:#666; }
+          .group-card td .avg { display:inline-block; padding:4px 14px; border-radius:6px; font-weight:800; font-size:13pt; color:#fff; }
+          .group-card td .avg-high { background:#1b5e20; }
+          .group-card td .avg-good { background:#1b3a5c; }
+          .group-card td .avg-ok { background:#6b7280; }
+
+          /* ─── TOP 5 INSTITUCIONAL PAGE ─── */
+          .t5-page { background: linear-gradient(180deg, #fff 0%, #f8fafb 100%); padding: 10px; }
+
+          .t5-ornament { height: 8px; background: linear-gradient(90deg, transparent, #d4782a 20%, #1b3a5c 50%, #d4782a 80%, transparent); border-radius:4px; margin: 0 0 30px 0; }
+          .t5-ornament.bottom { margin: 40px 0 0 0; }
+
+          .t5-head { text-align:center; margin-bottom:40px; }
+          .t5-school { font-size:14pt; font-weight:700; color:#1b3a5c; letter-spacing:1px; margin-bottom:20px; }
+          .t5-trophy { font-size:60pt; line-height:1; margin:10px 0; }
+          .t5-title { font-size:30pt; font-weight:900; color:#1b3a5c; letter-spacing:2px; margin:10px 0; }
+          .t5-subtitle { font-size:14pt; color:#d4782a; font-weight:600; font-style:italic; margin-bottom:12px; }
+          .t5-partial { font-size:13pt; color:#333; font-weight:600; letter-spacing:1px; }
+          .t5-cycle { font-size:11pt; color:#888; margin-top:4px; }
+
+          .t5-table { width:100%; border-collapse:separate; border-spacing:0 6px; margin:20px 0; }
+          .t5-table th { background:#1b3a5c; color:#fff; padding:12px 16px; font-size:12pt; text-align:center; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
+          .t5-table th:nth-child(2) { text-align:left; }
+          .t5-table th:first-child { border-radius:8px 0 0 8px; }
+          .t5-table th:last-child { border-radius:0 8px 8px 0; }
+
+          .t5-table td { background:#fff; padding:14px 16px; font-size:14pt; border-top:1.5px solid #e2e8f0; border-bottom:1.5px solid #e2e8f0; }
+          .t5-table td:first-child { border-left:1.5px solid #e2e8f0; border-radius:8px 0 0 8px; text-align:center; }
+          .t5-table td:last-child { border-right:1.5px solid #e2e8f0; border-radius:0 8px 8px 0; text-align:center; }
+
+          .t5-table .gold-row td { background:#fff8e1; border-color:#d4782a; }
+          .t5-table .silver-row td { background:#f5f5f5; border-color:#9ca3af; }
+          .t5-table .bronze-row td { background:#fef0e4; border-color:#a16207; }
+
+          .t5-rank { font-size:20pt; }
+          .t5-medal { font-size:24pt; }
+          .t5-num { font-weight:800; color:#1b3a5c; font-size:18pt; }
+          .t5-name { font-size:14pt; font-weight:700; color:#1b3a5c; }
+          .gold-row .t5-name { color:#b5651d; }
+          .t5-group { text-align:center; font-size:13pt; color:#64748b; font-weight:600; }
+
+          .t5-avg-badge { display:inline-block; padding:8px 20px; background:#1b5e20; color:#fff; font-weight:800; font-size:16pt; border-radius:10px; letter-spacing:1px; }
+          .gold-row .t5-avg-badge { background:#d4782a; }
+          .silver-row .t5-avg-badge { background:#64748b; }
+          .bronze-row .t5-avg-badge { background:#a16207; }
+
+          .t5-footer { text-align:center; margin-top:50px; }
+          .t5-signature { display:inline-block; min-width:280px; }
+          .t5-sig-line { border-bottom:1.5px solid #1b3a5c; height:50px; margin-bottom:6px; }
+          .t5-signature div:last-child { font-weight:700; font-size:11pt; color:#1b3a5c; letter-spacing:1px; }
+        </style>
+      </head><body>
+        ${allPagesHtml}
+        <script>
+          document.title = 'Cuadros_Honor_${turno}_${partial}';
+          setTimeout(() => window.print(), 600);
+        <\/script>
+      </body></html>`;
+
+      const w = window.open('', '_blank');
+      w.document.write(fullHtml);
+      w.document.close();
+
+      Toast.show('Documento generado con ' + sortedGroups.length + ' grupos + Top 5 institucional. Guarda como PDF.', 'success');
+    } catch (e) {
+      console.error('Error:', e);
+      Toast.show('Error: ' + e.message, 'error');
+    }
+    _massPrinting = false;
   }
 
   function bindEvents(container) {
@@ -240,6 +566,7 @@ const HonorRollModule = (() => {
 
       if (btn.dataset.action === 'generate') generate();
       else if (btn.dataset.action === 'print') printHonorRoll();
+      else if (btn.dataset.action === 'mass-print') massPrintHonorRoll();
     });
   }
 

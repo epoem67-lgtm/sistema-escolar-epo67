@@ -101,7 +101,7 @@ const ConcentradoModule = (() => {
       allAssignments = assignments;
       // Load grades per-group (much more efficient than loading ALL grades)
       const groupIds = allGroups.map(g => g.id);
-      allGrades = await Store.getGradesByGroups(groupIds);
+      allGrades = await Store.getGradesByGroups(groupIds, true);
     } catch (e) {
       console.error('Error cargando datos de concentrado:', e);
       Toast.show('Error al cargar datos', 'error');

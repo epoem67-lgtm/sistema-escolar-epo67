@@ -37,7 +37,7 @@ const DashboardModule = (() => {
       // Then load grades in background for metas and group table
       try {
         const groupIds = groups.map(g => g.id);
-        const grades = await Store.getGradesByGroups(groupIds);
+        const grades = await Store.getGradesByGroups(groupIds, true);
         const currentPartialId = getCurrentPartial(partials);
         const currentGrades = currentPartialId
           ? grades.filter(g => g.partial === currentPartialId)

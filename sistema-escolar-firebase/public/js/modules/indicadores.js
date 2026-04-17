@@ -93,7 +93,7 @@ const IndicadoresModule = (() => {
       ]);
       allStudents = students.filter(s => s.estatus === 'ACTIVO');
       const groupIds = groups.map(g => g.id);
-      allGrades = await Store.getGradesByGroups(groupIds);
+      allGrades = await Store.getGradesByGroups(groupIds, true);
       allSubjects = subjects;
       allGroups = groups;
       updateGroupOptions();
@@ -719,7 +719,7 @@ const IndicadoresModule = (() => {
       const activeStudents = students.filter(s => s.estatus === 'ACTIVO' && s.turno === turno);
       const turnoGroups = groups.filter(g => g.turno === turno);
       const groupIds = turnoGroups.map(g => g.id);
-      const grades = (await Store.getGradesByGroups(groupIds)).filter(g => g.partial === parcial);
+      const grades = (await Store.getGradesByGroups(groupIds, true)).filter(g => g.partial === parcial);
 
       const subjectMap = {}; subjects.forEach(s => { subjectMap[s.id] = s; });
       const groupMap = {}; turnoGroups.forEach(g => { groupMap[g.id] = g; });

@@ -69,12 +69,12 @@ const K = Object.freeze({
     'MATUTINO': Object.freeze({
       '1-1': 'PROFR. JOSÉ EDGAR SALAZAR',
       '1-2': 'PROFR. JOSÉ EDGAR SALAZAR',
-      '1-3': 'PROFRA. ANA ISABEL CORREA SALGADO',
+      '1-3': 'PROFRA. DIAZ CAMARENA SANDRA',
       '2-1': 'PROFRA. ANA ISABEL CORREA SALGADO',
       '2-2': 'PROFRA. ANA ISABEL CORREA SALGADO',
       '2-3': 'PROFRA. JUANA RANGEL PALACIOS',
       '3-1': 'PROFRA. NEFTALI MARGARITA MORLAN ORTÍZ',
-      '3-2': 'PROFRA. JUANA RANGEL PALACIOS',
+      '3-2': 'PROFRA. NEFTALI MARGARITA MORLAN ORTIZ',
       '3-3': 'PROFRA. JUANA RANGEL PALACIOS',
     }),
     'VESPERTINO': Object.freeze({
@@ -153,6 +153,69 @@ const K = Object.freeze({
   // ═══════════════════════════════════════════════════════════
   // HELPERS
   // ═══════════════════════════════════════════════════════════
+  // ORDEN OFICIAL DE MATERIAS POR GRADO (para boletas)
+  // ═══════════════════════════════════════════════════════════
+
+  SUBJECT_ORDER: Object.freeze({
+    1: [
+      'LENGUA Y COMUNICACION II',
+      'INGLES II',
+      'PENSAMIENTO MATEMATICO II',
+      'CULTURA DIGITAL II',
+      'CIENCIAS NATURALES EXPERIMENTALES Y TECNOLOGIA II',
+      'PENSAMIENTO FILOSOFICO Y HUMANIDADES II',
+      'CIENCIAS SOCIALES II',
+      'TALLER DE CIENCIAS I',
+      'ACTIVIDADES FISICAS Y DEPORTIVAS II',
+      'EDUCACION PARA LA SALUD II',
+      'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS II'
+    ],
+    2: [
+      'PENSAMIENTO LITERARIO',
+      'INGLES IV',
+      'TEMAS SELECTOS DE MATEMATICAS I',
+      'CONCIENCIA HISTORICA I',
+      'TALLER DE CULTURA DIGITAL',
+      'REACCIONES QUIMICAS Y CONSERVACION DE LA MATERIA',
+      'ESPACIO Y SOCIEDAD',
+      'CIENCIAS SOCIALES III',
+      'COMUNIDADES VIRTUALES',
+      'MANTENIMIENTO DE REDES DE COMPUTO',
+      'ACTIVIDADES ARTISTICAS Y CULTURALES I',
+      'EDUCACION INTEGRAL EN SEXUALIDAD Y GENERO II',
+      'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS IV'
+    ],
+    3: [
+      'CIENCIAS DE LA COMUNICACION I',
+      'TEMAS SELECTOS DE INGLES II',
+      'TEMAS SELECTOS DE MATEMATICAS II',
+      'CONCIENCIA HISTORICA III',
+      'ORGANISMOS',
+      'TEMAS SELECTOS DE FILOSOFIA',
+      'ECONOMIA I',
+      'PAGINAS WEB',
+      'DISENO DIGITAL',
+      'ACTIVIDADES ARTISTICAS Y CULTURALES III',
+      'PRACTICA Y COLABORACION CIUDADANA II',
+      'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS VI'
+    ]
+  }),
+
+  /** Ordena lista de materias segun el orden oficial del grado */
+  sortSubjectsByGrado(subjectsList, grado) {
+    const order = this.SUBJECT_ORDER[grado];
+    if (!order) return subjectsList;
+    const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+    return [...subjectsList].sort((a, b) => {
+      const na = norm(a.nombre || a.id);
+      const nb = norm(b.nombre || b.id);
+      let ia = order.findIndex(o => norm(o) === na || na.includes(norm(o)) || norm(o).includes(na));
+      let ib = order.findIndex(o => norm(o) === nb || nb.includes(norm(o)) || norm(o).includes(nb));
+      if (ia === -1) ia = 999;
+      if (ib === -1) ib = 999;
+      return ia - ib;
+    });
+  },
 
   /** Retorna rubros según el turno */
   getRubros(turno) {

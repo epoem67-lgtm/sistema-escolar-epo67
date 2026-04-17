@@ -64,21 +64,23 @@ const BoletasModule = (() => {
               <label for="bol-alumno">Alumno</label>
               <select id="bol-alumno" disabled><option value="">-- Selecciona --</option></select>
             </div>
+            <div class="form-group">
+              <label for="bol-fecha">Fecha de boleta</label>
+              <input type="date" id="bol-fecha" value="${new Date().toISOString().split('T')[0]}">
+            </div>
           </div>
           <div class="filter-bar-actions" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
             <button class="btn btn-primary" data-action="generate">Generar Boleta</button>
-            <button class="btn btn-danger" data-action="gen-reprobados" style="font-weight:600;">
-              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">warning</span>Reprobados
-            </button>
-            <button class="btn btn-success" data-action="gen-aprobados">
-              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">check_circle</span>Aprobados
-            </button>
             <span style="border-left:1px solid #ddd;height:24px;margin:0 4px;"></span>
             <button class="btn btn-outline" data-action="print">
               <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>Imprimir
             </button>
             <button class="btn btn-outline" data-action="export-excel">
               <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">download</span>Excel
+            </button>
+            <span style="border-left:1px solid #ddd;height:24px;margin:0 4px;"></span>
+            <button class="btn btn-success" data-action="mass-download" style="font-weight:600;">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">file_download</span>Descarga Masiva PDF
             </button>
           </div>
         </div>
@@ -201,8 +203,7 @@ const BoletasModule = (() => {
       // Get subjects for this group
       const groupAssignments = assignments.filter(a => a.groupId === groupId);
       const subjectIds = [...new Set(groupAssignments.map(a => a.subjectId))];
-      const groupSubjects = subjects.filter(s => subjectIds.includes(s.id));
-      groupSubjects.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+      const groupSubjects = K.sortSubjectsByGrado(subjects.filter(s => subjectIds.includes(s.id)), grado);
 
       if (groupSubjects.length === 0) {
         resultsDiv.innerHTML = UI.emptyState('menu_book', 'No se encontraron materias asignadas para este grupo.');
@@ -226,7 +227,7 @@ const BoletasModule = (() => {
       }
 
       // Fetch grades for this group via Store cache
-      const groupGrades = await Store.getGradesByGroup(groupId);
+      const groupGrades = await Store.getGradesByGroup(groupId, true);
       const gradesMap = {};
       for (const g of groupGrades) {
         if (!gradesMap[g.studentId]) gradesMap[g.studentId] = {};
@@ -241,8 +242,14 @@ const BoletasModule = (() => {
       const cicloEscolar = schoolConfig.cicloEscolar || '2025-2026';
       const orientador = K.getOrientador(turno, groupName);
 
+      // Fecha seleccionada
+      const fechaInput = document.getElementById('bol-fecha')?.value;
+      const fechaObj = fechaInput ? new Date(fechaInput + 'T12:00:00') : new Date();
+      const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+      const fechaTexto = `Cuautitl\u00e1n Izcalli, M\u00e9x. A ${fechaObj.getDate()} de ${meses[fechaObj.getMonth()]} de ${fechaObj.getFullYear()}.`;
+
       const meta = {
-        cicloEscolar, groupName, turno, grado, parcialMode, orientador
+        cicloEscolar, groupName, turno, grado, parcialMode, orientador, fechaTexto
       };
 
       // Filtro por estatus academico (reprobados/aprobados)
@@ -430,9 +437,7 @@ const BoletasModule = (() => {
         <td style="text-align:center;font-weight:700;font-size:12px;${promedioFail ? 'background:#ddd;' : ''}">${promedio}</td>
       </tr>`;
 
-      // Calcular resumen para parcial individual
-      let parcialReprobadas = 0;
-      let parcialFaltasTotal = 0;
+      // Calcular resumen para parcial individual — overwrite outer variables
       subjectsList.forEach(subj => {
         const sg = studentGrades[subj.id] || {};
         const gd = sg[parcialMode] || {};
@@ -441,7 +446,7 @@ const BoletasModule = (() => {
         if (gd.faltas !== undefined && !isNaN(gd.faltas)) parcialFaltasTotal += Number(gd.faltas);
       });
 
-      const nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#c62828', bg: '#ffebee', border: '#c62828' }
+      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#c62828', bg: '#ffebee', border: '#c62828' }
         : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#e65100', bg: '#fff3e0', border: '#e65100' }
         : { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
     }
@@ -466,11 +471,11 @@ const BoletasModule = (() => {
       <div style="margin-top:10px;font-size:10px;line-height:1.8;">
         <div style="font-size:9px;font-style:italic;margin-bottom:4px;">Documento NO OFICIAL para uso del Departamento de Orientaci\u00f3n Educativa</div>
         <div>En calidad de padre/madre de familia o tutor del (la)alumno (a) ___________________________________________</div>
-        <div>Del grupo <strong>${Utils.sanitize(meta.grado)}\u00b0${Utils.sanitize(meta.groupName)}</strong></div>
+        <div>Del grupo <strong>${Utils.sanitize(meta.groupName)}</strong></div>
         <div style="margin-top:2px;">Estoy en conocimiento y de acuerdo con las calificaciones asentadas en la pre- boleta.</div>
         <div style="margin-top:8px;">NOMBRE DE LA MADRE, PADRE DE FAMILIA: ___________________________________________________________</div>
         <div style="margin-top:6px;">FIRMA: _________________________________ NUMERO DE CONTACTO: ___________________________________</div>
-        <div style="margin-top:8px;text-align:right;font-size:9px;">Cuautitl\u00e1n Izcalli, M\u00e9x. A _________ de ___________________________ de  2025.</div>
+        <div style="margin-top:8px;text-align:right;font-size:9px;">${meta.fechaTexto || 'Cuautitl\u00e1n Izcalli, M\u00e9x.'}</div>
       </div>` : `
       <table style="width:100%;margin-top:30px;border-collapse:collapse;">
         <tr>
@@ -629,8 +634,7 @@ const BoletasModule = (() => {
 
     const groupAssignments = assignments.filter(a => a.groupId === groupId);
     const subjectIds = [...new Set(groupAssignments.map(a => a.subjectId))];
-    const groupSubjects = subjects.filter(s => subjectIds.includes(s.id));
-    groupSubjects.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    const groupSubjects = K.sortSubjectsByGrado(subjects.filter(s => subjectIds.includes(s.id)), grado);
 
     let targetStudents;
     if (alumnoId === 'todos') {
@@ -640,7 +644,7 @@ const BoletasModule = (() => {
       targetStudents = found ? [found] : [];
     }
 
-    Store.getGradesByGroup(groupId).then(groupGrades => {
+    Store.getGradesByGroup(groupId, true).then(groupGrades => {
       const gMap = {};
       for (const g of groupGrades) {
         if (!gMap[g.studentId]) gMap[g.studentId] = {};
@@ -698,23 +702,157 @@ const BoletasModule = (() => {
       if (!btn) return;
       const action = btn.dataset.action;
       if (action === 'generate') generate();
-      else if (action === 'gen-reprobados') {
-        const sel = document.getElementById('bol-estatus');
-        if (sel) sel.value = 'reprobados';
-        generate();
-      }
-      else if (action === 'gen-aprobados') {
-        const sel = document.getElementById('bol-estatus');
-        if (sel) sel.value = 'aprobados';
-        generate();
-      }
       else if (action === 'print') printBoletas();
       else if (action === 'export-excel') exportExcel();
+      else if (action === 'mass-download') massDownloadPDF();
     });
 
     document.getElementById('bol-turno')?.addEventListener('change', onTurnoChange);
     document.getElementById('bol-grado')?.addEventListener('change', onGradoChange);
     document.getElementById('bol-grupo')?.addEventListener('change', onGrupoChange);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Mass Download PDF — one PDF per group
+  // ─────────────────────────────────────────────────────────────
+
+  let _massDownloading = false;
+  async function massDownloadPDF() {
+    if (_massDownloading) return;
+    _massDownloading = true;
+    const turno = document.getElementById('bol-turno')?.value;
+    const grado = document.getElementById('bol-grado')?.value;
+    const parcialMode = document.getElementById('bol-parcial')?.value || 'todos';
+    const estatusFiltro = document.getElementById('bol-estatus')?.value || 'todos';
+
+    if (!turno) { Toast.show('Selecciona un turno', 'warning'); return; }
+
+    const fechaInput = document.getElementById('bol-fecha')?.value;
+    const fechaObj = fechaInput ? new Date(fechaInput + 'T12:00:00') : new Date();
+    const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+    const fechaTexto = `Cuautitl\u00e1n Izcalli, M\u00e9x. A ${fechaObj.getDate()} de ${meses[fechaObj.getMonth()]} de ${fechaObj.getFullYear()}.`;
+
+    // Get groups
+    let turnoGroups = groups.filter(g => g.turno === turno);
+    if (grado) turnoGroups = turnoGroups.filter(g => String(g.grado) === String(grado));
+    turnoGroups.sort((a, b) => (a.grado || 0) - (b.grado || 0) || (a.nombre || '').localeCompare(b.nombre || ''));
+
+    if (turnoGroups.length === 0) {
+      Toast.show('No hay grupos para este turno', 'warning');
+      return;
+    }
+
+    // Build filename tag from filters
+    const isReprob = estatusFiltro === 'reprobados';
+    const isAprob = estatusFiltro === 'aprobados';
+    const parcialMap = { P1: '1erParcial', P2: '2doParcial', P3: '3erParcial', todos: 'TodosParciales' };
+    const parcialTag = parcialMap[parcialMode] || parcialMode;
+    const estatusTag = isReprob ? '_REPROBADOS' : isAprob ? '_APROBADOS' : '';
+    const gradoTag = grado ? `_${grado}Grado` : '';
+
+    Toast.show(`Generando ${turnoGroups.length} archivos: ${turno}${gradoTag} ${parcialTag}${estatusTag}...`, 'info');
+
+    for (const groupInfo of turnoGroups) {
+      const groupId = groupInfo.id;
+      const groupName = groupInfo.nombre || groupId;
+
+      try {
+        // Get students
+        const groupStudents = students.filter(s => s.groupId === groupId && s.estatus === 'ACTIVO')
+          .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+
+        if (groupStudents.length === 0) continue;
+
+        // Get subjects
+        const groupAssignments = assignments.filter(a => a.groupId === groupId);
+        const subjectIds = [...new Set(groupAssignments.map(a => a.subjectId))];
+        const groupSubjects = K.sortSubjectsByGrado(subjects.filter(s => subjectIds.includes(s.id)), groupInfo.grado || grado);
+
+        // Get grades
+        const groupGrades = await Store.getGradesByGroup(groupId, true);
+        const gradesMap = {};
+        for (const g of groupGrades) {
+          if (!gradesMap[g.studentId]) gradesMap[g.studentId] = {};
+          if (!gradesMap[g.studentId][g.subjectId]) gradesMap[g.studentId][g.subjectId] = {};
+          gradesMap[g.studentId][g.subjectId][g.partial] = g;
+        }
+
+        const schoolConfig = App.schoolConfig || {};
+        const cicloEscolar = schoolConfig.cicloEscolar || '2025-2026';
+        const orientador = K.getOrientador(turno, groupName);
+
+        const groupGrado = groupInfo.grado || grado;
+        const meta = { cicloEscolar, groupName, turno, grado: groupGrado, parcialMode, orientador, fechaTexto };
+
+        // Filter by estatus if needed
+        let targetStudents = [...groupStudents];
+        if (estatusFiltro !== 'todos') {
+          const passGrade = K.THRESHOLDS?.PASS_GRADE || 6;
+          targetStudents = targetStudents.filter(student => {
+            const sg = gradesMap[student.id] || {};
+            let hasReprobada = false;
+            for (const subId of subjectIds) {
+              if (parcialMode === 'todos') {
+                for (const p of K.PARCIALES) {
+                  const gd = sg[subId]?.[p.id];
+                  const cal = gd ? (gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null)) : null;
+                  if (cal !== null && cal < passGrade) { hasReprobada = true; break; }
+                }
+              } else {
+                const gd = sg[subId]?.[parcialMode];
+                const cal = gd ? (gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null)) : null;
+                if (cal !== null && cal < passGrade) { hasReprobada = true; break; }
+              }
+              if (hasReprobada) break;
+            }
+            return estatusFiltro === 'reprobados' ? hasReprobada : !hasReprobada;
+          });
+        }
+
+        if (targetStudents.length === 0) continue;
+
+        // Build boletas HTML
+        let boletasHtml = '';
+        targetStudents.forEach((student, idx) => {
+          boletasHtml += _buildBoleta(student, groupSubjects, gradesMap[student.id] || {}, meta, idx === targetStudents.length - 1);
+        });
+
+        // Open print window for this group
+        const printHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+          <title>PreBoletas_${turno}_${groupName}_${parcialTag}${estatusTag}</title>
+          <style>
+            @page { size: letter portrait; margin: 10mm 12mm 8mm 12mm; }
+            * { margin:0; padding:0; box-sizing:border-box; }
+            body { font-family: Arial, sans-serif; color: #000; font-size: 10px; }
+            .boleta-card { padding: 10px 0; }
+            table { border-collapse: collapse; }
+            th, td { padding: 3px 5px; border: 1px solid #333; }
+            thead { background: #e0e0e0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @media print { .boleta-card[style*="page-break-after"] { page-break-after: always; } }
+          </style>
+        </head><body>
+          ${boletasHtml}
+          <script>
+            document.title = 'PreBoletas_${turno}_${groupName}_${parcialTag}${estatusTag}';
+            setTimeout(() => window.print(), 500);
+          <\/script>
+        </body></html>`;
+
+        const w = window.open('', '_blank');
+        w.document.write(printHtml);
+        w.document.close();
+
+        // Small delay between groups to not overwhelm the browser
+        await new Promise(r => setTimeout(r, 800));
+
+      } catch (e) {
+        console.error('Error generating PDF for group ' + groupName + ':', e);
+      }
+    }
+
+    Toast.show(`${turnoGroups.length} archivos generados. Guarda cada uno como PDF desde el dialogo de impresion.`, 'success');
+    _massDownloading = false;
   }
 
   return { render };

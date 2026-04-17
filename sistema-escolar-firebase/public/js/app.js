@@ -392,6 +392,7 @@ const Router = {
     'honor-roll': ['admin', 'orientador'],
     // ─── Orientacion (admin + orientador) ───
     'boletas': ['admin', 'orientador'],
+    'boleta-oficial': ['admin', 'orientador'],
     'concentrado': ['admin', 'orientador'],
     'at-risk': ['admin', 'orientador'],
     'student-profile': ['admin', 'orientador', 'maestro'],
