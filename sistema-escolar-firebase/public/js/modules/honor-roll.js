@@ -518,30 +518,32 @@ const HonorRollModule = (() => {
           * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
           body { font-family: Arial, Helvetica, sans-serif; color: #000; }
 
-          .page { page-break-after: always; }
+          .page { page-break-after: always; page-break-inside: avoid; }
           .page:last-child { page-break-after: auto; }
+          .group-card, .t5-table { page-break-inside: avoid; }
+          table, tr { page-break-inside: avoid; }
 
-          /* ─── GROUP PAGES ─── */
-          .hdr { text-align:center; margin-bottom:20px; }
-          .hdr h1 { font-size:18pt; font-weight:700; margin-bottom:6px; }
-          .hdr h2 { font-size:16pt; font-weight:700; margin-bottom:8px; color:#1b3a5c; }
-          .hdr .info { font-size:12pt; color:#333; margin-bottom:4px; }
-          .hdr .subtle { font-size:10pt; color:#888; }
+          /* ─── GROUP PAGES (compacto para que quepan 15 filas + header) ─── */
+          .hdr { text-align:center; margin-bottom:10px; }
+          .hdr h1 { font-size:13pt; font-weight:700; margin-bottom:2px; }
+          .hdr h2 { font-size:12pt; font-weight:700; margin-bottom:3px; color:#1b3a5c; }
+          .hdr .info { font-size:10pt; color:#333; margin-bottom:2px; }
+          .hdr .subtle { font-size:9pt; color:#888; }
 
-          .group-card { border:2px solid #1b3a5c; border-radius:10px; overflow:hidden; }
-          .group-header { background:#1b3a5c; color:#fff; padding:12px 18px; display:flex; justify-content:space-between; align-items:center; font-size:15pt; font-weight:700; }
-          .group-header .badge-g { background:rgba(255,255,255,.2); padding:4px 12px; border-radius:4px; font-size:12pt; }
+          .group-card { border:1.5px solid #1b3a5c; border-radius:8px; overflow:hidden; }
+          .group-header { background:#1b3a5c; color:#fff; padding:7px 14px; display:flex; justify-content:space-between; align-items:center; font-size:12pt; font-weight:700; }
+          .group-header .badge-g { background:rgba(255,255,255,.2); padding:2px 10px; border-radius:4px; font-size:10pt; }
 
           .group-card table { width:100%; border-collapse:collapse; }
-          .group-card th { background:#e8ecf1; padding:10px 14px; text-align:left; font-size:12pt; font-weight:700; color:#1b3a5c; border-bottom:2px solid #1b3a5c; }
-          .group-card td { padding:10px 14px; font-size:13pt; border-bottom:1px solid #ddd; }
+          .group-card th { background:#e8ecf1; padding:5px 10px; text-align:left; font-size:10pt; font-weight:700; color:#1b3a5c; border-bottom:1.5px solid #1b3a5c; }
+          .group-card td { padding:5px 10px; font-size:11pt; border-bottom:1px solid #ddd; line-height:1.2; }
           .group-card tr:nth-child(even) { background:#f7f9fb; }
           .group-card .top3 { font-weight:700; }
-          .group-card .rank { text-align:center; font-size:14pt; }
-          .group-card .medal { font-size:18pt; }
+          .group-card .rank { text-align:center; font-size:11pt; }
+          .group-card .medal { font-size:14pt; }
           .group-card .name { font-weight:600; }
           .group-card .mat { text-align:center; color:#666; }
-          .group-card td .avg { display:inline-block; padding:4px 14px; border-radius:6px; font-weight:800; font-size:13pt; color:#fff; }
+          .group-card td .avg { display:inline-block; padding:2px 10px; border-radius:5px; font-weight:800; font-size:10.5pt; color:#fff; }
           .group-card td .avg-high { background:#1b5e20; }
           .group-card td .avg-good { background:#1b3a5c; }
           .group-card td .avg-ok { background:#6b7280; }
