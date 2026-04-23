@@ -89,8 +89,15 @@ const HonorRollModule = (() => {
             <div class="form-group">
               <label for="hr-order">Orden</label>
               <select id="hr-order">
-                <option value="desc" selected>Mayor a menor (Cuadro de honor)</option>
-                <option value="asc">Menor a mayor (Lista de riesgo)</option>
+                <option value="desc" selected>Mayor a menor</option>
+                <option value="asc">Menor a mayor</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="hr-formato">Formato</label>
+              <select id="hr-formato">
+                <option value="honor" selected>Cuadro de Honor (con medallas)</option>
+                <option value="listado">Listado simple (sin decoraciones)</option>
               </select>
             </div>
           </div>
@@ -135,9 +142,11 @@ const HonorRollModule = (() => {
     const partial = document.getElementById('hr-partial').value;
     const topCount = parseInt(document.getElementById('hr-top').value); // 0 = todos
     const order = document.getElementById('hr-order')?.value || 'desc';  // desc = mayor a menor
+    const formato = document.getElementById('hr-formato')?.value || 'honor'; // honor | listado
     const resultsDiv = document.getElementById('hr-results');
     const isAsc = order === 'asc';
     const showAll = topCount === 0;
+    const isListado = formato === 'listado';
 
     resultsDiv.innerHTML = `<div class="loading-state"><span class="material-icons-round loading-spinner">autorenew</span><p>Calculando promedios...</p></div>`;
 
@@ -207,17 +216,30 @@ const HonorRollModule = (() => {
       const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
       const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
 
-      const titulo = isAsc
-        ? `Lista por Promedio (menor a mayor) - ${Utils.sanitize(partialLabel)}`
-        : `Cuadro de Honor - ${Utils.sanitize(partialLabel)}`;
+      const titulo = isListado
+        ? `Listado de Alumnos por Promedio - ${Utils.sanitize(partialLabel)}`
+        : (isAsc
+          ? `Lista por Promedio (menor a mayor) - ${Utils.sanitize(partialLabel)}`
+          : `Cuadro de Honor - ${Utils.sanitize(partialLabel)}`);
       let html = `<h2 class="section-title">${titulo}</h2>`;
       html += '<div class="stats-grid">';
 
       for (const group of sortedGroups) {
-        const rows = group.students.map((s) => {
-          const medalOrRank = s.rank <= 3 ? medals[s.rank - 1] : `<span class="text-muted font-bold">${s.rank}</span>`;
+        const rows = group.students.map((s, i) => {
           const gradeStyle = s.promedio >= 9 ? 'background:#1b5e20;color:#fff;' : s.promedio >= 8 ? 'background:#1b3a5c;color:#fff;' : 'background:#6b7280;color:#fff;';
 
+          if (isListado) {
+            // Listado simple: numero consecutivo (no rank), sin medallas, sin negrita especial
+            return `
+              <tr>
+                <td class="text-center text-muted">${i + 1}</td>
+                <td>${Utils.sanitize(s.nombreCompleto)}</td>
+                <td class="text-center text-muted">${s.numMaterias}</td>
+                <td class="text-center"><span style="display:inline-block;padding:4px 12px;border-radius:6px;font-weight:700;font-size:14px;${gradeStyle}">${s.promedio.toFixed(1)}</span></td>
+              </tr>
+            `;
+          }
+          const medalOrRank = s.rank <= 3 ? medals[s.rank - 1] : `<span class="text-muted font-bold">${s.rank}</span>`;
           return `
             <tr${s.rank <= 3 ? ' class="font-semibold"' : ''}>
               <td class="text-center">${medalOrRank}</td>
@@ -229,17 +251,20 @@ const HonorRollModule = (() => {
         }).join('');
 
         const turnoClass = group.turno === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino';
+        const cardTitle = isListado
+          ? `Grupo ${Utils.sanitize(group.grupo)}`
+          : `\uD83C\uDFC6 Grupo ${Utils.sanitize(group.grupo)}`;
 
         html += `
           <div class="honor-card">
             <div class="honor-card-header">
-              <h3 class="honor-card-title">\uD83C\uDFC6 Grupo ${Utils.sanitize(group.grupo)}</h3>
+              <h3 class="honor-card-title">${cardTitle}</h3>
               <span class="badge ${turnoClass}">${Utils.sanitize(group.turno)}</span>
             </div>
             <table class="table-light w-full">
               <thead>
                 <tr>
-                  <th class="text-center">#</th>
+                  <th class="text-center">${isListado ? 'N\u00ba' : '#'}</th>
                   <th>Alumno</th>
                   <th class="text-center">Mat.</th>
                   <th class="text-center">Promedio</th>
@@ -253,12 +278,13 @@ const HonorRollModule = (() => {
 
       html += '</div>';
 
-      // ── TOP 3 INSTITUCIONAL POR TURNO (solo en orden descendente) ──
+      // ── TOP 3 INSTITUCIONAL POR TURNO (solo en orden descendente y formato honor) ──
       const turnos = [...new Set(studentAverages.map(s => s.turno))].sort();
-      if (!isAsc) {
+      const showInstitucional = !isAsc && !isListado;
+      if (showInstitucional) {
         html += '<h2 class="section-title" style="margin-top:24px;">Top 3 Institucional por Turno</h2>';
       }
-      for (const t of (isAsc ? [] : turnos)) {
+      for (const t of (showInstitucional ? turnos : [])) {
         // Top 3 institucional a 2 decimales (coincide con .toFixed(2))
         const ranked = assignDenseRanks(studentAverages.filter(s => s.turno === t), 2);
         const top3 = ranked.filter(s => s.rank <= 3);
@@ -383,8 +409,10 @@ const HonorRollModule = (() => {
     const partial = document.getElementById('hr-partial').value;
     const topCount = parseInt(document.getElementById('hr-top').value);
     const order = document.getElementById('hr-order')?.value || 'desc';
+    const formato = document.getElementById('hr-formato')?.value || 'honor';
     const isAsc = order === 'asc';
     const showAll = topCount === 0;
+    const isListado = formato === 'listado';
 
     // Si hay grupo, no requerimos turno (se infiere). Sin grupo y sin turno => error.
     if (!turno && !grupoId) {
@@ -449,8 +477,8 @@ const HonorRollModule = (() => {
         return;
       }
 
-      // Si se filtro por grupo especifico, no incluir Top 3 institucional
-      const includeInstitucional = !grupoId && !isAsc;
+      // Top 3 institucional: solo si no hay grupo, no es asc y no es listado
+      const includeInstitucional = !grupoId && !isAsc && !isListado;
 
       Toast.show(`Generando documento con ${sortedGroups.length} cuadro(s) de honor${includeInstitucional ? ' + Top 3' : ''}...`, 'info');
 
@@ -473,9 +501,20 @@ const HonorRollModule = (() => {
         const medalImgs = [MEDAL1, MEDAL2, MEDAL3];
 
         pages.forEach((pageStudents, pageIdx) => {
-          const rows = pageStudents.map((s) => {
-            const medal = s.rank <= 3 ? `<span class="medal">${medalImgs[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
+          // Calcular indice global (considerando paginas previas) para el listado
+          const baseIdx = pageIdx * MAX_PER_PAGE;
+          const rows = pageStudents.map((s, idx) => {
             const avgClass = s.promedio >= 9 ? 'avg-high' : s.promedio >= 8 ? 'avg-good' : 'avg-ok';
+            if (isListado) {
+              // Listado: numero consecutivo simple, sin medallas
+              return `<tr>
+                <td class="rank" style="font-weight:600;">${baseIdx + idx + 1}</td>
+                <td class="name">${Utils.sanitize(s.nombreCompleto)}</td>
+                <td class="mat">${s.numMaterias}</td>
+                <td><span class="avg ${avgClass}">${s.promedio.toFixed(1)}</span></td>
+              </tr>`;
+            }
+            const medal = s.rank <= 3 ? `<span class="medal">${medalImgs[s.rank - 1]}</span>` : `<strong>${s.rank}</strong>`;
             return `<tr${s.rank <= 3 ? ' class="top3"' : ''}>
               <td class="rank">${medal}</td>
               <td class="name">${Utils.sanitize(s.nombreCompleto)}</td>
@@ -485,23 +524,26 @@ const HonorRollModule = (() => {
           }).join('');
 
           const pageLabel = pages.length > 1 ? ` &mdash; P&aacute;gina ${pageIdx + 1} de ${pages.length}` : '';
+          const docTitle = isListado ? 'LISTA DE ALUMNOS POR PROMEDIO' : 'CUADRO DE HONOR';
+          const groupPrefix = isListado ? '' : `${TROFEO} `;
+          const rankColHeader = isListado ? 'N\u00ba' : '#';
 
           allPagesHtml += `
             <section class="page group-page">
               <div class="hdr">
                 <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
-                <h2>CUADRO DE HONOR</h2>
+                <h2>${docTitle}</h2>
                 <div class="info">${Utils.sanitize(partialLabel).toUpperCase()}${effectiveTurno ? ' &mdash; TURNO ' + Utils.sanitize(effectiveTurno) : ''}</div>
                 <div class="info subtle">Ciclo Escolar 2025-2026</div>
               </div>
               <div class="group-card">
                 <div class="group-header">
-                  <span>${TROFEO} GRUPO ${Utils.sanitize(group.grupo)}${pageLabel}</span>
+                  <span>${groupPrefix}GRUPO ${Utils.sanitize(group.grupo)}${pageLabel}</span>
                   <span class="badge-g">${group.grado}&ordm; GRADO</span>
                 </div>
                 <table>
                   <thead>
-                    <tr><th style="width:50px;">#</th><th>Alumno</th><th style="width:60px;text-align:center;">Mat.</th><th style="width:90px;text-align:center;">Promedio</th></tr>
+                    <tr><th style="width:50px;">${rankColHeader}</th><th>Alumno</th><th style="width:60px;text-align:center;">Mat.</th><th style="width:90px;text-align:center;">Promedio</th></tr>
                   </thead>
                   <tbody>${rows}</tbody>
                 </table>
