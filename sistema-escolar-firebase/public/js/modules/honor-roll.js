@@ -379,10 +379,19 @@ const HonorRollModule = (() => {
     _massPrinting = true;
 
     const turno = document.getElementById('hr-turno').value;
+    const grupoId = document.getElementById('hr-grupo')?.value || '';
     const partial = document.getElementById('hr-partial').value;
     const topCount = parseInt(document.getElementById('hr-top').value);
+    const order = document.getElementById('hr-order')?.value || 'desc';
+    const isAsc = order === 'asc';
+    const showAll = topCount === 0;
 
-    if (!turno) { Toast.show('Selecciona un turno', 'warning'); _massPrinting = false; return; }
+    // Si hay grupo, no requerimos turno (se infiere). Sin grupo y sin turno => error.
+    if (!turno && !grupoId) {
+      Toast.show('Selecciona un turno o un grupo', 'warning');
+      _massPrinting = false;
+      return;
+    }
 
     const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
     // Medallas como caracteres reales (surrogate pairs)
@@ -392,7 +401,18 @@ const HonorRollModule = (() => {
     const MEDAL3 = '\uD83E\uDD49';  // 🥉
 
     try {
-      const filtered = students.filter(s => s.turno === turno);
+      // Filtrar por turno y/o grupo
+      let filtered = [...students];
+      if (turno) filtered = filtered.filter(s => s.turno === turno);
+      if (grupoId) filtered = filtered.filter(s => s.groupId === grupoId);
+
+      // Si hay grupo y no hay turno, inferir turno del grupo para el header
+      let effectiveTurno = turno;
+      if (!effectiveTurno && grupoId) {
+        const grp = groups.find(g => g.id === grupoId);
+        effectiveTurno = grp?.turno || '';
+      }
+
       const relevantGroupIds = [...new Set(filtered.map(s => s.groupId).filter(Boolean))];
       const allGrades = await Store.getGradesByGroups(relevantGroupIds, true);
 
@@ -407,7 +427,8 @@ const HonorRollModule = (() => {
         const grades = gradesByStudent[s.id] || [];
         const avg = grades.length > 0 ? grades.reduce((a, b) => a + b, 0) / grades.length : 0;
         return { ...s, promedio: Math.round(avg * 100) / 100, numMaterias: grades.length };
-      }).filter(s => s.numMaterias > 0).sort((a, b) => b.promedio - a.promedio);
+      }).filter(s => s.numMaterias > 0)
+        .sort((a, b) => isAsc ? (a.promedio - b.promedio) : (b.promedio - a.promedio));
 
       // Group by grupo
       const byGroup = {};
@@ -423,12 +444,15 @@ const HonorRollModule = (() => {
       const top3 = rankedAll.filter(s => s.rank <= 3);
 
       if (sortedGroups.length === 0) {
-        Toast.show('No hay calificaciones capturadas para este turno y parcial', 'warning');
+        Toast.show('No hay calificaciones capturadas para los filtros seleccionados', 'warning');
         _massPrinting = false;
         return;
       }
 
-      Toast.show('Generando documento con ' + sortedGroups.length + ' cuadros de honor + Top 3...', 'info');
+      // Si se filtro por grupo especifico, no incluir Top 3 institucional
+      const includeInstitucional = !grupoId && !isAsc;
+
+      Toast.show(`Generando documento con ${sortedGroups.length} cuadro(s) de honor${includeInstitucional ? ' + Top 3' : ''}...`, 'info');
 
       // Build single HTML document with all groups + top 3
       let allPagesHtml = '';
@@ -441,9 +465,10 @@ const HonorRollModule = (() => {
 
       // One or more pages per group (paginar si > 15 alumnos por empates)
       sortedGroups.forEach((group) => {
-        const sorted = group.students.sort((a, b) => b.promedio - a.promedio);
-        // Ranking denso a 1 decimal (la tabla muestra .toFixed(1))
-        const top = assignDenseRanks(sorted, 1).filter(s => s.rank <= topCount);
+        const sorted = group.students.sort((a, b) => isAsc ? (a.promedio - b.promedio) : (b.promedio - a.promedio));
+        // Ranking denso a 1 decimal; showAll => no filtrar
+        const ranked = assignDenseRanks(sorted, 1);
+        const top = showAll ? ranked : ranked.filter(s => s.rank <= topCount);
         const pages = chunk(top, MAX_PER_PAGE);
         const medalImgs = [MEDAL1, MEDAL2, MEDAL3];
 
@@ -466,7 +491,7 @@ const HonorRollModule = (() => {
               <div class="hdr">
                 <h1>ESCUELA PREPARATORIA OFICIAL NUM. 67</h1>
                 <h2>CUADRO DE HONOR</h2>
-                <div class="info">${Utils.sanitize(partialLabel).toUpperCase()} &mdash; TURNO ${Utils.sanitize(turno)}</div>
+                <div class="info">${Utils.sanitize(partialLabel).toUpperCase()}${effectiveTurno ? ' &mdash; TURNO ' + Utils.sanitize(effectiveTurno) : ''}</div>
                 <div class="info subtle">Ciclo Escolar 2025-2026</div>
               </div>
               <div class="group-card">
@@ -485,8 +510,8 @@ const HonorRollModule = (() => {
         });
       });
 
-      // Top 3 Institucional — ranking denso + paginacion de 15 por hoja
-      const top3Pages = chunk(top3, MAX_PER_PAGE);
+      // Top 3 Institucional — solo si no se filtró por grupo ni es orden ascendente
+      const top3Pages = includeInstitucional ? chunk(top3, MAX_PER_PAGE) : [];
       const medalsT5 = [MEDAL1, MEDAL2, MEDAL3];
 
       top3Pages.forEach((pageStudents, pageIdx) => {
@@ -537,7 +562,7 @@ const HonorRollModule = (() => {
       });
 
       const fullHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-        <title>Cuadros de Honor ${turno}</title>
+        <title>Cuadros de Honor ${effectiveTurno || ''}${grupoId ? ' ' + (groups.find(g => g.id === grupoId)?.nombre || '') : ''}</title>
         <style>
           @page { size: letter portrait; margin: 14mm 16mm; }
           * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
@@ -614,7 +639,7 @@ const HonorRollModule = (() => {
       </head><body>
         ${allPagesHtml}
         <script>
-          document.title = 'Cuadros_Honor_${turno}_${partial}';
+          document.title = 'Cuadros_Honor_${(effectiveTurno || 'Grupo')}_${grupoId ? (groups.find(g => g.id === grupoId)?.nombre || '') + '_' : ''}${partial}';
           setTimeout(() => window.print(), 600);
         <\/script>
       </body></html>`;
@@ -623,7 +648,7 @@ const HonorRollModule = (() => {
       w.document.write(fullHtml);
       w.document.close();
 
-      Toast.show('Documento generado con ' + sortedGroups.length + ' grupos + Top 10 institucional. Guarda como PDF.', 'success');
+      Toast.show(`Documento generado con ${sortedGroups.length} grupo(s)${includeInstitucional ? ' + Top 3 institucional' : ''}. Guarda como PDF.`, 'success');
     } catch (e) {
       console.error('Error:', e);
       Toast.show('Error: ' + e.message, 'error');
