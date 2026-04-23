@@ -66,6 +66,12 @@ const HonorRollModule = (() => {
               </select>
             </div>
             <div class="form-group">
+              <label for="hr-grupo">Grupo</label>
+              <select id="hr-grupo">
+                <option value="">Todos los grupos</option>
+              </select>
+            </div>
+            <div class="form-group">
               <label for="hr-partial">Parcial</label>
               <select id="hr-partial">${parcialOptions}</select>
             </div>
@@ -125,6 +131,7 @@ const HonorRollModule = (() => {
   async function generate() {
     const turno = document.getElementById('hr-turno').value;
     const grado = document.getElementById('hr-grado').value;
+    const grupoId = document.getElementById('hr-grupo')?.value || '';
     const partial = document.getElementById('hr-partial').value;
     const topCount = parseInt(document.getElementById('hr-top').value); // 0 = todos
     const order = document.getElementById('hr-order')?.value || 'desc';  // desc = mayor a menor
@@ -138,6 +145,7 @@ const HonorRollModule = (() => {
       let filtered = [...students];
       if (turno) filtered = filtered.filter(s => s.turno === turno);
       if (grado) filtered = filtered.filter(s => s.grado === parseInt(grado));
+      if (grupoId) filtered = filtered.filter(s => s.groupId === grupoId);
 
       if (filtered.length === 0) {
         resultsDiv.innerHTML = `<div class="empty-state"><span class="material-icons-round empty-state-icon">search_off</span><p class="empty-state-text">No hay estudiantes que coincidan con los filtros seleccionados.</p></div>`;
@@ -623,6 +631,29 @@ const HonorRollModule = (() => {
     _massPrinting = false;
   }
 
+  // Popula el selector de grupo en cascada con turno y grado
+  function refreshGroupSelect() {
+    const turno = document.getElementById('hr-turno')?.value || '';
+    const grado = document.getElementById('hr-grado')?.value || '';
+    const select = document.getElementById('hr-grupo');
+    if (!select) return;
+    const prev = select.value;
+
+    let filtered = [...groups];
+    if (turno) filtered = filtered.filter(g => g.turno === turno);
+    if (grado) filtered = filtered.filter(g => String(g.grado) === String(grado));
+    filtered.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+
+    const opts = ['<option value="">Todos los grupos</option>']
+      .concat(filtered.map(g => {
+        const label = g.turno && !turno ? `${Utils.sanitize(g.nombre)} (${g.turno.slice(0,3)})` : Utils.sanitize(g.nombre);
+        return `<option value="${Utils.sanitize(g.id)}">${label}</option>`;
+      }));
+    select.innerHTML = opts.join('');
+    // Preservar selección previa si sigue siendo válida
+    if (prev && filtered.some(g => g.id === prev)) select.value = prev;
+  }
+
   function bindEvents(container) {
     container.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');
@@ -632,6 +663,13 @@ const HonorRollModule = (() => {
       else if (btn.dataset.action === 'print') printHonorRoll();
       else if (btn.dataset.action === 'mass-print') massPrintHonorRoll();
     });
+    container.addEventListener('change', (e) => {
+      if (e.target.id === 'hr-turno' || e.target.id === 'hr-grado') {
+        refreshGroupSelect();
+      }
+    });
+    // Poblar inicial
+    refreshGroupSelect();
   }
 
   return { render };
