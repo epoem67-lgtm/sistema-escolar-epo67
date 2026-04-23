@@ -77,6 +77,14 @@ const HonorRollModule = (() => {
                 <option value="10">Top 10</option>
                 <option value="15">Top 15</option>
                 <option value="20">Top 20</option>
+                <option value="0">Todos</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="hr-order">Orden</label>
+              <select id="hr-order">
+                <option value="desc" selected>Mayor a menor (Cuadro de honor)</option>
+                <option value="asc">Menor a mayor (Lista de riesgo)</option>
               </select>
             </div>
           </div>
@@ -118,8 +126,11 @@ const HonorRollModule = (() => {
     const turno = document.getElementById('hr-turno').value;
     const grado = document.getElementById('hr-grado').value;
     const partial = document.getElementById('hr-partial').value;
-    const topCount = parseInt(document.getElementById('hr-top').value);
+    const topCount = parseInt(document.getElementById('hr-top').value); // 0 = todos
+    const order = document.getElementById('hr-order')?.value || 'desc';  // desc = mayor a menor
     const resultsDiv = document.getElementById('hr-results');
+    const isAsc = order === 'asc';
+    const showAll = topCount === 0;
 
     resultsDiv.innerHTML = `<div class="loading-state"><span class="material-icons-round loading-spinner">autorenew</span><p>Calculando promedios...</p></div>`;
 
@@ -148,7 +159,8 @@ const HonorRollModule = (() => {
         const grades = gradesByStudent[s.id] || [];
         const avg = grades.length > 0 ? grades.reduce((a, b) => a + b, 0) / grades.length : 0;
         return { ...s, promedio: Math.round(avg * 100) / 100, numMaterias: grades.length };
-      }).filter(s => s.numMaterias > 0).sort((a, b) => b.promedio - a.promedio);
+      }).filter(s => s.numMaterias > 0)
+        .sort((a, b) => isAsc ? (a.promedio - b.promedio) : (b.promedio - a.promedio));
 
       if (studentAverages.length === 0) {
         resultsDiv.innerHTML = `
@@ -173,9 +185,10 @@ const HonorRollModule = (() => {
       });
 
       Object.values(byGroup).forEach(g => {
-        g.students.sort((a, b) => b.promedio - a.promedio);
-        // Ranking denso a 1 decimal (coincide con la visualización .toFixed(1))
-        g.students = assignDenseRanks(g.students, 1).filter(s => s.rank <= topCount);
+        g.students.sort((a, b) => isAsc ? (a.promedio - b.promedio) : (b.promedio - a.promedio));
+        // Ranking denso a 1 decimal. Si showAll=true, no filtrar (muestra todos).
+        const ranked = assignDenseRanks(g.students, 1);
+        g.students = showAll ? ranked : ranked.filter(s => s.rank <= topCount);
       });
 
       const sortedGroups = Object.values(byGroup).sort((a, b) => {
@@ -186,7 +199,10 @@ const HonorRollModule = (() => {
       const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
       const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
 
-      let html = `<h2 class="section-title">Cuadro de Honor - ${Utils.sanitize(partialLabel)}</h2>`;
+      const titulo = isAsc
+        ? `Lista por Promedio (menor a mayor) - ${Utils.sanitize(partialLabel)}`
+        : `Cuadro de Honor - ${Utils.sanitize(partialLabel)}`;
+      let html = `<h2 class="section-title">${titulo}</h2>`;
       html += '<div class="stats-grid">';
 
       for (const group of sortedGroups) {
@@ -229,10 +245,12 @@ const HonorRollModule = (() => {
 
       html += '</div>';
 
-      // ── TOP 3 INSTITUCIONAL POR TURNO (ranking denso, empates comparten lugar) ──
+      // ── TOP 3 INSTITUCIONAL POR TURNO (solo en orden descendente) ──
       const turnos = [...new Set(studentAverages.map(s => s.turno))].sort();
-      html += '<h2 class="section-title" style="margin-top:24px;">Top 3 Institucional por Turno</h2>';
-      for (const t of turnos) {
+      if (!isAsc) {
+        html += '<h2 class="section-title" style="margin-top:24px;">Top 3 Institucional por Turno</h2>';
+      }
+      for (const t of (isAsc ? [] : turnos)) {
         // Top 3 institucional a 2 decimales (coincide con .toFixed(2))
         const ranked = assignDenseRanks(studentAverages.filter(s => s.turno === t), 2);
         const top3 = ranked.filter(s => s.rank <= 3);
