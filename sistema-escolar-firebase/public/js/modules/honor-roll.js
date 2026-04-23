@@ -100,6 +100,12 @@ const HonorRollModule = (() => {
                 <option value="listado">Listado simple (sin decoraciones)</option>
               </select>
             </div>
+            <div class="form-group" style="display:flex;align-items:flex-end;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;margin-bottom:8px;" title="Agrega pagina con Top 3 Institucional al final. Solo aplica en Cuadro de Honor orden descendente sin filtro de grupo.">
+                <input type="checkbox" id="hr-include-institucional" style="width:16px;height:16px;">
+                Incluir Top 3 Institucional
+              </label>
+            </div>
           </div>
           <div class="filter-bar-actions">
             <button class="btn btn-primary" data-action="generate">Generar</button>
@@ -278,9 +284,10 @@ const HonorRollModule = (() => {
 
       html += '</div>';
 
-      // ── TOP 3 INSTITUCIONAL POR TURNO (solo en orden descendente y formato honor) ──
+      // ── TOP 3 INSTITUCIONAL POR TURNO (solo si el usuario lo solicita) ──
+      const includeInstitucionalPantalla = document.getElementById('hr-include-institucional')?.checked;
       const turnos = [...new Set(studentAverages.map(s => s.turno))].sort();
-      const showInstitucional = !isAsc && !isListado;
+      const showInstitucional = includeInstitucionalPantalla && !isAsc && !isListado;
       if (showInstitucional) {
         html += '<h2 class="section-title" style="margin-top:24px;">Top 3 Institucional por Turno</h2>';
       }
@@ -477,8 +484,9 @@ const HonorRollModule = (() => {
         return;
       }
 
-      // Top 3 institucional: solo si no hay grupo, no es asc y no es listado
-      const includeInstitucional = !grupoId && !isAsc && !isListado;
+      // Top 3 institucional: opt-in via checkbox; solo cuando no hay grupo, es desc y es formato honor
+      const userWantsInstitucional = document.getElementById('hr-include-institucional')?.checked;
+      const includeInstitucional = userWantsInstitucional && !grupoId && !isAsc && !isListado;
 
       Toast.show(`Generando documento con ${sortedGroups.length} cuadro(s) de honor${includeInstitucional ? ' + Top 3' : ''}...`, 'info');
 
