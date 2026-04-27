@@ -884,11 +884,21 @@ html, body { margin:0; padding:0; height:100%; }
   // Cache de blobs generados para descarga/compartir individual
   let _massCache = []; // [{ orientador, filename, blob, url, groups, groupObjs, partial, partialLabel, turno, cicloEscolar }]
 
-  // Construye HTML imprimible (preview/PDF) para los grupos de un orientador
+  // Color de bloque para cada materia (azul=tronco comun, verde=tecnologica, amarillo=formativa, rojo=ingles)
+  function subjectBlockColor(name) {
+    const n = (name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+    if (/INGL[EÉ]S/.test(n)) return '#fde0d8'; // rojo claro
+    if (/ARTISTIC|FISICAS|DEPORTIV|SALUD|IGUALDAD|DERECHOS|SEXUALIDAD|GENERO|FILOSOF|HUMANIDAD|PRACTICA Y COLABORAC/.test(n)) return '#fff7c2'; // amarillo
+    if (/COMUNIDADES|MANTENIMIENTO|CULTURA DIGITAL|TALLER DE CULTURA|PAGINAS WEB|DISENO DIGITAL|TALLER DE CIENCIAS/.test(n)) return '#d8f0d3'; // verde
+    return '#dbe9f7'; // azul (tronco comun: lengua, matematicas, ciencias, sociales, historia)
+  }
+
+  // HTML imprimible para un orientador: concentrados + seguimientos + cuadro de honor
   function buildOrientacionPrintHTML(orientador, groupsOri, partial, partialLabel, cicloEscolar, turno) {
     const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
-    let body = '';
     const semestreByGrado = { 1: '2\u00ba', 2: '4\u00ba', 3: '6\u00ba' };
+    let body = '';
+    const allBest = []; // para cuadro de honor
 
     for (const grp of groupsOri) {
       const subsRaw = allSubjects.filter(s => String(s.grado) === String(grp.grado));
@@ -905,7 +915,15 @@ html, body { margin:0; padding:0; height:100%; }
         gMap[g.studentId][g.subjectId] = g;
       }
 
-      // Encabezado por grupo
+      // ─── HOJA: CONCENTRADO POR GRUPO ─────────────────────────────
+      const headerColors = subs.map(s => subjectBlockColor(s.nombre));
+      const headerCols = subs.map((s, i) =>
+        `<th colspan="2" class="mat-h" style="background:${headerColors[i]};">${Utils.sanitize(subjectAbbr(s.nombre))}</th>`
+      ).join('');
+      const fcRow = subs.map((_, i) =>
+        `<th class="fc" style="background:${headerColors[i]};">F</th><th class="fc" style="background:${headerColors[i]};">C</th>`
+      ).join('');
+
       body += `<section class="grp-page">
         <div class="hdr">
           <h1>ESCUELA PREPARATORIA OFICIAL N&deg; 67</h1>
@@ -917,73 +935,216 @@ html, body { margin:0; padding:0; height:100%; }
           <thead>
             <tr>
               <th rowspan="2" class="nl">N.L</th>
-              <th rowspan="2">ALUMNO</th>
-              ${subs.map(s => `<th colspan="2" class="mat-h">${Utils.sanitize(subjectAbbr(s.nombre))}</th>`).join('')}
-              <th rowspan="2" class="prom-h">Prom.</th>
+              <th rowspan="2" class="ap">AP. PATERNO</th>
+              <th rowspan="2" class="ap">AP. MATERNO</th>
+              <th rowspan="2" class="nm">NOMBRE</th>
+              ${headerCols}
+              <th rowspan="2" class="mr-h">M.R</th>
+              <th rowspan="2" class="prom-h">PROM</th>
             </tr>
-            <tr>
-              ${subs.map(() => '<th class="fc">F</th><th class="fc">C</th>').join('')}
-            </tr>
+            <tr>${fcRow}</tr>
           </thead>
           <tbody>`;
+
       stus.forEach((stu, idx) => {
-        let sumCal = 0, cntCal = 0;
-        const cells = subs.map(s => {
+        let sumCal = 0, cntCal = 0, mr = 0;
+        const cells = subs.map((s, i) => {
           const gd = (gMap[stu.id] && gMap[stu.id][s.id]) || null;
           const f = gd && gd.faltas != null ? Number(gd.faltas) : '';
           const c = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : '')) : '';
-          if (c !== '' && !isNaN(c)) { sumCal += Number(c); cntCal++; }
+          if (c !== '' && !isNaN(c)) {
+            sumCal += Number(c); cntCal++;
+            if (Number(c) < passGrade) mr++;
+          }
           const fail = c !== '' && Number(c) < passGrade;
-          return `<td class="num">${f === '' ? '' : f}</td><td class="num ${fail ? 'fail' : ''}">${c === '' ? '' : c}</td>`;
+          const cBg = fail ? 'background:#ffd3df;color:#a00;font-weight:700;' : '';
+          return `<td class="num">${f === '' ? '' : f}</td><td class="num" style="${cBg}">${c === '' ? '' : c}</td>`;
         }).join('');
         const prom = cntCal > 0 ? (sumCal / cntCal).toFixed(2) : '';
         const promFail = prom && Number(prom) < passGrade;
-        const fullName = `${stu.apellido1 || ''} ${stu.apellido2 || ''} ${stu.nombres || ''}`.trim();
         body += `<tr>
           <td class="num">${idx + 1}</td>
-          <td>${Utils.sanitize(fullName)}</td>
+          <td class="ap">${Utils.sanitize(stu.apellido1 || '')}</td>
+          <td class="ap">${Utils.sanitize(stu.apellido2 || '')}</td>
+          <td class="nm">${Utils.sanitize(stu.nombres || '')}</td>
           ${cells}
-          <td class="num bold ${promFail ? 'fail' : ''}">${prom}</td>
+          <td class="num mr ${mr > 0 ? 'mr-warn' : ''}">${mr || ''}</td>
+          <td class="num bold" style="${promFail ? 'background:#ffd3df;color:#a00;' : prom && Number(prom) >= 9 ? 'background:#d4edda;color:#155724;' : ''}">${prom}</td>
         </tr>`;
+        if (cntCal > 0) {
+          allBest.push({
+            grupo: grp.nombre, grado: grp.grado,
+            apellido1: stu.apellido1 || '', apellido2: stu.apellido2 || '',
+            nombres: stu.nombres || '', promedio: Number(prom)
+          });
+        }
       });
-      body += `</tbody></table>
+      body += `</tbody></table></section>`;
+
+      // ─── HOJA: SEGUIMIENTO POR GRUPO ─────────────────────────────
+      const segHeaderCols = subs.map((s, i) =>
+        `<th class="mat-h" style="background:${headerColors[i]};font-size:7pt;padding:4px 2px;">${Utils.sanitize(subjectAbbr(s.nombre))}</th>`
+      ).join('');
+
+      const segRows = [];
+      let segIdx = 1;
+      const totalsBySubject = subs.map(() => 0);
+      stus.forEach(stu => {
+        const sg = gMap[stu.id] || {};
+        const cellsArr = subs.map(s => {
+          const gd = sg[s.id];
+          const cal = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : null)) : null;
+          return (cal != null && !isNaN(cal) && cal < passGrade) ? cal : '';
+        });
+        const mr = cellsArr.filter(c => c !== '').length;
+        if (mr > 0) {
+          cellsArr.forEach((v, i) => { if (v !== '') totalsBySubject[i]++; });
+          segRows.push(`<tr>
+            <td class="num">${segIdx++}</td>
+            <td class="ap">${Utils.sanitize(stu.apellido1 || '')}</td>
+            <td class="ap">${Utils.sanitize(stu.apellido2 || '')}</td>
+            <td class="nm">${Utils.sanitize(stu.nombres || '')}</td>
+            ${cellsArr.map(v => `<td class="num" style="${v !== '' ? 'background:#ffd3df;color:#a00;font-weight:700;' : ''}">${v}</td>`).join('')}
+            <td class="num mr-warn">${mr}</td>
+          </tr>`);
+        }
+      });
+      const totalsRow = `<tr style="font-weight:700;background:#f0f0f0;">
+        <td colspan="4" class="ap" style="text-align:right;">TOTAL</td>
+        ${totalsBySubject.map(t => `<td class="num">${t || ''}</td>`).join('')}
+        <td class="num">${totalsBySubject.reduce((a, b) => a + b, 0)}</td>
+      </tr>`;
+
+      body += `<section class="grp-page">
+        <div class="hdr">
+          <h1>ESCUELA PREPARATORIA OFICIAL N&deg; 67</h1>
+          <h2>SEGUIMIENTO &mdash; ${Utils.sanitize(partialLabel)}</h2>
+          <div class="info">CICLO ${Utils.sanitize(cicloEscolar)} &middot; TURNO ${Utils.sanitize(turno)} &middot; ${grp.grado}&ordm; GRADO &middot; GRUPO ${Utils.sanitize(grp.nombre)}</div>
+          <div class="info subtle">Orientador(a): <b>${Utils.sanitize(orientador)}</b></div>
+        </div>
+        <table class="seg">
+          <thead>
+            <tr>
+              <th class="nl">#</th>
+              <th class="ap">AP. PATERNO</th>
+              <th class="ap">AP. MATERNO</th>
+              <th class="nm">NOMBRE</th>
+              ${segHeaderCols}
+              <th class="mr-h">M.R</th>
+            </tr>
+          </thead>
+          <tbody>${segRows.length ? segRows.join('') : `<tr><td colspan="${4 + subs.length + 1}" style="text-align:center;padding:14px;color:#666;font-style:italic;">Sin alumnos reprobados en este parcial</td></tr>`}
+          ${segRows.length ? totalsRow : ''}
+          </tbody>
+        </table>
       </section>`;
     }
+
+    // ─── HOJA FINAL: CUADRO DE HONOR / MEJORES PROMEDIOS ──────────
+    // Top 3 ranking denso por grupo
+    const groupNames = [...new Set(groupsOri.map(g => g.nombre))];
+    const honorByGroup = {};
+    for (const grpName of groupNames) {
+      const list = allBest.filter(s => s.grupo === grpName).sort((a, b) => b.promedio - a.promedio);
+      // Ranking denso
+      let rank = 0, lastP = null;
+      const ranked = list.map(s => {
+        if (s.promedio !== lastP) { rank++; lastP = s.promedio; }
+        return { ...s, rank };
+      });
+      honorByGroup[grpName] = ranked;
+    }
+
+    let honorBody = `<section class="grp-page">
+      <div class="hdr">
+        <h1>ESCUELA PREPARATORIA OFICIAL N&deg; 67</h1>
+        <h2>MEJORES PROMEDIOS &mdash; ${Utils.sanitize(partialLabel)}</h2>
+        <div class="info">CICLO ${Utils.sanitize(cicloEscolar)} &middot; TURNO ${Utils.sanitize(turno)}</div>
+        <div class="info subtle">Orientador(a): <b>${Utils.sanitize(orientador)}</b></div>
+      </div>`;
+
+    for (const grpName of groupNames) {
+      const ranked = honorByGroup[grpName];
+      const grado = (groupsOri.find(g => g.nombre === grpName) || {}).grado || '';
+      const gradoTxt = { 1: 'PRIMERO', 2: 'SEGUNDO', 3: 'TERCERO' }[grado] || `${grado}\u00b0`;
+      const grpNum = grpName.split('-')[1] || grpName;
+      const grpTxt = { '1': 'UNO', '2': 'DOS', '3': 'TRES' }[grpNum] || grpNum;
+
+      honorBody += `<table class="honor">
+        <thead>
+          <tr><th colspan="5" class="honor-title">${gradoTxt} ${grpTxt}</th></tr>
+          <tr><th class="nl">#</th><th class="ap">AP. PATERNO</th><th class="ap">AP. MATERNO</th><th class="nm">NOMBRE</th><th class="prom-h">PROM</th></tr>
+        </thead>
+        <tbody>`;
+      ranked.forEach((s, idx) => {
+        const lugar = s.rank === 1 ? '1\u00ba' : s.rank === 2 ? '2\u00ba' : s.rank === 3 ? '3\u00ba' : '';
+        const lugarBg = s.rank === 1 ? 'background:#ffd9d9;' : s.rank === 2 ? 'background:#d4e7ff;' : s.rank === 3 ? 'background:#d4f0d4;' : '';
+        honorBody += `<tr>
+          <td class="num">${idx + 1}</td>
+          <td class="ap">${Utils.sanitize(s.apellido1)}</td>
+          <td class="ap">${Utils.sanitize(s.apellido2)}</td>
+          <td class="nm">${Utils.sanitize(s.nombres)}</td>
+          <td class="num"><span style="font-weight:700;">${s.promedio.toFixed(1)}</span> ${lugar ? `<span style="display:inline-block;padding:1px 8px;border-radius:4px;font-weight:700;${lugarBg}">${lugar}</span>` : ''}</td>
+        </tr>`;
+      });
+      honorBody += `</tbody></table>`;
+    }
+    honorBody += `</section>`;
+    body += honorBody;
 
     return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
       <title>Concentrado ${Utils.sanitize(orientador)} ${partial}</title>
       <style>
-        @page { size: letter landscape; margin: 10mm 8mm; }
+        @page { size: letter landscape; margin: 8mm 6mm; }
         * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
-        body { font-family: Arial, Helvetica, sans-serif; color: #000; padding: 6mm; }
-        .toolbar { position: sticky; top:0; background:#1b3a5c; color:#fff; padding:8px 14px; margin:-6mm -6mm 10mm -6mm; display:flex; gap:10px; align-items:center; justify-content:space-between; }
-        .toolbar h3 { margin:0; font-size:14pt; font-weight:700; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #000; padding: 4mm; }
+        .toolbar { position: sticky; top:0; background:#1b3a5c; color:#fff; padding:8px 14px; margin:-4mm -4mm 8mm -4mm; display:flex; gap:10px; align-items:center; justify-content:space-between; z-index:100; }
+        .toolbar h3 { margin:0; font-size:13pt; font-weight:700; }
+        .toolbar .meta { font-size:9pt; opacity:0.85; }
         .toolbar button { background:#fff; color:#1b3a5c; border:0; padding:6px 14px; border-radius:4px; font-weight:700; cursor:pointer; font-size:11pt; }
         @media print { .toolbar { display:none; } body { padding:0; } }
 
         .grp-page { page-break-after: always; }
         .grp-page:last-child { page-break-after: auto; }
 
-        .hdr { text-align:center; margin-bottom:8px; }
+        .hdr { text-align:center; margin-bottom:6px; }
         .hdr h1 { font-size:11pt; font-weight:700; }
         .hdr h2 { font-size:10pt; font-weight:700; color:#1b3a5c; }
-        .hdr .info { font-size:9pt; color:#333; margin-top:2px; }
+        .hdr .info { font-size:9pt; color:#333; margin-top:1px; }
         .hdr .subtle { font-size:8.5pt; color:#666; }
 
-        table.conc { width:100%; border-collapse:collapse; font-size:8pt; }
-        table.conc th, table.conc td { border:0.6px solid #444; padding:1.5px 3px; text-align:left; }
-        table.conc thead th { background:#e8ecf1; font-weight:700; text-align:center; }
-        table.conc th.fc { width:18px; }
-        table.conc th.mat-h { writing-mode: horizontal-tb; font-size:7.5pt; }
-        table.conc th.nl { width:22px; }
-        table.conc th.prom-h { width:32px; }
-        table.conc td.num { text-align:center; font-variant-numeric:tabular-nums; }
+        table.conc, table.seg, table.honor { width:100%; border-collapse:collapse; font-size:8pt; margin-top:4px; }
+        table.conc th, table.conc td, table.seg th, table.seg td, table.honor th, table.honor td {
+          border:0.6px solid #555; padding:1.5px 3px;
+        }
+        table.conc thead th, table.seg thead th, table.honor thead th {
+          background:#e8ecf1; font-weight:700; text-align:center; font-size:7.5pt;
+        }
+        table.conc th.fc, table.seg th.fc { width:18px; font-size:7pt; }
+        table.conc th.mat-h, table.seg th.mat-h { font-size:7pt; padding:3px 1px; }
+        table.conc th.nl, table.seg th.nl, table.honor th.nl { width:22px; }
+        table.conc th.ap, table.seg th.ap, table.honor th.ap { width:80px; }
+        table.conc th.nm, table.seg th.nm, table.honor th.nm { width:100px; }
+        table.conc th.mr-h, table.seg th.mr-h { width:24px; }
+        table.conc th.prom-h, table.honor th.prom-h { width:55px; }
+        table.conc td.num, table.seg td.num, table.honor td.num { text-align:center; font-variant-numeric:tabular-nums; }
         table.conc td.bold { font-weight:700; }
-        table.conc td.fail { background:#fde2e2; color:#c0392b; font-weight:700; }
+        table.conc td.ap, table.conc td.nm, table.seg td.ap, table.seg td.nm, table.honor td.ap, table.honor td.nm {
+          font-size:8pt; text-transform:uppercase;
+        }
+        table.conc td.mr-warn, table.seg .mr-warn { background:#ffd3df; color:#a00; font-weight:700; }
+        table.honor th.honor-title {
+          background:#1b3a5c !important; color:#fff !important; font-size:11pt;
+          padding:6px; letter-spacing:1px;
+        }
+        table.honor { margin-bottom:8px; }
       </style>
       </head><body>
         <div class="toolbar">
-          <h3>${Utils.sanitize(orientador)} &mdash; ${groupsOri.map(g => g.nombre).join(', ')}</h3>
+          <div>
+            <h3>${Utils.sanitize(orientador)}</h3>
+            <div class="meta">${groupsOri.length} grupo(s): ${groupsOri.map(g => g.nombre).join(' &middot; ')}</div>
+          </div>
           <button onclick="window.print()">&#128424; Imprimir / Guardar PDF</button>
         </div>
         ${body}
@@ -1008,12 +1169,19 @@ html, body { margin:0; padding:0; height:100%; }
       );
       if (turnoGroups.length === 0) { Toast.show('No hay grupos en este turno', 'warning'); return; }
 
-      const byOrientador = {};
+      // Agrupar por orientador con clave NORMALIZADA (quita tildes, mayusculas, espacios extra)
+      // para que diferencias ortograficas (ORTIZ vs ORTÍZ) no creen 2 archivos del mismo orientador.
+      const byOrientadorKey = {};
       for (const g of turnoGroups) {
         const ori = (typeof K.getOrientador === 'function' ? K.getOrientador(g.turno, g.nombre) : null) ||
                     g.orientador || 'SIN ORIENTADOR';
-        byOrientador[ori] = byOrientador[ori] || [];
-        byOrientador[ori].push(g);
+        const key = ori.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+        if (!byOrientadorKey[key]) byOrientadorKey[key] = { display: ori, groups: [] };
+        byOrientadorKey[key].groups.push(g);
+      }
+      const byOrientador = {};
+      for (const k of Object.keys(byOrientadorKey)) {
+        byOrientador[byOrientadorKey[k].display] = byOrientadorKey[k].groups;
       }
 
       const orientadores = Object.keys(byOrientador).sort();
