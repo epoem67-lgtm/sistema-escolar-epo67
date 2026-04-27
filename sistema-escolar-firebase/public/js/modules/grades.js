@@ -702,110 +702,116 @@ const GradesModule = (function () {
     _isSaving = false;
     _draftKey = `grade_draft_${selectedGroup}_${selectedSubject}_${currentPartial}`;
 
-    // ═══ INPUT CLAMPING + UNDO + DIRTY TRACKING ═══
+    // ═══ INPUT CLAMPING + UNDO + DIRTY TRACKING (event delegation) ═══
+    // Antes: 5 listeners por input × ~300 inputs = ~1500 listeners DOM, lag al teclear.
+    // Ahora: 4 listeners en container, independiente del tamano de la tabla.
     let _snapshotPending = false;
 
-    container.querySelectorAll('.grade-rubro, .grade-faltas').forEach(input => {
+    const _isGradeInput = (el) => !!(el && el.classList &&
+      (el.classList.contains('grade-rubro') || el.classList.contains('grade-faltas')));
+
+    // focus/blur no burbujean, usamos focusin/focusout
+    container.addEventListener('focusin', (e) => {
+      const input = e.target;
+      if (!_isGradeInput(input)) return;
+      input.select();
+      if (!_snapshotPending) {
+        _snapshotPending = true;
+        input._prevVal = input.value;
+      }
+    });
+
+    container.addEventListener('focusout', (e) => {
+      const input = e.target;
+      if (!_isGradeInput(input)) return;
+      if (input.value.trim() === '') { _snapshotPending = false; return; }
       const maxVal = parseFloat(input.max) || 10;
       const isInteger = input.classList.contains('grade-faltas');
+      let v = parseFloat(input.value.replace(',', '.'));
+      if (isNaN(v)) { input.value = ''; input.classList.remove('ge-input-invalid'); _snapshotPending = false; return; }
+      v = Math.max(0, Math.min(v, maxVal));
+      v = isInteger ? Math.round(v) : Math.round(v * 10) / 10;
+      input.value = v;
+      input.classList.remove('ge-input-invalid');
+      if (input.classList.contains('grade-rubro')) _recalcRow(input);
+      _snapshotPending = false;
+    });
 
-      // Select all text on focus for easy overwriting
-      input.addEventListener('focus', () => {
-        input.select();
-        if (!_snapshotPending) {
-          _snapshotPending = true;
-          input._prevVal = input.value;
-        }
-      });
-
-      // On blur: clamp value to valid range, sanitize
-      input.addEventListener('blur', () => {
-        if (input.value.trim() === '') { _snapshotPending = false; return; }
-        let v = parseFloat(input.value.replace(',', '.'));
-        if (isNaN(v)) { input.value = ''; input.classList.remove('ge-input-invalid'); _snapshotPending = false; return; }
-        // Clamp to range
-        v = Math.max(0, Math.min(v, maxVal));
-        v = isInteger ? Math.round(v) : Math.round(v * 10) / 10;
-        input.value = v;
-        input.classList.remove('ge-input-invalid');
-        // Recalc if rubro
-        if (input.classList.contains('grade-rubro')) _recalcRow(input);
+    container.addEventListener('input', (e) => {
+      const input = e.target;
+      if (!_isGradeInput(input)) return;
+      if (_snapshotPending && input.value !== input._prevVal) {
+        _pushUndo('Edición manual');
         _snapshotPending = false;
-      });
+      }
+      _markDirty();
 
-      // On input: live validation + undo + recalc
-      input.addEventListener('input', () => {
-        // Push undo on first change
-        if (_snapshotPending && input.value !== input._prevVal) {
-          _pushUndo('Edición manual');
-          _snapshotPending = false;
+      const maxVal = parseFloat(input.max) || 10;
+      const raw = input.value.trim();
+      if (raw === '') {
+        input.classList.remove('ge-input-invalid');
+      } else {
+        const v = parseFloat(raw.replace(',', '.'));
+        if (isNaN(v) || v < 0 || v > maxVal) input.classList.add('ge-input-invalid');
+        else input.classList.remove('ge-input-invalid');
+      }
+
+      if (input.classList.contains('grade-rubro')) _recalcRow(input);
+    });
+
+    container.addEventListener('keydown', (e) => {
+      const input = e.target;
+      if (!_isGradeInput(input)) return;
+      const isInteger = input.classList.contains('grade-faltas');
+
+      // 1) Bloquear caracteres invalidos
+      const navKeys = [8, 46, 9, 27, 13, 37, 38, 39, 40, 35, 36];
+      const ctrlComboKeys = [65, 67, 86, 88, 90]; // Ctrl+A/C/V/X/Z
+      const isNav = navKeys.includes(e.keyCode);
+      const isCtrlCombo = (e.ctrlKey || e.metaKey) && ctrlComboKeys.includes(e.keyCode);
+      const isDecimal = !isInteger && (e.key === '.' || e.key === ',');
+      const isDigit = e.key >= '0' && e.key <= '9';
+      if (!isNav && !isCtrlCombo && !isDecimal && !isDigit) {
+        e.preventDefault();
+        return;
+      }
+
+      // 2) Smart navigation: Enter va a siguiente fila misma columna; al final pasa a primera fila siguiente columna
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const row = input.closest('tr');
+        const field = input.dataset.field;
+        const nextRow = row && row.nextElementSibling;
+        if (nextRow) {
+          const nextInput = nextRow.querySelector(`input[data-field="${field}"]`);
+          if (nextInput) { nextInput.focus(); return; }
         }
-        _markDirty();
-
-        // Live visual validation (don't clamp yet — user might still be typing)
-        const raw = input.value.trim();
-        if (raw === '') { input.classList.remove('ge-input-invalid'); }
-        else {
-          const v = parseFloat(raw.replace(',', '.'));
-          if (isNaN(v) || v < 0 || v > maxVal) {
-            input.classList.add('ge-input-invalid');
-          } else {
-            input.classList.remove('ge-input-invalid');
+        const firstRow = input.closest('tbody') && input.closest('tbody').querySelector('tr');
+        if (firstRow && row) {
+          const allFields = [...row.querySelectorAll('.ge-input')].map(i => i.dataset.field);
+          const currentIdx = allFields.indexOf(field);
+          if (currentIdx >= 0 && currentIdx < allFields.length - 1) {
+            const nextField = allFields[currentIdx + 1];
+            const target = firstRow.querySelector(`input[data-field="${nextField}"]`);
+            if (target) target.focus();
           }
         }
+        return;
+      }
 
-        // Recalc row for rubros
-        if (input.classList.contains('grade-rubro')) _recalcRow(input);
-      });
-
-      // Prevent invalid characters (allow digits, period, comma, navigation keys)
-      input.addEventListener('keydown', (e) => {
-        // Allow: backspace, delete, tab, escape, enter, arrows, home, end, select-all
-        if ([8, 46, 9, 27, 13, 37, 38, 39, 40, 35, 36].includes(e.keyCode)) return;
-        if ((e.ctrlKey || e.metaKey) && [65, 67, 86, 88, 90].includes(e.keyCode)) return; // Ctrl+A/C/V/X/Z
-        // Allow period and comma for decimals (not for integers)
-        if (!isInteger && (e.key === '.' || e.key === ',')) return;
-        // Block non-numeric
-        if (e.key < '0' || e.key > '9') { e.preventDefault(); }
-      });
-
-      // ═══ SMART TAB NAVIGATION ═══
-      // Enter key moves to next input in next row (same column) for fast data entry
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
+      // 3) Arrow up/down: navegacion entre filas misma columna
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        const row = input.closest('tr');
+        const field = input.dataset.field;
+        const targetRow = e.key === 'ArrowUp'
+          ? (row && row.previousElementSibling)
+          : (row && row.nextElementSibling);
+        if (targetRow && targetRow.dataset.studentId) {
           e.preventDefault();
-          // Find next row's input with same field
-          const row = input.closest('tr');
-          const field = input.dataset.field;
-          const nextRow = row.nextElementSibling;
-          if (nextRow) {
-            const nextInput = nextRow.querySelector(`input[data-field="${field}"]`);
-            if (nextInput) { nextInput.focus(); return; }
-          }
-          // If last row, move to next field in first row
-          const firstRow = input.closest('tbody').querySelector('tr');
-          if (firstRow) {
-            const allFields = [...row.querySelectorAll('.ge-input')].map(i => i.dataset.field);
-            const currentIdx = allFields.indexOf(field);
-            if (currentIdx < allFields.length - 1) {
-              const nextField = allFields[currentIdx + 1];
-              const target = firstRow.querySelector(`input[data-field="${nextField}"]`);
-              if (target) target.focus();
-            }
-          }
+          const targetInput = targetRow.querySelector(`input[data-field="${field}"]`);
+          if (targetInput) targetInput.focus();
         }
-        // Arrow up/down navigation between rows
-        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-          const row = input.closest('tr');
-          const field = input.dataset.field;
-          const targetRow = e.key === 'ArrowUp' ? row.previousElementSibling : row.nextElementSibling;
-          if (targetRow && targetRow.dataset.studentId) {
-            e.preventDefault();
-            const targetInput = targetRow.querySelector(`input[data-field="${field}"]`);
-            if (targetInput) targetInput.focus();
-          }
-        }
-      });
+      }
     });
 
     // ═══ UNDO ═══
