@@ -168,6 +168,42 @@ const Store = (() => {
       return results.flat();
     },
 
+    /**
+     * Obtiene calificaciones filtradas por groupId Y parcial en el servidor.
+     * Reduce ~3x el numero de docs leidos cuando solo se necesita un parcial
+     * (vs getGradesByGroup que trae los 3 parciales y filtra en cliente).
+     * Cache propio por (group,partial) usando misma TTL que grades_group_.
+     * @param {string} groupId
+     * @param {string} partial - p.ej. "P1", "P2", "P3"
+     * @param {boolean} [force=false]
+     * @returns {Promise<Array>}
+     */
+    getGradesByGroupAndPartial(groupId, partial, force) {
+      const key = 'grades_group_' + groupId + '_' + partial;
+      return get(key, async () => {
+        const snap = await db.collection('grades')
+          .where('groupId', '==', groupId)
+          .where('partial', '==', partial)
+          .get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
+    /**
+     * Obtiene calificaciones de varios grupos para un parcial especifico.
+     * Equivalente a getGradesByGroups pero con filtro de parcial en servidor.
+     * @param {string[]} groupIds
+     * @param {string} partial
+     * @param {boolean} [force=false]
+     * @returns {Promise<Array>}
+     */
+    async getGradesByGroupsAndPartial(groupIds, partial, force) {
+      if (!groupIds || groupIds.length === 0) return [];
+      const promises = groupIds.map(gid => this.getGradesByGroupAndPartial(gid, partial, force));
+      const results = await Promise.all(promises);
+      return results.flat();
+    },
+
     getAtRisk(force) {
       return get('atRisk', async () => {
         const snap = await db.collection('atRisk').get();
@@ -277,13 +313,19 @@ const Store = (() => {
     /**
      * Invalida el cache de calificaciones solo para un grupo especifico.
      * Mas eficiente que invalidate('grades') cuando solo cambio un grupo.
+     * Tambien limpia las variantes por parcial (grades_group_<id>_<partial>).
      * @param {string} groupId
      */
     invalidateGradesForGroup(groupId) {
-      const key = 'grades_group_' + groupId;
-      delete _cache[key];
-      delete _timestamps[key];
-      delete _promises[key];
+      const baseKey = 'grades_group_' + groupId;
+      // Limpiar la entrada base y todas las variantes por parcial
+      Object.keys(_cache).forEach(k => {
+        if (k === baseKey || k.startsWith(baseKey + '_')) {
+          delete _cache[k];
+          delete _timestamps[k];
+          delete _promises[k];
+        }
+      });
     },
 
     /**
