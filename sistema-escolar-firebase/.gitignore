@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# PII / sensitive data — NEVER commit these
+public/app_data.json
+auth-users.json
+extracted-grades.json
+*.secret
+*.credentials
+
+# Temp files
+/tmp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+grades-backup-*.json
