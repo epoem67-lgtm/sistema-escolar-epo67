@@ -880,61 +880,80 @@ html, body { margin:0; padding:0; height:100%; }
     Toast.show(`Generado: ${fname}`, 'success');
   }
 
-  // Genera 1 xlsx por cada orientador del turno seleccionado (todos sus grupos).
+  // Genera 1 xlsx por cada orientador del turno seleccionado, todos en un ZIP.
   async function exportOrientacionMasivo() {
-    if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
-    const turno = document.getElementById('conc-turno')?.value;
-    const partial = document.getElementById('conc-parcial')?.value || 'P1';
-    if (!turno) { Toast.show('Selecciona el turno', 'warning'); return; }
+    try {
+      if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
+      if (!window.JSZip) { Toast.show('JSZip no esta disponible (recarga con Cmd+Shift+R)', 'error'); return; }
 
-    const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
-    const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
+      const turno = document.getElementById('conc-turno')?.value;
+      const partial = document.getElementById('conc-parcial')?.value || 'P1';
+      if (!turno) { Toast.show('Selecciona el turno', 'warning'); return; }
 
-    // Agrupar grupos del turno por orientador
-    const turnoGroups = allGroups.filter(g => g.turno === turno).sort((a, b) =>
-      (a.grado || 0) - (b.grado || 0) || (a.nombre || '').localeCompare(b.nombre || '')
-    );
-    if (turnoGroups.length === 0) { Toast.show('No hay grupos en este turno', 'warning'); return; }
+      const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
+      const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
 
-    const byOrientador = {};
-    for (const g of turnoGroups) {
-      const ori = (typeof K.getOrientador === 'function' ? K.getOrientador(g.turno, g.nombre) : null) ||
-                  g.orientador || 'SIN ORIENTADOR';
-      byOrientador[ori] = byOrientador[ori] || [];
-      byOrientador[ori].push(g);
+      // Agrupar grupos del turno por orientador
+      const turnoGroups = allGroups.filter(g => g.turno === turno).sort((a, b) =>
+        (a.grado || 0) - (b.grado || 0) || (a.nombre || '').localeCompare(b.nombre || '')
+      );
+      if (turnoGroups.length === 0) { Toast.show('No hay grupos en este turno', 'warning'); return; }
+
+      const byOrientador = {};
+      for (const g of turnoGroups) {
+        const ori = (typeof K.getOrientador === 'function' ? K.getOrientador(g.turno, g.nombre) : null) ||
+                    g.orientador || 'SIN ORIENTADOR';
+        byOrientador[ori] = byOrientador[ori] || [];
+        byOrientador[ori].push(g);
+      }
+
+      const orientadores = Object.keys(byOrientador).sort();
+      Toast.show(`Empaquetando ${orientadores.length} archivo(s) en ZIP...`, 'info');
+
+      const zip = new JSZip();
+      let count = 0;
+
+      for (const ori of orientadores) {
+        const groupsOri = byOrientador[ori];
+        const wb = buildOrientacionWorkbook(groupsOri, partial, partialLabel, cicloEscolar);
+
+        // Insertar portada al inicio
+        const cover = XLSX.utils.aoa_to_sheet([
+          [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
+          [`CONCENTRADO POR ORIENTADOR`],
+          [`${partialLabel}   CICLO ${cicloEscolar}   TURNO ${turno}`],
+          [],
+          [`Orientador(a):`, ori],
+          [`Grupos asignados:`, groupsOri.map(g => g.nombre).join(', ')],
+          [`Total grupos:`, groupsOri.length],
+        ]);
+        cover['!cols'] = [{ wch: 22 }, { wch: 60 }];
+        const sheets = wb.SheetNames;
+        wb.Sheets['Portada'] = cover;
+        wb.SheetNames = ['Portada'].concat(sheets);
+
+        // Generar buffer xlsx en memoria
+        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const filename = `Concentrado_${turno}_${safeFilename(ori)}_${partial}.xlsx`;
+        zip.file(filename, buf);
+        count++;
+      }
+
+      // Generar y descargar el ZIP
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Concentrados_${turno}_${partial}_${count}_orientadores.zip`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+
+      Toast.show(`ZIP descargado con ${count} archivo(s) de orientadores`, 'success');
+    } catch (e) {
+      console.error('Error en exportOrientacionMasivo:', e);
+      Toast.show('Error: ' + e.message, 'error');
     }
-
-    const orientadores = Object.keys(byOrientador).sort();
-    Toast.show(`Generando ${orientadores.length} archivo(s)...`, 'info');
-
-    let count = 0;
-    for (const ori of orientadores) {
-      const groupsOri = byOrientador[ori];
-      const wb = buildOrientacionWorkbook(groupsOri, partial, partialLabel, cicloEscolar);
-      // Una pequena hoja inicial con la portada del orientador
-      const cover = XLSX.utils.aoa_to_sheet([
-        [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
-        [`CONCENTRADO POR ORIENTADOR`],
-        [`${partialLabel}   CICLO ${cicloEscolar}   TURNO ${turno}`],
-        [],
-        [`Orientador(a):`, ori],
-        [`Grupos asignados:`, groupsOri.map(g => g.nombre).join(', ')],
-        [`Total grupos:`, groupsOri.length],
-      ]);
-      cover['!cols'] = [{ wch: 22 }, { wch: 60 }];
-      // Insertar portada al inicio
-      const sheets = wb.SheetNames;
-      wb.Sheets['Portada'] = cover;
-      wb.SheetNames = ['Portada'].concat(sheets);
-
-      const filename = `Concentrado_${turno}_${safeFilename(ori)}_${partial}.xlsx`;
-      XLSX.writeFile(wb, filename);
-      count++;
-      // Pequeña pausa para no saturar el navegador con descargas simultáneas
-      await new Promise(r => setTimeout(r, 350));
-    }
-
-    Toast.show(`Generados ${count} archivo(s) de orientadores. Revisa tu carpeta de Descargas.`, 'success');
   }
 
   // ─── EVENTS ───
