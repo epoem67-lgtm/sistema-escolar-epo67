@@ -880,11 +880,13 @@ html, body { margin:0; padding:0; height:100%; }
     Toast.show(`Generado: ${fname}`, 'success');
   }
 
-  // Genera 1 xlsx por cada orientador del turno seleccionado, todos en un ZIP.
+  // Cache de blobs generados para descarga/compartir individual
+  let _massCache = []; // [{ orientador, filename, blob, url, groups }]
+
+  // Genera xlsx por orientador del turno y muestra UI con botones individuales.
   async function exportOrientacionMasivo() {
     try {
       if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
-      if (!window.JSZip) { Toast.show('JSZip no esta disponible (recarga con Cmd+Shift+R)', 'error'); return; }
 
       const turno = document.getElementById('conc-turno')?.value;
       const partial = document.getElementById('conc-parcial')?.value || 'P1';
@@ -908,16 +910,17 @@ html, body { margin:0; padding:0; height:100%; }
       }
 
       const orientadores = Object.keys(byOrientador).sort();
-      Toast.show(`Empaquetando ${orientadores.length} archivo(s) en ZIP...`, 'info');
+      Toast.show(`Generando ${orientadores.length} archivo(s)...`, 'info');
 
-      const zip = new JSZip();
-      let count = 0;
+      // Limpiar cache previa
+      _massCache.forEach(it => { try { URL.revokeObjectURL(it.url); } catch (e) {} });
+      _massCache = [];
 
       for (const ori of orientadores) {
         const groupsOri = byOrientador[ori];
         const wb = buildOrientacionWorkbook(groupsOri, partial, partialLabel, cicloEscolar);
 
-        // Insertar portada al inicio
+        // Portada
         const cover = XLSX.utils.aoa_to_sheet([
           [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
           [`CONCENTRADO POR ORIENTADOR`],
@@ -932,28 +935,100 @@ html, body { margin:0; padding:0; height:100%; }
         wb.Sheets['Portada'] = cover;
         wb.SheetNames = ['Portada'].concat(sheets);
 
-        // Generar buffer xlsx en memoria
         const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
         const filename = `Concentrado_${turno}_${safeFilename(ori)}_${partial}.xlsx`;
-        zip.file(filename, buf);
-        count++;
+        _massCache.push({ orientador: ori, groups: groupsOri.map(g => g.nombre), filename, blob, url });
       }
 
-      // Generar y descargar el ZIP
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Concentrados_${turno}_${partial}_${count}_orientadores.zip`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-
-      Toast.show(`ZIP descargado con ${count} archivo(s) de orientadores`, 'success');
+      _renderMassCacheUI(turno, partial);
+      Toast.show(`${orientadores.length} archivo(s) listos. Descarga desde la lista.`, 'success');
     } catch (e) {
       console.error('Error en exportOrientacionMasivo:', e);
       Toast.show('Error: ' + e.message, 'error');
     }
+  }
+
+  function _renderMassCacheUI(turno, partial) {
+    const div = document.getElementById('conc-results');
+    if (!div) return;
+    const items = _massCache.map((it, i) => `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;background:#fff;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;color:#1b3a5c;font-size:14px;">${Utils.sanitize(it.orientador)}</div>
+          <div style="font-size:12px;color:#64748b;margin-top:2px;">
+            <span style="display:inline-block;padding:2px 8px;background:#e8ecf1;border-radius:4px;margin-right:6px;">${it.groups.length} grupo(s)</span>
+            ${it.groups.map(g => `<span style="margin-right:6px;">${Utils.sanitize(g)}</span>`).join('')}
+          </div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:2px;font-family:monospace;">${Utils.sanitize(it.filename)}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <a href="${it.url}" download="${Utils.sanitize(it.filename)}" class="btn btn-primary btn-sm" style="white-space:nowrap;">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">file_download</span> Descargar
+          </a>
+          <button class="btn btn-outline btn-sm" data-action="mass-copy-name" data-idx="${i}" title="Copiar nombre del archivo">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">content_copy</span>
+          </button>
+        </div>
+      </div>
+    `).join('');
+
+    div.innerHTML = `
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+          <h2 class="section-title" style="margin:0;">Archivos generados (${_massCache.length})</h2>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-success" data-action="mass-download-zip">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">archive</span>
+              Descargar todo (.zip)
+            </button>
+            <button class="btn btn-outline" data-action="mass-clear">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">close</span>
+              Limpiar
+            </button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:12px;">
+          Turno: <strong>${Utils.sanitize(turno)}</strong> &middot; Parcial: <strong>${Utils.sanitize(partial)}</strong>
+          &middot; Haz clic en <strong>Descargar</strong> al lado del orientador que necesites.
+        </div>
+        ${items}
+      </div>`;
+  }
+
+  async function _massDownloadZip() {
+    if (!_massCache.length) { Toast.show('No hay archivos en cache', 'warning'); return; }
+    if (!window.JSZip) { Toast.show('JSZip no disponible — recarga con Cmd+Shift+R', 'error'); return; }
+    Toast.show('Empaquetando...', 'info');
+    const zip = new JSZip();
+    for (const it of _massCache) {
+      const buf = await it.blob.arrayBuffer();
+      zip.file(it.filename, buf);
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Concentrados_${_massCache.length}_orientadores.zip`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    Toast.show('ZIP descargado', 'success');
+  }
+
+  function _massClearCache() {
+    _massCache.forEach(it => { try { URL.revokeObjectURL(it.url); } catch (e) {} });
+    _massCache = [];
+    const div = document.getElementById('conc-results');
+    if (div) div.innerHTML = `<div class="empty-state"><span class="material-icons-round empty-state-icon">table_chart</span><p class="empty-state-text">Selecciona turno, grado, grupo y parcial, luego haz clic en Generar</p></div>`;
+  }
+
+  function _massCopyName(idx) {
+    const it = _massCache[idx];
+    if (!it) return;
+    navigator.clipboard.writeText(it.filename).then(() => Toast.show(`Copiado: ${it.filename}`, 'success'))
+      .catch(() => Toast.show('No se pudo copiar', 'error'));
   }
 
   // ─── EVENTS ───
@@ -966,6 +1041,9 @@ html, body { margin:0; padding:0; height:100%; }
       else if (btn.dataset.action === 'print') printConcentrado();
       else if (btn.dataset.action === 'orientacion-xlsx') exportOrientacion();
       else if (btn.dataset.action === 'orientacion-masivo') exportOrientacionMasivo();
+      else if (btn.dataset.action === 'mass-download-zip') _massDownloadZip();
+      else if (btn.dataset.action === 'mass-clear') _massClearCache();
+      else if (btn.dataset.action === 'mass-copy-name') _massCopyName(Number(btn.dataset.idx));
     });
 
     // Cascading filters
