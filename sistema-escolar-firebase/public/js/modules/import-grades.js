@@ -514,26 +514,34 @@ const ImportGradesModule = (() => {
     }
 
     try {
-      const batch = db.batch();
       const now = new Date();
       const userId = auth.currentUser?.uid || 'unknown';
 
-      rowsToImport.forEach(row => {
-        const docId = `${row.student.id}_${materia}_${parcial}`;
-        const ref = db.collection('grades').doc(docId);
-        batch.set(ref, {
-          studentId: row.student.id,
-          subjectId: materia,
-          groupId: grupo,
-          partial: parcial,
-          value: row.gradeValue,
-          updatedAt: now,
-          updatedBy: userId,
-          importedFrom: 'excel'
-        }, { merge: true });
-      });
-
-      await batch.commit();
+      // Firestore limita batch a 500 ops. Chunk de 400 (margen seguro).
+      const CHUNK = 400;
+      for (let i = 0; i < rowsToImport.length; i += CHUNK) {
+        const chunk = rowsToImport.slice(i, i + CHUNK);
+        const batch = db.batch();
+        chunk.forEach(row => {
+          const docId = `${row.student.id}_${materia}_${parcial}`;
+          const ref = db.collection('grades').doc(docId);
+          batch.set(ref, {
+            studentId: row.student.id,
+            subjectId: materia,
+            groupId: grupo,
+            partial: parcial,
+            value: row.gradeValue,
+            updatedAt: now,
+            updatedBy: userId,
+            importedFrom: 'excel'
+          }, { merge: true });
+        });
+        await batch.commit();
+        if (importBtn) {
+          const done = Math.min(i + CHUNK, rowsToImport.length);
+          importBtn.textContent = `Importando ${done}/${rowsToImport.length}...`;
+        }
+      }
       Store.invalidateGradesForGroup(grupo);
 
       DB.audit('importar', 'calificacion', '', {

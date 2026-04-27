@@ -218,16 +218,20 @@ const ImportStudentsModule = (() => {
     }
 
     try {
-      const batch = db.batch();
+      // Firestore limita batch a 500 ops. Chunk de 400 (margen seguro).
+      const CHUNK = 400;
       let count = 0;
+      for (let i = 0; i < toUpdate.length; i += CHUNK) {
+        const chunk = toUpdate.slice(i, i + CHUNK);
+        const batch = db.batch();
+        chunk.forEach(r => {
+          const ref = db.collection('students').doc(r.matched.id);
+          batch.update(ref, r.fieldsToUpdate);
+          count++;
+        });
+        await batch.commit();
+      }
 
-      toUpdate.forEach(r => {
-        const ref = db.collection('students').doc(r.matched.id);
-        batch.update(ref, r.fieldsToUpdate);
-        count++;
-      });
-
-      await batch.commit();
       DB.audit('importar', 'alumno', '', {
         description: `Importación masiva: ${count} alumnos actualizados desde Excel`,
         extra: { count, source: 'excel_lista_oficial' }
