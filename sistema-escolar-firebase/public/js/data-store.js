@@ -28,6 +28,7 @@ const Store = (() => {
   function getTTL(key) {
     if (_ttl[key]) return _ttl[key];
     if (key.startsWith('grades_group_')) return _ttl['grades_group_'];
+    if (key.startsWith('students_ori_')) return _ttl['students']; // mismo TTL que students
     return 5 * 60 * 1000; // default 5 min
   }
 
@@ -285,6 +286,47 @@ const Store = (() => {
       });
     },
 
+    /**
+     * Obtiene los alumnos visibles segun el rol del usuario.
+     * - Admin: retorna todos los alumnos (delegado a getStudents).
+     * - Orientador: query Firestore con where('grupo','in', [nombres]) -
+     *   solo trae los alumnos de SUS grupos (~50-150 vs 811 totales).
+     * - Otros roles: alumnos vacio.
+     *
+     * Cache propio por (rol+orientador), invalidado cuando se invalida
+     * 'students' o cambia la asignacion de grupos.
+     *
+     * @param {boolean} [force=false]
+     * @returns {Promise<Array>}
+     */
+    async getStudentsForOrientador(force) {
+      const role = App.currentUser?.role;
+      if (role === 'admin') return this.getStudents(force);
+      if (role !== 'orientador') return [];
+
+      const teacherDocId = await Store.getTeacherDocId();
+      const cacheKey = 'students_ori_' + (teacherDocId || 'none');
+
+      return get(cacheKey, async () => {
+        const oriGroupIds = await Store.getOrientadorGroups();
+        if (!oriGroupIds || oriGroupIds.length === 0) return [];
+
+        const allGroups = await Store.getGroups();
+        const oriGroupNames = allGroups
+          .filter(g => oriGroupIds.includes(g.id))
+          .map(g => g.nombre);
+
+        if (oriGroupNames.length === 0) return [];
+
+        // Firestore where('in') admite hasta 30 valores; un orientador
+        // tiene a lo sumo ~9 grupos. Si en el futuro fuera mayor, partir en chunks.
+        const snap = await db.collection('students')
+          .where('grupo', 'in', oriGroupNames)
+          .get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
     // — Gestion de cache —
 
     /**
@@ -302,6 +344,17 @@ const Store = (() => {
       if (key === 'grades') {
         Object.keys(_cache).forEach(k => {
           if (k.startsWith('grades_group_')) {
+            delete _cache[k];
+            delete _timestamps[k];
+            delete _promises[k];
+          }
+        });
+      }
+
+      // Si se invalida 'students', limpiar tambien los caches por orientador
+      if (key === 'students') {
+        Object.keys(_cache).forEach(k => {
+          if (k.startsWith('students_ori_')) {
             delete _cache[k];
             delete _timestamps[k];
             delete _promises[k];
