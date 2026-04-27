@@ -37,6 +37,7 @@ const ConcentradoModule = (() => {
             <button class="btn btn-success" data-action="export">Exportar a Excel</button>
             <button class="btn btn-primary" data-action="print">Imprimir</button>
             <button class="btn btn-warning" data-action="orientacion-xlsx" title="Genera xlsx con formato oficial para cotejo de Orientacion (concentrado + seguimiento + mejores promedios)">Concentrado Orientaci&oacute;n (.xlsx)</button>
+            <button class="btn btn-warning" data-action="orientacion-masivo" title="Genera 1 xlsx por orientador del turno seleccionado (todos sus grupos)">Masivo por Orientador (.xlsx)</button>
           </div>
         </div>
 
@@ -698,26 +699,8 @@ html, body { margin:0; padding:0; height:100%; }
   const normSubj = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
   const subjectAbbr = name => SUBJECT_ABBR[normSubj(name)] || normSubj(name).slice(0, 11);
 
-  async function exportOrientacion() {
-    if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
-    const turno = document.getElementById('conc-turno')?.value;
-    const grado = document.getElementById('conc-grado')?.value;
-    const grupoSel = document.getElementById('conc-grupo')?.value;
-    const partial = document.getElementById('conc-parcial')?.value || 'P1';
-    if (!turno) { Toast.show('Selecciona turno', 'warning'); return; }
-    if (!grado) { Toast.show('Selecciona grado', 'warning'); return; }
-
-    const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
-    const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
-
-    // Determinar grupos a procesar
-    let targetGroups = allGroups.filter(g => g.turno === turno && String(g.grado) === String(grado));
-    if (grupoSel) targetGroups = targetGroups.filter(g => g.id === grupoSel);
-    targetGroups.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
-    if (targetGroups.length === 0) { Toast.show('No hay grupos para esa selecci\u00f3n', 'warning'); return; }
-
-    Toast.show(`Generando ${targetGroups.length} grupo(s)...`, 'info');
-
+  // Construye un workbook xlsx para un set de grupos. Reutilizable por orientador o por seleccion manual.
+  function buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar) {
     const wb = XLSX.utils.book_new();
     const allBest = []; // para hoja "mejores promedios"
     const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
@@ -854,7 +837,7 @@ html, body { margin:0; padding:0; height:100%; }
       const ranked = allBest.sort((a, b) => b.promedio - a.promedio);
       const aoaBP = [
         [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
-        [`MEJORES PROMEDIOS  ${partialLabel}  ${turno}  ${grado}\u00b0 GRADO  CICLO ${cicloEscolar}`],
+        [`MEJORES PROMEDIOS  ${partialLabel}  CICLO ${cicloEscolar}`],
         [],
         ['#', 'GRUPO', 'ALUMNO', 'PROMEDIO']
       ];
@@ -863,11 +846,95 @@ html, body { margin:0; padding:0; height:100%; }
       wsBP['!cols'] = [{ wch: 4 }, { wch: 8 }, { wch: 40 }, { wch: 9 }];
       XLSX.utils.book_append_sheet(wb, wsBP, 'mejores promedios');
     }
+    return wb;
+  }
 
+  // Sanitiza un nombre para que sirva de filename
+  function safeFilename(s) {
+    return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9\-_ ]/g, '').replace(/\s+/g, '_').slice(0, 60);
+  }
+
+  // Wrapper publico: genera 1 xlsx para la seleccion actual del usuario.
+  async function exportOrientacion() {
+    if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
+    const turno = document.getElementById('conc-turno')?.value;
+    const grado = document.getElementById('conc-grado')?.value;
+    const grupoSel = document.getElementById('conc-grupo')?.value;
+    const partial = document.getElementById('conc-parcial')?.value || 'P1';
+    if (!turno) { Toast.show('Selecciona turno', 'warning'); return; }
+    if (!grado) { Toast.show('Selecciona grado', 'warning'); return; }
+
+    const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
+    const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
+
+    let targetGroups = allGroups.filter(g => g.turno === turno && String(g.grado) === String(grado));
+    if (grupoSel) targetGroups = targetGroups.filter(g => g.id === grupoSel);
+    targetGroups.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    if (targetGroups.length === 0) { Toast.show('No hay grupos para esa selecci\u00f3n', 'warning'); return; }
+
+    Toast.show(`Generando ${targetGroups.length} grupo(s)...`, 'info');
+    const wb = buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar);
     const groupTag = grupoSel ? targetGroups[0].nombre : `${grado}\u00ba`;
     const fname = `Concentrado_Orientacion_${turno}_${groupTag}_${partial}.xlsx`;
     XLSX.writeFile(wb, fname);
     Toast.show(`Generado: ${fname}`, 'success');
+  }
+
+  // Genera 1 xlsx por cada orientador del turno seleccionado (todos sus grupos).
+  async function exportOrientacionMasivo() {
+    if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
+    const turno = document.getElementById('conc-turno')?.value;
+    const partial = document.getElementById('conc-parcial')?.value || 'P1';
+    if (!turno) { Toast.show('Selecciona el turno', 'warning'); return; }
+
+    const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
+    const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
+
+    // Agrupar grupos del turno por orientador
+    const turnoGroups = allGroups.filter(g => g.turno === turno).sort((a, b) =>
+      (a.grado || 0) - (b.grado || 0) || (a.nombre || '').localeCompare(b.nombre || '')
+    );
+    if (turnoGroups.length === 0) { Toast.show('No hay grupos en este turno', 'warning'); return; }
+
+    const byOrientador = {};
+    for (const g of turnoGroups) {
+      const ori = (typeof K.getOrientador === 'function' ? K.getOrientador(g.turno, g.nombre) : null) ||
+                  g.orientador || 'SIN ORIENTADOR';
+      byOrientador[ori] = byOrientador[ori] || [];
+      byOrientador[ori].push(g);
+    }
+
+    const orientadores = Object.keys(byOrientador).sort();
+    Toast.show(`Generando ${orientadores.length} archivo(s)...`, 'info');
+
+    let count = 0;
+    for (const ori of orientadores) {
+      const groupsOri = byOrientador[ori];
+      const wb = buildOrientacionWorkbook(groupsOri, partial, partialLabel, cicloEscolar);
+      // Una pequena hoja inicial con la portada del orientador
+      const cover = XLSX.utils.aoa_to_sheet([
+        [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
+        [`CONCENTRADO POR ORIENTADOR`],
+        [`${partialLabel}   CICLO ${cicloEscolar}   TURNO ${turno}`],
+        [],
+        [`Orientador(a):`, ori],
+        [`Grupos asignados:`, groupsOri.map(g => g.nombre).join(', ')],
+        [`Total grupos:`, groupsOri.length],
+      ]);
+      cover['!cols'] = [{ wch: 22 }, { wch: 60 }];
+      // Insertar portada al inicio
+      const sheets = wb.SheetNames;
+      wb.Sheets['Portada'] = cover;
+      wb.SheetNames = ['Portada'].concat(sheets);
+
+      const filename = `Concentrado_${turno}_${safeFilename(ori)}_${partial}.xlsx`;
+      XLSX.writeFile(wb, filename);
+      count++;
+      // Pequeña pausa para no saturar el navegador con descargas simultáneas
+      await new Promise(r => setTimeout(r, 350));
+    }
+
+    Toast.show(`Generados ${count} archivo(s) de orientadores. Revisa tu carpeta de Descargas.`, 'success');
   }
 
   // ─── EVENTS ───
@@ -879,6 +946,7 @@ html, body { margin:0; padding:0; height:100%; }
       else if (btn.dataset.action === 'export') exportConcentrado();
       else if (btn.dataset.action === 'print') printConcentrado();
       else if (btn.dataset.action === 'orientacion-xlsx') exportOrientacion();
+      else if (btn.dataset.action === 'orientacion-masivo') exportOrientacionMasivo();
     });
 
     // Cascading filters
