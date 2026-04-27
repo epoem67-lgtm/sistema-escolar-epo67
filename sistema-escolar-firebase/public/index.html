@@ -289,5 +289,16 @@
   <script src="/js/modules/captura-progress.js?v=5.9" defer></script>
   <script src="/js/modules/grade-corrections.js?v=5.9" defer></script>
   <script src="/js/modules/boleta-oficial.js?v=5.9" defer></script>
+
+  <!-- Service Worker (cache offline + carga rapida en re-visitas) -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch((err) => {
+          console.warn('SW registration failed:', err);
+        });
+      });
+    }
+  </script>
 </body>
 </html>
