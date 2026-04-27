@@ -36,6 +36,7 @@ const ConcentradoModule = (() => {
           <div class="module-actions">
             <button class="btn btn-success" data-action="export">Exportar a Excel</button>
             <button class="btn btn-primary" data-action="print">Imprimir</button>
+            <button class="btn btn-warning" data-action="orientacion-xlsx" title="Genera xlsx con formato oficial para cotejo de Orientacion (concentrado + seguimiento + mejores promedios)">Concentrado Orientaci&oacute;n (.xlsx)</button>
           </div>
         </div>
 
@@ -659,6 +660,216 @@ html, body { margin:0; padding:0; height:100%; }
     printWindow.document.close();
   }
 
+  // ─── EXPORTACION FORMATO ORIENTACION ────────────────────────────
+  // Genera un xlsx con: 1 hoja por grupo (Concentrado), 1 hoja por grupo (Seguimiento)
+  // y una hoja final "mejores promedios". Replica el formato oficial usado por Orientacion.
+
+  // Mapeo de nombres oficiales -> abreviacion para el header del xlsx
+  const SUBJECT_ABBR = {
+    'LENGUA Y COMUNICACION II': 'LEN. COM.', 'INGLES II': 'ING.',
+    'PENSAMIENTO MATEMATICO II': 'PENS. MAT.', 'CULTURA DIGITAL II': 'CULT. DIG.',
+    'CIENCIAS NATURALES EXPERIMENTALES Y TECNOLOGIA II': 'CIEN. NAT.',
+    'PENSAMIENTO FILOSOFICO Y HUMANIDADES II': 'PENS. FIL.',
+    'CIENCIAS SOCIALES II': 'CIEN. SOC.', 'TALLER DE CIENCIAS I': 'TLLR. CIEN.',
+    'ACTIVIDADES FISICAS Y DEPORTIVAS II': 'ACT. FIS.',
+    'EDUCACION PARA LA SALUD II': 'EDU. SAL.',
+    'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS II': 'IGU. DER.',
+    'PENSAMIENTO LITERARIO': 'PENS.LIT.', 'INGLES IV': 'ING.',
+    'TEMAS SELECTOS DE MATEMATICAS I': 'T. S. MAT.',
+    'CONCIENCIA HISTORICA I': 'CON. HIS.', 'TALLER DE CULTURA DIGITAL': 'T. CUL. DIG',
+    'REACCIONES QUIMICAS Y CONSERVACION DE LA MATERIA': 'REA. QUIM.',
+    'ESPACIO Y SOCIEDAD': 'ESP. SOC.', 'CIENCIAS SOCIALES III': 'CIEN. SOC.',
+    'COMUNIDADES VIRTUALES': 'COM. VIRT.',
+    'MANTENIMIENTO DE REDES DE COMPUTO': 'MTO. RED.',
+    'ACTIVIDADES ARTISTICAS Y CULTURALES I': 'ACT. ART.',
+    'EDUCACION INTEGRAL EN SEXUALIDAD Y GENERO II': 'EDUC.SEX.GEN',
+    'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS IV': 'IGU.DER.',
+    'CIENCIAS DE LA COMUNICACION I': 'CIEN. COM.',
+    'TEMAS SELECTOS DE INGLES II': 'T. S. ING.',
+    'TEMAS SELECTOS DE MATEMATICAS II': 'T. S. MAT.',
+    'CONCIENCIA HISTORICA III': 'CON. HIS.',
+    'ORGANISMOS': 'ORG.', 'TEMAS SELECTOS DE FILOSOFIA': 'T. S. FIL.',
+    'ECONOMIA I': 'ECO.', 'PAGINAS WEB': 'PAG. WEB',
+    'DISENO DIGITAL': 'DIS. DIG.',
+    'ACTIVIDADES ARTISTICAS Y CULTURALES III': 'ACT. ART.',
+    'PRACTICA Y COLABORACION CIUDADANA II': 'PRAC. COL.',
+    'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS VI': 'IGU. DER.'
+  };
+  const normSubj = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  const subjectAbbr = name => SUBJECT_ABBR[normSubj(name)] || normSubj(name).slice(0, 11);
+
+  async function exportOrientacion() {
+    if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
+    const turno = document.getElementById('conc-turno')?.value;
+    const grado = document.getElementById('conc-grado')?.value;
+    const grupoSel = document.getElementById('conc-grupo')?.value;
+    const partial = document.getElementById('conc-parcial')?.value || 'P1';
+    if (!turno) { Toast.show('Selecciona turno', 'warning'); return; }
+    if (!grado) { Toast.show('Selecciona grado', 'warning'); return; }
+
+    const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
+    const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
+
+    // Determinar grupos a procesar
+    let targetGroups = allGroups.filter(g => g.turno === turno && String(g.grado) === String(grado));
+    if (grupoSel) targetGroups = targetGroups.filter(g => g.id === grupoSel);
+    targetGroups.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    if (targetGroups.length === 0) { Toast.show('No hay grupos para esa selecci\u00f3n', 'warning'); return; }
+
+    Toast.show(`Generando ${targetGroups.length} grupo(s)...`, 'info');
+
+    const wb = XLSX.utils.book_new();
+    const allBest = []; // para hoja "mejores promedios"
+    const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
+    const semestreByGrado = { 1: '2\u00ba', 2: '4\u00ba', 3: '6\u00ba' };
+
+    for (const grp of targetGroups) {
+      // Materias del grado, ordenadas oficialmente
+      const subsRaw = allSubjects.filter(s => String(s.grado) === String(grp.grado));
+      const subs = (typeof K.sortSubjectsByGrado === 'function')
+        ? K.sortSubjectsByGrado(subsRaw, grp.grado)
+        : subsRaw.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+
+      // Alumnos del grupo, ordenados por apellido
+      const stus = allStudents.filter(s => s.groupId === grp.id)
+        .sort((a, b) => (a.apellido1 || '').localeCompare(b.apellido1 || '') ||
+                        (a.apellido2 || '').localeCompare(b.apellido2 || '') ||
+                        (a.nombres || '').localeCompare(b.nombres || ''));
+
+      // Mapa grades por alumno+materia para este parcial
+      const gMap = {};
+      for (const g of allGrades) {
+        if (g.partial !== partial || g.groupId !== grp.id) continue;
+        gMap[g.studentId] = gMap[g.studentId] || {};
+        gMap[g.studentId][g.subjectId] = g;
+      }
+
+      // ─── HOJA 1: CONCENTRADO ───
+      const aoa1 = [];
+      // Encabezado institucional
+      aoa1.push([`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`]);
+      aoa1.push([`CONCENTRADO DE CALIFICACIONES   ${partialLabel}   CICLO ESCOLAR ${cicloEscolar}`]);
+      aoa1.push(['', `GRADO: ${grp.grado}\u00ba   GRUPO: ${grp.nombre.split('-')[1] || grp.nombre}    SEMESTRE: ${semestreByGrado[grp.grado] || ''}    TURNO: ${turno}`]);
+      aoa1.push([]); // 4
+      // Header materias (fila 5: nombres, fila 6: F C)
+      const matRow = ['N.L', 'NOMBRE DEL ALUMNO', '', '', ''];
+      const fcRow  = ['', '', '', '', ''];
+      for (const s of subs) {
+        matRow.push(subjectAbbr(s.nombre), '');
+        fcRow.push('F', 'C');
+      }
+      matRow.push('PROMEDIO');
+      fcRow.push('');
+      aoa1.push(matRow); // 5
+      aoa1.push(fcRow);  // 6
+
+      // Filas de alumnos (7+)
+      stus.forEach((stu, idx) => {
+        const row = [idx + 1, stu.apellido1 || '', stu.apellido2 || '', stu.nombres || '', ''];
+        let sumCal = 0, cntCal = 0;
+        for (const s of subs) {
+          const gd = (gMap[stu.id] && gMap[stu.id][s.id]) || null;
+          const f = gd && gd.faltas != null ? Number(gd.faltas) : '';
+          const c = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : '')) : '';
+          row.push(f === '' ? '' : f, c === '' ? '' : c);
+          if (c !== '' && !isNaN(c)) { sumCal += Number(c); cntCal++; }
+        }
+        const prom = cntCal > 0 ? +(sumCal / cntCal).toFixed(2) : '';
+        row.push(prom);
+        aoa1.push(row);
+        // Para mejores promedios
+        if (cntCal > 0) {
+          const fullName = `${stu.apellido1 || ''} ${stu.apellido2 || ''} ${stu.nombres || ''}`.trim();
+          allBest.push({ grupo: grp.nombre, alumno: fullName, promedio: prom });
+        }
+      });
+
+      const ws1 = XLSX.utils.aoa_to_sheet(aoa1);
+      // Merges para el header
+      ws1['!merges'] = (ws1['!merges'] || []).concat([
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 4 + subs.length * 2 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 4 + subs.length * 2 } },
+        { s: { r: 2, c: 1 }, e: { r: 2, c: 4 + subs.length * 2 } },
+      ]);
+      // Anchos de columna
+      ws1['!cols'] = [{ wch: 4 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 2 }]
+        .concat(subs.map(_ => ({ wch: 5 })).flatMap(c => [{ wch: 4 }, { wch: 5 }]))
+        .concat([{ wch: 9 }]);
+
+      const sheetName1 = String(grp.grado) + '\u00b0' + (grp.nombre.split('-')[1] || grp.nombre);
+      XLSX.utils.book_append_sheet(wb, ws1, sheetName1.slice(0, 31));
+
+      // ─── HOJA 2: SEGUIMIENTO (solo reprobados) ───
+      const aoa2 = [];
+      aoa2.push([`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`]);
+      aoa2.push([`SEGUIMIENTO ${partialLabel}   CICLO ESCOLAR ${cicloEscolar}`]);
+      aoa2.push([`GRADO: ${grp.grado}\u00ba   GRUPO: ${grp.nombre.split('-')[1] || grp.nombre}    TURNO: ${turno}`]);
+      aoa2.push([]);
+      const seguHdr = ['N.L', 'AP. PATERNO', 'AP. MATERNO', 'NOMBRE'];
+      for (const s of subs) seguHdr.push(subjectAbbr(s.nombre));
+      seguHdr.push('M.R');
+      aoa2.push(seguHdr);
+
+      let segIdx = 1;
+      stus.forEach(stu => {
+        const sg = gMap[stu.id] || {};
+        const cells = subs.map(s => {
+          const gd = sg[s.id];
+          const cal = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : null)) : null;
+          return (cal != null && !isNaN(cal) && cal < passGrade) ? cal : '';
+        });
+        const mr = cells.filter(c => c !== '').length;
+        if (mr > 0) {
+          aoa2.push([segIdx++, stu.apellido1 || '', stu.apellido2 || '', stu.nombres || '', ...cells, mr]);
+        }
+      });
+      // Totales por materia
+      if (aoa2.length > 5) {
+        const totalsRow = ['', '', '', 'TOTAL'];
+        for (let ci = 0; ci < subs.length; ci++) {
+          let total = 0;
+          for (let ri = 5; ri < aoa2.length; ri++) {
+            if (aoa2[ri][4 + ci] !== '' && aoa2[ri][4 + ci] != null) total++;
+          }
+          totalsRow.push(total || '');
+        }
+        // Suma total de M.R
+        let mrTotal = 0;
+        for (let ri = 5; ri < aoa2.length; ri++) mrTotal += Number(aoa2[ri][4 + subs.length]) || 0;
+        totalsRow.push(mrTotal);
+        aoa2.push(totalsRow);
+      } else {
+        aoa2.push(['', '', '', 'Sin alumnos reprobados en este parcial']);
+      }
+
+      const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
+      ws2['!cols'] = [{ wch: 4 }, { wch: 16 }, { wch: 16 }, { wch: 18 }]
+        .concat(subs.map(() => ({ wch: 8 })))
+        .concat([{ wch: 5 }]);
+      XLSX.utils.book_append_sheet(wb, ws2, ('seg ' + sheetName1).slice(0, 31));
+    }
+
+    // ─── HOJA FINAL: MEJORES PROMEDIOS ───
+    if (allBest.length > 0) {
+      const ranked = allBest.sort((a, b) => b.promedio - a.promedio);
+      const aoaBP = [
+        [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
+        [`MEJORES PROMEDIOS  ${partialLabel}  ${turno}  ${grado}\u00b0 GRADO  CICLO ${cicloEscolar}`],
+        [],
+        ['#', 'GRUPO', 'ALUMNO', 'PROMEDIO']
+      ];
+      ranked.slice(0, 30).forEach((r, i) => aoaBP.push([i + 1, r.grupo, r.alumno, r.promedio]));
+      const wsBP = XLSX.utils.aoa_to_sheet(aoaBP);
+      wsBP['!cols'] = [{ wch: 4 }, { wch: 8 }, { wch: 40 }, { wch: 9 }];
+      XLSX.utils.book_append_sheet(wb, wsBP, 'mejores promedios');
+    }
+
+    const groupTag = grupoSel ? targetGroups[0].nombre : `${grado}\u00ba`;
+    const fname = `Concentrado_Orientacion_${turno}_${groupTag}_${partial}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    Toast.show(`Generado: ${fname}`, 'success');
+  }
+
   // ─── EVENTS ───
   function bindEvents(container) {
     container.addEventListener('click', (e) => {
@@ -667,6 +878,7 @@ html, body { margin:0; padding:0; height:100%; }
       if (btn.dataset.action === 'generate') generate();
       else if (btn.dataset.action === 'export') exportConcentrado();
       else if (btn.dataset.action === 'print') printConcentrado();
+      else if (btn.dataset.action === 'orientacion-xlsx') exportOrientacion();
     });
 
     // Cascading filters
