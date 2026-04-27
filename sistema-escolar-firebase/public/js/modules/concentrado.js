@@ -700,7 +700,8 @@ html, body { margin:0; padding:0; height:100%; }
   const subjectAbbr = name => SUBJECT_ABBR[normSubj(name)] || normSubj(name).slice(0, 11);
 
   // Construye un workbook xlsx para un set de grupos. Reutilizable por orientador o por seleccion manual.
-  function buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar) {
+  function buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar, turno) {
+    if (!turno && targetGroups.length > 0) turno = targetGroups[0].turno;
     const wb = XLSX.utils.book_new();
     const allBest = []; // para hoja "mejores promedios"
     const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
@@ -873,7 +874,7 @@ html, body { margin:0; padding:0; height:100%; }
     if (targetGroups.length === 0) { Toast.show('No hay grupos para esa selecci\u00f3n', 'warning'); return; }
 
     Toast.show(`Generando ${targetGroups.length} grupo(s)...`, 'info');
-    const wb = buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar);
+    const wb = buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar, turno);
     const groupTag = grupoSel ? targetGroups[0].nombre : `${grado}\u00ba`;
     const fname = `Concentrado_Orientacion_${turno}_${groupTag}_${partial}.xlsx`;
     XLSX.writeFile(wb, fname);
@@ -881,7 +882,113 @@ html, body { margin:0; padding:0; height:100%; }
   }
 
   // Cache de blobs generados para descarga/compartir individual
-  let _massCache = []; // [{ orientador, filename, blob, url, groups }]
+  let _massCache = []; // [{ orientador, filename, blob, url, groups, groupObjs, partial, partialLabel, turno, cicloEscolar }]
+
+  // Construye HTML imprimible (preview/PDF) para los grupos de un orientador
+  function buildOrientacionPrintHTML(orientador, groupsOri, partial, partialLabel, cicloEscolar, turno) {
+    const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
+    let body = '';
+    const semestreByGrado = { 1: '2\u00ba', 2: '4\u00ba', 3: '6\u00ba' };
+
+    for (const grp of groupsOri) {
+      const subsRaw = allSubjects.filter(s => String(s.grado) === String(grp.grado));
+      const subs = (typeof K.sortSubjectsByGrado === 'function')
+        ? K.sortSubjectsByGrado(subsRaw, grp.grado) : subsRaw;
+      const stus = allStudents.filter(s => s.groupId === grp.id)
+        .sort((a, b) => (a.apellido1 || '').localeCompare(b.apellido1 || '') ||
+                        (a.apellido2 || '').localeCompare(b.apellido2 || '') ||
+                        (a.nombres || '').localeCompare(b.nombres || ''));
+      const gMap = {};
+      for (const g of allGrades) {
+        if (g.partial !== partial || g.groupId !== grp.id) continue;
+        gMap[g.studentId] = gMap[g.studentId] || {};
+        gMap[g.studentId][g.subjectId] = g;
+      }
+
+      // Encabezado por grupo
+      body += `<section class="grp-page">
+        <div class="hdr">
+          <h1>ESCUELA PREPARATORIA OFICIAL N&deg; 67</h1>
+          <h2>CONCENTRADO DE CALIFICACIONES &mdash; ${Utils.sanitize(partialLabel)}</h2>
+          <div class="info">CICLO ${Utils.sanitize(cicloEscolar)} &middot; TURNO ${Utils.sanitize(turno)} &middot; ${grp.grado}&ordm; GRADO &middot; GRUPO ${Utils.sanitize(grp.nombre)} &middot; SEMESTRE ${semestreByGrado[grp.grado] || ''}</div>
+          <div class="info subtle">Orientador(a): <b>${Utils.sanitize(orientador)}</b></div>
+        </div>
+        <table class="conc">
+          <thead>
+            <tr>
+              <th rowspan="2" class="nl">N.L</th>
+              <th rowspan="2">ALUMNO</th>
+              ${subs.map(s => `<th colspan="2" class="mat-h">${Utils.sanitize(subjectAbbr(s.nombre))}</th>`).join('')}
+              <th rowspan="2" class="prom-h">Prom.</th>
+            </tr>
+            <tr>
+              ${subs.map(() => '<th class="fc">F</th><th class="fc">C</th>').join('')}
+            </tr>
+          </thead>
+          <tbody>`;
+      stus.forEach((stu, idx) => {
+        let sumCal = 0, cntCal = 0;
+        const cells = subs.map(s => {
+          const gd = (gMap[stu.id] && gMap[stu.id][s.id]) || null;
+          const f = gd && gd.faltas != null ? Number(gd.faltas) : '';
+          const c = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : '')) : '';
+          if (c !== '' && !isNaN(c)) { sumCal += Number(c); cntCal++; }
+          const fail = c !== '' && Number(c) < passGrade;
+          return `<td class="num">${f === '' ? '' : f}</td><td class="num ${fail ? 'fail' : ''}">${c === '' ? '' : c}</td>`;
+        }).join('');
+        const prom = cntCal > 0 ? (sumCal / cntCal).toFixed(2) : '';
+        const promFail = prom && Number(prom) < passGrade;
+        const fullName = `${stu.apellido1 || ''} ${stu.apellido2 || ''} ${stu.nombres || ''}`.trim();
+        body += `<tr>
+          <td class="num">${idx + 1}</td>
+          <td>${Utils.sanitize(fullName)}</td>
+          ${cells}
+          <td class="num bold ${promFail ? 'fail' : ''}">${prom}</td>
+        </tr>`;
+      });
+      body += `</tbody></table>
+      </section>`;
+    }
+
+    return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+      <title>Concentrado ${Utils.sanitize(orientador)} ${partial}</title>
+      <style>
+        @page { size: letter landscape; margin: 10mm 8mm; }
+        * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #000; padding: 6mm; }
+        .toolbar { position: sticky; top:0; background:#1b3a5c; color:#fff; padding:8px 14px; margin:-6mm -6mm 10mm -6mm; display:flex; gap:10px; align-items:center; justify-content:space-between; }
+        .toolbar h3 { margin:0; font-size:14pt; font-weight:700; }
+        .toolbar button { background:#fff; color:#1b3a5c; border:0; padding:6px 14px; border-radius:4px; font-weight:700; cursor:pointer; font-size:11pt; }
+        @media print { .toolbar { display:none; } body { padding:0; } }
+
+        .grp-page { page-break-after: always; }
+        .grp-page:last-child { page-break-after: auto; }
+
+        .hdr { text-align:center; margin-bottom:8px; }
+        .hdr h1 { font-size:11pt; font-weight:700; }
+        .hdr h2 { font-size:10pt; font-weight:700; color:#1b3a5c; }
+        .hdr .info { font-size:9pt; color:#333; margin-top:2px; }
+        .hdr .subtle { font-size:8.5pt; color:#666; }
+
+        table.conc { width:100%; border-collapse:collapse; font-size:8pt; }
+        table.conc th, table.conc td { border:0.6px solid #444; padding:1.5px 3px; text-align:left; }
+        table.conc thead th { background:#e8ecf1; font-weight:700; text-align:center; }
+        table.conc th.fc { width:18px; }
+        table.conc th.mat-h { writing-mode: horizontal-tb; font-size:7.5pt; }
+        table.conc th.nl { width:22px; }
+        table.conc th.prom-h { width:32px; }
+        table.conc td.num { text-align:center; font-variant-numeric:tabular-nums; }
+        table.conc td.bold { font-weight:700; }
+        table.conc td.fail { background:#fde2e2; color:#c0392b; font-weight:700; }
+      </style>
+      </head><body>
+        <div class="toolbar">
+          <h3>${Utils.sanitize(orientador)} &mdash; ${groupsOri.map(g => g.nombre).join(', ')}</h3>
+          <button onclick="window.print()">&#128424; Imprimir / Guardar PDF</button>
+        </div>
+        ${body}
+      </body></html>`;
+  }
 
   // Genera xlsx por orientador del turno y muestra UI con botones individuales.
   async function exportOrientacionMasivo() {
@@ -918,7 +1025,7 @@ html, body { margin:0; padding:0; height:100%; }
 
       for (const ori of orientadores) {
         const groupsOri = byOrientador[ori];
-        const wb = buildOrientacionWorkbook(groupsOri, partial, partialLabel, cicloEscolar);
+        const wb = buildOrientacionWorkbook(groupsOri, partial, partialLabel, cicloEscolar, turno);
 
         // Portada
         const cover = XLSX.utils.aoa_to_sheet([
@@ -939,7 +1046,11 @@ html, body { margin:0; padding:0; height:100%; }
         const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         const url = URL.createObjectURL(blob);
         const filename = `Concentrado_${turno}_${safeFilename(ori)}_${partial}.xlsx`;
-        _massCache.push({ orientador: ori, groups: groupsOri.map(g => g.nombre), filename, blob, url });
+        _massCache.push({
+          orientador: ori, groups: groupsOri.map(g => g.nombre), groupObjs: groupsOri,
+          filename, blob, url,
+          partial, partialLabel, turno, cicloEscolar
+        });
       }
 
       _renderMassCacheUI(turno, partial);
@@ -963,9 +1074,12 @@ html, body { margin:0; padding:0; height:100%; }
           </div>
           <div style="font-size:11px;color:#94a3b8;margin-top:2px;font-family:monospace;">${Utils.sanitize(it.filename)}</div>
         </div>
-        <div style="display:flex;gap:6px;flex-shrink:0;">
+        <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;">
+          <button class="btn btn-warning btn-sm" data-action="mass-preview" data-idx="${i}" title="Ver en pantalla y guardar como PDF" style="white-space:nowrap;">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">visibility</span> Ver / PDF
+          </button>
           <a href="${it.url}" download="${Utils.sanitize(it.filename)}" class="btn btn-primary btn-sm" style="white-space:nowrap;">
-            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">file_download</span> Descargar
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">file_download</span> Excel
           </a>
           <button class="btn btn-outline btn-sm" data-action="mass-copy-name" data-idx="${i}" title="Copiar nombre del archivo">
             <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">content_copy</span>
@@ -1031,6 +1145,16 @@ html, body { margin:0; padding:0; height:100%; }
       .catch(() => Toast.show('No se pudo copiar', 'error'));
   }
 
+  function _massPreview(idx) {
+    const it = _massCache[idx];
+    if (!it) return;
+    const html = buildOrientacionPrintHTML(it.orientador, it.groupObjs, it.partial, it.partialLabel, it.cicloEscolar, it.turno);
+    const w = window.open('', '_blank');
+    if (!w) { Toast.show('Permite ventanas emergentes para ver el PDF', 'warning'); return; }
+    w.document.write(html);
+    w.document.close();
+  }
+
   // ─── EVENTS ───
   function bindEvents(container) {
     container.addEventListener('click', (e) => {
@@ -1044,6 +1168,7 @@ html, body { margin:0; padding:0; height:100%; }
       else if (btn.dataset.action === 'mass-download-zip') _massDownloadZip();
       else if (btn.dataset.action === 'mass-clear') _massClearCache();
       else if (btn.dataset.action === 'mass-copy-name') _massCopyName(Number(btn.dataset.idx));
+      else if (btn.dataset.action === 'mass-preview') _massPreview(Number(btn.dataset.idx));
     });
 
     // Cascading filters
