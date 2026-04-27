@@ -102,8 +102,10 @@ const ConcentradoModule = (() => {
       allSubjects = subjects;
       allAssignments = assignments;
       // Load grades per-group (much more efficient than loading ALL grades)
+      // Respeta cache (TTL 3 min). Las mutaciones llaman a Store.invalidateGradesForGroup(),
+      // asi que tras una captura el cache esta limpio y se re-fetchea solo lo necesario.
       const groupIds = allGroups.map(g => g.id);
-      allGrades = await Store.getGradesByGroups(groupIds, true);
+      allGrades = await Store.getGradesByGroups(groupIds);
     } catch (e) {
       console.error('Error cargando datos de concentrado:', e);
       Toast.show('Error al cargar datos', 'error');
