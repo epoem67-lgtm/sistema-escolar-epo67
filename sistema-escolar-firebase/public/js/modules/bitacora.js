@@ -390,7 +390,7 @@ const BitacoraModule = (function () {
     return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
   }
 
-  function exportToExcel() {
+  async function exportToExcel() {
     if (filteredLogs.length === 0) {
       Toast.show('No hay datos para exportar', 'warning');
       return;
@@ -408,14 +408,16 @@ const BitacoraModule = (function () {
       'ID Entidad': log.entityId || ''
     }));
 
-    if (typeof XLSX !== 'undefined') {
+    try {
+      await Lib.xlsx();
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Bitácora');
       XLSX.writeFile(wb, `Bitacora_EPO67_${new Date().toISOString().slice(0, 10)}.xlsx`);
       Toast.show('Excel exportado', 'success');
-    } else {
-      Toast.show('Librería XLSX no disponible', 'error');
+    } catch (err) {
+      console.error(err);
+      Toast.show('Error cargando libreria XLSX', 'error');
     }
   }
 

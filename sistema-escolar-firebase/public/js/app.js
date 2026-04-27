@@ -687,12 +687,13 @@ const Utils = {
   },
 
   /**
-   * Exporta datos a Excel
+   * Exporta datos a Excel (carga XLSX bajo demanda)
    * @param {Array} data - Array de objetos
    * @param {string} filename - Nombre del archivo
    */
-  exportToExcel(data, filename = 'export.xlsx') {
+  async exportToExcel(data, filename = 'export.xlsx') {
     try {
+      await Lib.xlsx();
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Datos');
@@ -706,11 +707,12 @@ const Utils = {
   },
 
   /**
-   * Lee un archivo Excel
+   * Lee un archivo Excel (carga XLSX bajo demanda)
    * @param {File} file - Archivo Excel
    * @returns {Promise<Array>} Promise que resuelve con array de objetos
    */
   async parseExcelFile(file) {
+    await Lib.xlsx();
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (e) => {

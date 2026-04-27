@@ -859,7 +859,7 @@ html, body { margin:0; padding:0; height:100%; }
 
   // Wrapper publico: genera 1 xlsx para la seleccion actual del usuario.
   async function exportOrientacion() {
-    if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
+    await Lib.xlsx();
     const turno = document.getElementById('conc-turno')?.value;
     const grado = document.getElementById('conc-grado')?.value;
     const grupoSel = document.getElementById('conc-grupo')?.value;
@@ -1156,7 +1156,7 @@ html, body { margin:0; padding:0; height:100%; }
   // Genera xlsx por orientador del turno y muestra UI con botones individuales.
   async function exportOrientacionMasivo() {
     try {
-      if (!window.XLSX) { Toast.show('SheetJS no esta disponible', 'error'); return; }
+      await Lib.xlsx();
 
       const turno = document.getElementById('conc-turno')?.value;
       const partial = document.getElementById('conc-parcial')?.value || 'P1';
@@ -1283,7 +1283,7 @@ html, body { margin:0; padding:0; height:100%; }
 
   async function _massDownloadZip() {
     if (!_massCache.length) { Toast.show('No hay archivos en cache', 'warning'); return; }
-    if (!window.JSZip) { Toast.show('JSZip no disponible — recarga con Cmd+Shift+R', 'error'); return; }
+    await Lib.jszip();
     Toast.show('Empaquetando...', 'info');
     const zip = new JSZip();
     for (const it of _massCache) {

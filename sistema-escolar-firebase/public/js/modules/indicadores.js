@@ -29,6 +29,9 @@ const IndicadoresModule = (() => {
     if (!container) return;
     _destroyCharts();
 
+    // Carga Chart.js bajo demanda (la primera vez tarda ~200ms en red rapida)
+    await Lib.chart();
+
     const turnoOpts = K.TURNOS.map(t => `<option value="${t}">${t}</option>`).join('');
     const gradoOpts = K.GRADOS.map(g => `<option value="${g}">${g}\u00ba</option>`).join('');
     const parcialOpts = K.PARCIALES.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('');
