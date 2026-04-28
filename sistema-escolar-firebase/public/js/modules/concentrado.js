@@ -701,10 +701,13 @@ html, body { margin:0; padding:0; height:100%; }
   const normSubj = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
   const subjectAbbr = name => SUBJECT_ABBR[normSubj(name)] || normSubj(name).slice(0, 11);
 
-  // Construye un workbook xlsx para un set de grupos. Reutilizable por orientador o por seleccion manual.
-  function buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar, turno) {
+  // Construye un SPEC (datos planos, sin XLSX) para un set de grupos.
+  // Devuelve { sheets: [{name, aoa, merges, cols}] } que se serializa en un Web Worker
+  // (XlsxWorker.serialize) o en main thread como fallback. Antes usaba XLSX directamente
+  // en el main thread bloqueando la UI durante exports masivos.
+  function buildOrientacionWorkbookSpec(targetGroups, partial, partialLabel, cicloEscolar, turno) {
     if (!turno && targetGroups.length > 0) turno = targetGroups[0].turno;
-    const wb = XLSX.utils.book_new();
+    const sheets = [];
     const allBest = []; // para hoja "mejores promedios"
     const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
     const semestreByGrado = { 1: '2\u00ba', 2: '4\u00ba', 3: '6\u00ba' };
@@ -770,20 +773,17 @@ html, body { margin:0; padding:0; height:100%; }
         }
       });
 
-      const ws1 = XLSX.utils.aoa_to_sheet(aoa1);
-      // Merges para el header
-      ws1['!merges'] = (ws1['!merges'] || []).concat([
+      const sheet1Merges = [
         { s: { r: 0, c: 0 }, e: { r: 0, c: 4 + subs.length * 2 } },
         { s: { r: 1, c: 0 }, e: { r: 1, c: 4 + subs.length * 2 } },
         { s: { r: 2, c: 1 }, e: { r: 2, c: 4 + subs.length * 2 } },
-      ]);
-      // Anchos de columna
-      ws1['!cols'] = [{ wch: 4 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 2 }]
+      ];
+      const sheet1Cols = [{ wch: 4 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 2 }]
         .concat(subs.map(_ => ({ wch: 5 })).flatMap(c => [{ wch: 4 }, { wch: 5 }]))
         .concat([{ wch: 9 }]);
 
       const sheetName1 = String(grp.grado) + '\u00b0' + (grp.nombre.split('-')[1] || grp.nombre);
-      XLSX.utils.book_append_sheet(wb, ws1, sheetName1.slice(0, 31));
+      sheets.push({ name: sheetName1, aoa: aoa1, merges: sheet1Merges, cols: sheet1Cols });
 
       // ─── HOJA 2: SEGUIMIENTO (solo reprobados) ───
       const aoa2 = [];
@@ -828,11 +828,10 @@ html, body { margin:0; padding:0; height:100%; }
         aoa2.push(['', '', '', 'Sin alumnos reprobados en este parcial']);
       }
 
-      const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
-      ws2['!cols'] = [{ wch: 4 }, { wch: 16 }, { wch: 16 }, { wch: 18 }]
+      const sheet2Cols = [{ wch: 4 }, { wch: 16 }, { wch: 16 }, { wch: 18 }]
         .concat(subs.map(() => ({ wch: 8 })))
         .concat([{ wch: 5 }]);
-      XLSX.utils.book_append_sheet(wb, ws2, ('seg ' + sheetName1).slice(0, 31));
+      sheets.push({ name: 'seg ' + sheetName1, aoa: aoa2, cols: sheet2Cols });
     }
 
     // ─── HOJA FINAL: MEJORES PROMEDIOS ───
@@ -845,11 +844,26 @@ html, body { margin:0; padding:0; height:100%; }
         ['#', 'GRUPO', 'ALUMNO', 'PROMEDIO']
       ];
       ranked.slice(0, 30).forEach((r, i) => aoaBP.push([i + 1, r.grupo, r.alumno, r.promedio]));
-      const wsBP = XLSX.utils.aoa_to_sheet(aoaBP);
-      wsBP['!cols'] = [{ wch: 4 }, { wch: 8 }, { wch: 40 }, { wch: 9 }];
-      XLSX.utils.book_append_sheet(wb, wsBP, 'mejores promedios');
+      sheets.push({
+        name: 'mejores promedios',
+        aoa: aoaBP,
+        cols: [{ wch: 4 }, { wch: 8 }, { wch: 40 }, { wch: 9 }]
+      });
     }
-    return wb;
+    return { sheets };
+  }
+
+  // Helper: descarga un ArrayBuffer .xlsx con un nombre dado.
+  function downloadXlsxBuffer(buf, fname) {
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // Sanitiza un nombre para que sirva de filename
@@ -858,8 +872,8 @@ html, body { margin:0; padding:0; height:100%; }
   }
 
   // Wrapper publico: genera 1 xlsx para la seleccion actual del usuario.
+  // Usa Web Worker para no bloquear el main thread durante la serializacion XLSX.
   async function exportOrientacion() {
-    await Lib.xlsx();
     const turno = document.getElementById('conc-turno')?.value;
     const grado = document.getElementById('conc-grado')?.value;
     const grupoSel = document.getElementById('conc-grupo')?.value;
@@ -876,11 +890,17 @@ html, body { margin:0; padding:0; height:100%; }
     if (targetGroups.length === 0) { Toast.show('No hay grupos para esa selecci\u00f3n', 'warning'); return; }
 
     Toast.show(`Generando ${targetGroups.length} grupo(s)...`, 'info');
-    const wb = buildOrientacionWorkbook(targetGroups, partial, partialLabel, cicloEscolar, turno);
+    const spec = buildOrientacionWorkbookSpec(targetGroups, partial, partialLabel, cicloEscolar, turno);
     const groupTag = grupoSel ? targetGroups[0].nombre : `${grado}\u00ba`;
     const fname = `Concentrado_Orientacion_${turno}_${groupTag}_${partial}.xlsx`;
-    XLSX.writeFile(wb, fname);
-    Toast.show(`Generado: ${fname}`, 'success');
+    try {
+      const buf = await XlsxWorker.serialize(spec);
+      downloadXlsxBuffer(buf, fname);
+      Toast.show(`Generado: ${fname}`, 'success');
+    } catch (err) {
+      console.error(err);
+      Toast.show('Error generando XLSX: ' + err.message, 'error');
+    }
   }
 
   // Cache de blobs generados para descarga/compartir individual
@@ -1154,10 +1174,9 @@ html, body { margin:0; padding:0; height:100%; }
   }
 
   // Genera xlsx por orientador del turno y muestra UI con botones individuales.
+  // Usa Web Worker (XlsxWorker) para que la serializacion XLSX no bloquee el main thread.
   async function exportOrientacionMasivo() {
     try {
-      await Lib.xlsx();
-
       const turno = document.getElementById('conc-turno')?.value;
       const partial = document.getElementById('conc-parcial')?.value || 'P1';
       if (!turno) { Toast.show('Selecciona el turno', 'warning'); return; }
@@ -1193,26 +1212,29 @@ html, body { margin:0; padding:0; height:100%; }
       _massCache.forEach(it => { try { URL.revokeObjectURL(it.url); } catch (e) {} });
       _massCache = [];
 
-      for (const ori of orientadores) {
+      for (let oi = 0; oi < orientadores.length; oi++) {
+        const ori = orientadores[oi];
         const groupsOri = byOrientador[ori];
-        const wb = buildOrientacionWorkbook(groupsOri, partial, partialLabel, cicloEscolar, turno);
 
-        // Portada
-        const cover = XLSX.utils.aoa_to_sheet([
-          [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
-          [`CONCENTRADO POR ORIENTADOR`],
-          [`${partialLabel}   CICLO ${cicloEscolar}   TURNO ${turno}`],
-          [],
-          [`Orientador(a):`, ori],
-          [`Grupos asignados:`, groupsOri.map(g => g.nombre).join(', ')],
-          [`Total grupos:`, groupsOri.length],
-        ]);
-        cover['!cols'] = [{ wch: 22 }, { wch: 60 }];
-        const sheets = wb.SheetNames;
-        wb.Sheets['Portada'] = cover;
-        wb.SheetNames = ['Portada'].concat(sheets);
+        // Construir spec con portada al inicio
+        const spec = buildOrientacionWorkbookSpec(groupsOri, partial, partialLabel, cicloEscolar, turno);
+        const portada = {
+          name: 'Portada',
+          aoa: [
+            [`ESCUELA PREPARATORIA OFICIAL N\u00ba 67`],
+            [`CONCENTRADO POR ORIENTADOR`],
+            [`${partialLabel}   CICLO ${cicloEscolar}   TURNO ${turno}`],
+            [],
+            [`Orientador(a):`, ori],
+            [`Grupos asignados:`, groupsOri.map(g => g.nombre).join(', ')],
+            [`Total grupos:`, groupsOri.length],
+          ],
+          cols: [{ wch: 22 }, { wch: 60 }]
+        };
+        spec.sheets = [portada].concat(spec.sheets);
 
-        const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        // Serializar en Web Worker (no bloquea main thread)
+        const buf = await XlsxWorker.serialize(spec);
         const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         const url = URL.createObjectURL(blob);
         const filename = `Concentrado_${turno}_${safeFilename(ori)}_${partial}.xlsx`;
@@ -1221,6 +1243,10 @@ html, body { margin:0; padding:0; height:100%; }
           filename, blob, url,
           partial, partialLabel, turno, cicloEscolar
         });
+
+        // Progreso visible y yield al main thread entre orientadores
+        Toast.show(`Generando ${oi + 1}/${orientadores.length}...`, 'info');
+        await new Promise(r => setTimeout(r, 0));
       }
 
       _renderMassCacheUI(turno, partial);
