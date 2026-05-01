@@ -417,7 +417,20 @@ const AtRiskModule = (() => {
         return;
       }
 
-      let teacherStudents = await Store.getAtRisk();
+      // Maestro: query filtrada por teacherId (firestore.rules requieren esto)
+      let teacherStudents;
+      const role = App.currentUser?.role;
+      if (role === 'maestro' || role === 'orientador_docente') {
+        const teacherDocId = await Store.getTeacherDocId();
+        if (!teacherDocId) {
+          container.innerHTML = `<div class="module-container"><div class="error-state"><span class="material-icons-round">person_off</span><p>Tu cuenta no está vinculada a un docente.</p></div></div>`;
+          return;
+        }
+        const snap = await db.collection('atRisk').where('teacherId', '==', teacherDocId).get();
+        teacherStudents = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      } else {
+        teacherStudents = await Store.getAtRisk();
+      }
       teacherStudents = sortByRiskLevel(teacherStudents);
 
       container.innerHTML = `

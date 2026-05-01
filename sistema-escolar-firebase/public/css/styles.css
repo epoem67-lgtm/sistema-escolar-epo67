@@ -203,16 +203,51 @@ body {
 }
 
 .login-logo {
-  width: 64px;
-  height: 64px;
-  margin: 0 auto var(--spacing-lg);
-  border-radius: var(--radius-md);
-  object-fit: contain;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 0 var(--spacing-xl);
+  text-align: center;
+}
+
+.login-icon {
+  font-size: 56px !important;
+  color: var(--color-primary, #3182ce);
+  margin-bottom: 12px;
+  line-height: 1;
+}
+
+.login-card h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-text, #1a202c);
+  margin: 0 0 6px;
+  line-height: 1.2;
 }
 
 .login-subtitle {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-light);
+  font-size: 14px;
+  color: var(--color-text-light, #718096);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.login-footer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-light, #718096);
+  margin: var(--spacing-md) 0 0;
+}
+
+.login-error {
+  background: #fed7d7;
+  color: #742a2a;
+  border: 1px solid #fc8181;
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: 13px;
+  margin: 10px 0;
+  text-align: center;
 }
 
 /* Login form styles */
@@ -918,6 +953,90 @@ textarea {
   background-color: #fef2f2;
 }
 
+/* ─── Grade Editor: pestañas de asignaciones del maestro ─── */
+.ge-tabs-container {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.ge-tabs-scroll {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+}
+.ge-tabs-scroll::-webkit-scrollbar { height: 6px; }
+.ge-tabs-scroll::-webkit-scrollbar-thumb { background: #cbd5e0; border-radius: 3px; }
+.ge-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #2d3748;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: transform 0.05s ease, border-color 0.1s ease;
+}
+.ge-tab:hover {
+  border-color: #3182ce;
+  transform: translateY(-1px);
+}
+.ge-tab.active {
+  border-color: #3182ce;
+  background: #ebf8ff;
+  box-shadow: 0 2px 4px rgba(49,130,206,0.15);
+}
+.ge-tab-status { font-size: 16px; }
+.ge-tab-label { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.ge-tab-label strong { font-weight: 700; font-size: 12px; color: #1a202c; }
+.ge-tab-subj { font-size: 10px; color: #4a5568; }
+.ge-tab-count {
+  font-weight: 700;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: #edf2f7;
+  color: #2d3748;
+}
+.ge-tab.tab-complete .ge-tab-count { background: #c6f6d5; color: #22543d; }
+.ge-tab.tab-partial  .ge-tab-count { background: #fefcbf; color: #744210; }
+.ge-tab.tab-empty    .ge-tab-count { background: #fed7d7; color: #742a2a; }
+
+.ge-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e2e8f0;
+}
+.ge-nav-current {
+  font-weight: 600;
+  color: #2d3748;
+  font-size: 13px;
+  text-align: center;
+  flex: 1;
+}
+.ge-nav-prev, .ge-nav-next {
+  font-weight: 700;
+  padding: 8px 18px;
+  font-size: 13px;
+}
+.ge-nav-prev:disabled, .ge-nav-next:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ─── Grade Editor Table — high contrast ─── */
 .grade-editor-table {
   width: 100%;
@@ -1197,6 +1316,8 @@ textarea {
 .paste-preview .val-error { color: #c53030; font-weight: 700; }
 
 .paste-preview .val-ok { color: #276749; }
+
+.paste-preview .val-empty { color: #a0aec0; font-style: italic; background: #f7fafc; }
 
 /* ─── Error-Proofing: Invalid Input Highlight ─── */
 .ge-input.ge-input-invalid {

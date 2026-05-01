@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'v5.9-c3';
+const SW_VERSION = 'v5.10-maestro';
 const STATIC_CACHE = `epo67-static-${SW_VERSION}`;
 
 // Recursos a precachear durante la instalacion (la app shell minima)

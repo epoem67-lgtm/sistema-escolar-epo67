@@ -239,10 +239,14 @@ const Store = (() => {
         const userId = auth.currentUser?.uid;
         if (!userId) return null;
 
-        // 1. Buscar en users si tiene teacherDocId vinculado
+        // 1. Buscar en users el campo del enlace al docente.
+        // El sistema usa indistintamente `teacherDocId` (nombre histórico) o
+        // `teacherId` (nombre nuevo desde create-teacher-users.js). Probar ambos.
         const userDoc = await db.collection('users').doc(userId).get();
-        if (userDoc.exists && userDoc.data().teacherDocId) {
-          return userDoc.data().teacherDocId;
+        if (userDoc.exists) {
+          const data = userDoc.data();
+          if (data.teacherDocId) return data.teacherDocId;
+          if (data.teacherId)    return data.teacherId;
         }
 
         // 2. Fallback: buscar en teachers por email
@@ -258,6 +262,82 @@ const Store = (() => {
         }
 
         return null;
+      }, force);
+    },
+
+    /**
+     * Devuelve alumnos según el rol del usuario actual:
+     *  - admin / orientador / directivo / consulta → TODOS los alumnos (getStudents)
+     *  - maestro / orientador_docente             → solo alumnos de los grupos
+     *    donde tiene assignment (vía getMyAssignments → unique groupIds)
+     *
+     * Esta es la API correcta para que CUALQUIER módulo lea alumnos sin chocar
+     * con firestore.rules. Reemplazo seguro de Store.getStudents() en módulos
+     * que usen tanto admin como maestro.
+     * @returns {Promise<Array>}
+     */
+    async getStudentsForUser(force) {
+      const role = App.currentUser?.role;
+      if (role === 'admin' || role === 'orientador' || role === 'directivo' || role === 'consulta') {
+        return this.getStudents(force);
+      }
+      // maestro / orientador_docente: solo alumnos de sus grupos
+      const myAsg = await this.getMyAssignments(force);
+      const groupIds = [...new Set(myAsg.map(a => a.groupId).filter(Boolean))];
+      if (groupIds.length === 0) return [];
+      return this.getStudentsByGroups(groupIds, force);
+    },
+
+    /**
+     * Obtiene alumnos de UN solo grupo via where('groupId','==', X).
+     * Respeta firestore.rules para maestros (que solo pueden leer alumnos
+     * de sus propios grupos). Cache por grupo.
+     * @param {string} groupId
+     * @returns {Promise<Array>}
+     */
+    getStudentsByGroup(groupId, force) {
+      const key = 'students_group_' + groupId;
+      return get(key, async () => {
+        const snap = await db.collection('students')
+          .where('groupId', '==', groupId)
+          .get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
+    /**
+     * Obtiene alumnos de varios grupos en paralelo (cache por grupo).
+     * Para maestros: pasar solo los groupIds donde tiene asignación.
+     * @param {string[]} groupIds
+     * @returns {Promise<Array>}
+     */
+    async getStudentsByGroups(groupIds, force) {
+      if (!groupIds || groupIds.length === 0) return [];
+      const promises = groupIds.map(gid => this.getStudentsByGroup(gid, force));
+      const results = await Promise.all(promises);
+      return results.flat();
+    },
+
+    /**
+     * Obtiene SOLO las asignaciones del maestro/orientador_docente actual.
+     * Usa una query con `where('teacherId','==', myId)` que respeta las reglas
+     * de Firestore (un maestro no puede leer assignments ajenas).
+     * Para admin/orientador/directivo se delega a getAssignments() (sin filtro).
+     * @returns {Promise<Array>}
+     */
+    async getMyAssignments(force) {
+      const role = App.currentUser?.role;
+      if (role === 'admin' || role === 'orientador' || role === 'directivo') {
+        return this.getAssignments(force);
+      }
+      const teacherDocId = await this.getTeacherDocId();
+      if (!teacherDocId) return [];
+      const cacheKey = 'assignments_my_' + teacherDocId;
+      return get(cacheKey, async () => {
+        const snap = await db.collection('assignments')
+          .where('teacherId', '==', teacherDocId)
+          .get();
+        return snapshotToArray(snap);
       }, force);
     },
 

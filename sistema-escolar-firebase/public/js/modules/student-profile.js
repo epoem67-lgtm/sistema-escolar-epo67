@@ -30,29 +30,30 @@ const StudentProfileModule = (() => {
       '<div id="sp-content"></div>'
     );
 
-    // Load base data
+    // Load base data — usar APIs role-aware que respetan firestore.rules.
+    // Para maestro/orientador_docente: solo SU data (no TODOS los alumnos).
     try {
-      [_students, _groups, _subjects, _assignments] = await Promise.all([
-        Store.getStudents(), Store.getGroups(), Store.getSubjects(), Store.getAssignments()
-      ]);
-
-      // Orientador: filter to their groups only
-      const oriGroups = await Store.getOrientadorGroups();
-      if (oriGroups) {
-        const oriSet = new Set(oriGroups);
-        _groups = _groups.filter(g => oriSet.has(g.id));
-        _students = _students.filter(s => oriSet.has(s.groupId));
-      }
-
-      // Solo maestro puro: limita estrictamente a sus grupos asignados.
-      // El orientador_docente ya tuvo el filtro amplio de orientador arriba.
       if (role === 'maestro') {
-        const teacherDocId = await Store.getTeacherDocId();
-        if (teacherDocId) {
-          const teacherAssignments = _assignments.filter(a => a.teacherId === teacherDocId);
-          const teacherGroupIds = new Set(teacherAssignments.map(a => a.groupId));
-          _groups = _groups.filter(g => teacherGroupIds.has(g.id));
-          _students = _students.filter(s => teacherGroupIds.has(s.groupId));
+        // Maestro estricto: solo sus assignments y alumnos de SUS grupos.
+        const [groups, subjects, myAsg] = await Promise.all([
+          Store.getGroups(), Store.getSubjects(), Store.getMyAssignments()
+        ]);
+        _assignments = myAsg;
+        const teacherGroupIds = new Set(myAsg.map(a => a.groupId).filter(Boolean));
+        _groups = groups.filter(g => teacherGroupIds.has(g.id));
+        _subjects = subjects;
+        _students = await Store.getStudentsByGroups([...teacherGroupIds]);
+      } else {
+        // admin / orientador / directivo / consulta: lectura amplia.
+        [_students, _groups, _subjects, _assignments] = await Promise.all([
+          Store.getStudents(), Store.getGroups(), Store.getSubjects(), Store.getAssignments()
+        ]);
+        // Orientador: filter to their groups only
+        const oriGroups = await Store.getOrientadorGroups();
+        if (oriGroups) {
+          const oriSet = new Set(oriGroups);
+          _groups = _groups.filter(g => oriSet.has(g.id));
+          _students = _students.filter(s => oriSet.has(s.groupId));
         }
       }
     } catch (err) {

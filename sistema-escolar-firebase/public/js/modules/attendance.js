@@ -35,8 +35,8 @@ const AttendanceModule = (() => {
       return;
     }
 
-    const allAssignments = await Store.getAssignments();
-    assignments = allAssignments.filter(a => a.teacherId === teacherDocId);
+    // getMyAssignments respeta firestore.rules para maestros
+    assignments = await Store.getMyAssignments();
     const groupIds = [...new Set(assignments.map(a => a.groupId))];
     groups = (await Store.getGroups()).filter(g => groupIds.includes(g.id));
 
@@ -145,8 +145,10 @@ const AttendanceModule = (() => {
     listContainer.innerHTML = `<div class="loading-state"><span class="material-icons-round loading-spinner">autorenew</span><p>Cargando...</p></div>`;
 
     try {
-      const allStudents = await Store.getStudents();
-      students = allStudents.filter(s => s.groupId === groupId && s.estatus === 'ACTIVO')
+      // Para maestro: usar query filtrada por grupo (firestore.rules permite leer
+      // alumnos del grupo donde tiene assignment).
+      const allStudents = await Store.getStudentsByGroup(groupId);
+      students = allStudents.filter(s => s.estatus === 'ACTIVO')
         .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
 
       // Load existing records

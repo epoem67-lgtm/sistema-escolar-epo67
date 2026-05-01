@@ -14,6 +14,14 @@ const DashboardModule = (() => {
 
     container.innerHTML = UI.loadingState('Cargando dashboard...');
 
+    // Maestros (y orientador_docente) NO pueden leer todos los alumnos/docentes
+    // por firestore.rules. Renderizamos un dashboard simplificado para ellos
+    // con bienvenida + accesos rápidos + estado de sus asignaciones.
+    const role = App.currentUser?.role;
+    if (role === 'maestro' || role === 'orientador_docente') {
+      return renderTeacherDashboard(container);
+    }
+
     try {
       // Load lightweight data first (no grades - those are 8000+ docs)
       const [students, teachers, groups, partials] = await Promise.all([
@@ -59,6 +67,95 @@ const DashboardModule = (() => {
       console.error('Error renderizando dashboard:', error);
       container.innerHTML = UI.errorState('Error al cargar el dashboard');
       Toast.show('Error al cargar el dashboard', 'error');
+    }
+  }
+
+  // ─── DASHBOARD SIMPLIFICADO PARA MAESTROS ─────────────────
+  async function renderTeacherDashboard(container) {
+    try {
+      const userName = Utils.displayName(App.currentUser?.displayName || App.currentUser?.email || '');
+      let assignments = [];
+      try {
+        // getMyAssignments respeta firestore.rules: para maestro hace
+        // where('teacherId','==', myId) y solo trae las suyas.
+        assignments = await Store.getMyAssignments();
+      } catch (e) {
+        console.warn('No se pudieron cargar asignaciones:', e);
+      }
+
+      // Agrupar por turno
+      const turnoOrd = { 'MATUTINO': 1, 'VESPERTINO': 2, 'AMBOS': 3 };
+      assignments.sort((a, b) =>
+        (turnoOrd[(a.turno||'').toUpperCase()] || 9) - (turnoOrd[(b.turno||'').toUpperCase()] || 9)
+        || (Number(a.grado) || 9) - (Number(b.grado) || 9)
+        || (a.groupName || '').localeCompare(b.groupName || '')
+      );
+
+      const totalGrupos = new Set(assignments.map(a => a.groupId)).size;
+      const totalMaterias = assignments.length;
+
+      const asignacionesHtml = assignments.length === 0
+        ? '<p class="text-muted" style="text-align:center;padding:20px;">Aún no tienes asignaciones registradas.</p>'
+        : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">
+            ${assignments.map(a => {
+              const turnoClass = (a.turno || '').toUpperCase() === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino';
+              return `<div class="card" style="padding:14px;border-left:4px solid var(--color-primary);">
+                <div style="font-weight:700;font-size:14px;color:#1a202c;margin-bottom:4px;">
+                  ${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId))}
+                </div>
+                <div style="font-size:12px;color:#4a5568;">
+                  <span class="badge ${turnoClass}" style="font-size:10px;">${Utils.sanitize(a.turno || '')}</span>
+                  <span class="badge" style="font-size:10px;background:#edf2f7;color:#2d3748;">Grupo ${Utils.sanitize(a.groupName || a.groupId)}</span>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>`;
+
+      container.innerHTML = UI.moduleContainer(`
+        <div class="card" style="background:linear-gradient(135deg,#3182ce 0%,#2b6cb0 100%);color:#fff;padding:28px;margin-bottom:20px;">
+          <h1 style="font-size:24px;font-weight:700;margin:0 0 6px;color:#fff;">
+            Bienvenido(a), ${Utils.sanitize(userName)}
+          </h1>
+          <p style="margin:0;font-size:14px;opacity:0.9;">
+            Tienes <strong>${totalMaterias}</strong> asignación(es) en <strong>${totalGrupos}</strong> grupo(s).
+          </p>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h2 style="font-size:16px;font-weight:700;margin:0 0 12px;color:#1a202c;">Accesos rápidos</h2>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="Router.navigate('my-grades')" style="padding:12px 20px;font-size:14px;">
+              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:6px;">edit_note</span>
+              Capturar Calificaciones
+            </button>
+            <button class="btn btn-outline" onclick="Router.navigate('grades-admin')" style="padding:12px 20px;font-size:14px;">
+              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:6px;">visibility</span>
+              Consultar Calificaciones
+            </button>
+            <button class="btn btn-outline" onclick="Router.navigate('my-lists')" style="padding:12px 20px;font-size:14px;">
+              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:6px;">list_alt</span>
+              Mis Listas
+            </button>
+            <button class="btn btn-outline" onclick="Router.navigate('attendance')" style="padding:12px 20px;font-size:14px;">
+              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:6px;">how_to_reg</span>
+              Asistencia
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 style="font-size:16px;font-weight:700;margin:0 0 12px;color:#1a202c;">Mis asignaciones</h2>
+          ${asignacionesHtml}
+        </div>
+      `);
+    } catch (error) {
+      console.error('Error en dashboard de maestro:', error);
+      container.innerHTML = UI.moduleContainer(`
+        <div class="card">
+          <h1 style="font-size:20px;font-weight:700;margin:0 0 8px;">Bienvenido(a)</h1>
+          <p style="color:#4a5568;">Usa el menú lateral para navegar al módulo de captura de calificaciones u otras secciones disponibles.</p>
+        </div>
+      `);
     }
   }
 

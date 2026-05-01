@@ -19,8 +19,8 @@ const MyListsModule = (() => {
         return;
       }
 
-      const allAssignments = await Store.getAssignments();
-      const groups = allAssignments.filter(a => a.teacherId === teacherDocId);
+      // getMyAssignments usa where('teacherId','==', myId): respeta firestore.rules
+      const groups = await Store.getMyAssignments();
 
       if (groups.length === 0) {
         container.innerHTML = `<div class="module-container"><div class="empty-state"><span class="material-icons-round empty-state-icon">folder_open</span><p class="empty-state-text">No hay grupos asignados.</p></div></div>`;
@@ -65,7 +65,8 @@ const MyListsModule = (() => {
     listContainer.innerHTML = `<div class="loading-state"><span class="material-icons-round loading-spinner">autorenew</span><p>Cargando estudiantes...</p></div>`;
 
     try {
-      const allStudents = await Store.getStudents();
+      // Para maestros usa query filtrada por grupo (getStudentsByGroup), respeta firestore.rules
+      const allStudents = await Store.getStudentsByGroup(groupId);
       studentData = allStudents
         .filter(s => s.groupId === groupId)
         .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));

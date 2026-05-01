@@ -47,6 +47,15 @@ const GradesModule = (function () {
       if (!t) return;
       const a = t.dataset.action;
       if (a === 'open-editor') api.openGradeEditor(t.dataset.assignmentId, t.dataset.groupId, t.dataset.subjectId);
+      else if (a === 'switch-assignment') {
+        // Cambio de pestaña / botón Anterior-Siguiente
+        const newAsgId = t.dataset.assignmentId;
+        if (!newAsgId) return;
+        if (_isDirty) {
+          if (!confirm('Tienes cambios sin guardar en esta lista. ¿Cambiar de lista sin guardar?')) return;
+        }
+        api.openGradeEditor(newAsgId, t.dataset.groupId, t.dataset.subjectId);
+      }
       else if (a === 'switch-partial') api.switchPartial(t.dataset.partial);
       else if (a === 'save-grades') api.saveGrades();
       else if (a === 'back-to-list') {
@@ -69,6 +78,156 @@ const GradesModule = (function () {
   // ─── Cascade filter state for teacher/admin assignment selection ───
   let _capAssignments = [];
 
+  // ─── Assignment status cache (para las pestañas del editor) ───
+  // { assignmentId: { filled: N, total: N, percent: 0..100, status: 'complete'|'partial'|'empty' } }
+  let _assignmentStatusCache = {};
+  let _assignmentStatusForPartial = null;  // 'P1' | 'P2' | 'P3'
+
+  /** Carga grades de todos los grupos del maestro y pre-calcula el estado de cada
+   *  asignación para el parcial dado. Invalida cache si cambia parcial. */
+  async function _loadAssignmentStatuses(partial) {
+    if (_assignmentStatusForPartial === partial && Object.keys(_assignmentStatusCache).length > 0) {
+      return _assignmentStatusCache;
+    }
+    const groupIds = [...new Set(_capAssignments.map(a => a.groupId).filter(Boolean))];
+    if (groupIds.length === 0) return {};
+
+    try {
+      // Para maestros, getStudents() es rechazado por las reglas. Usar query
+      // filtrada por groupIds (los grupos del maestro) que sí está permitida.
+      const role = App.currentUser?.role;
+      const fetchStudents = (role === 'admin' || role === 'orientador' || role === 'directivo')
+        ? Store.getStudents()
+        : Store.getStudentsByGroups(groupIds);
+
+      const [allStudents, allGrades] = await Promise.all([
+        fetchStudents,
+        Store.getGradesByGroupsAndPartial(groupIds, partial),
+      ]);
+
+      // Indexar alumnos por grupo
+      const studentsByGroup = {};
+      for (const s of allStudents) {
+        if (!s.groupId) continue;
+        if (!studentsByGroup[s.groupId]) studentsByGroup[s.groupId] = [];
+        studentsByGroup[s.groupId].push(s);
+      }
+
+      // Indexar grades por (subjectId + groupId) → set de studentIds con al menos un rubro
+      const filledByAssignment = {};
+      for (const g of allGrades) {
+        const key = `${g.subjectId}_${g.groupId}`;
+        if (!filledByAssignment[key]) filledByAssignment[key] = new Set();
+        // Considera "lleno" si tiene al menos un rubro o cal/value
+        const hasValue = ['ec', 'tr', 'ex', 'pe', 'cal', 'value'].some(k =>
+          g[k] !== undefined && g[k] !== null && g[k] !== ''
+        );
+        if (hasValue) filledByAssignment[key].add(g.studentId);
+      }
+
+      const cache = {};
+      for (const a of _capAssignments) {
+        const total = (studentsByGroup[a.groupId] || []).length;
+        const filled = (filledByAssignment[`${a.subjectId}_${a.groupId}`] || new Set()).size;
+        const percent = total > 0 ? Math.round((filled / total) * 100) : 0;
+        let status = 'empty';
+        if (filled === total && total > 0) status = 'complete';
+        else if (filled > 0) status = 'partial';
+        cache[a.id] = { filled, total, percent, status };
+      }
+      _assignmentStatusCache = cache;
+      _assignmentStatusForPartial = partial;
+      return cache;
+    } catch (e) {
+      console.warn('Error cargando estado de asignaciones:', e);
+      return {};
+    }
+  }
+
+  /** Invalida el cache de estado para una asignación específica
+   *  (después de guardar). El siguiente render lo recalcula. */
+  function _invalidateAssignmentStatus(assignmentId) {
+    if (assignmentId) delete _assignmentStatusCache[assignmentId];
+  }
+
+  /** Lista ordenada de asignaciones del maestro (matutino primero, luego por grado, grupo, materia). */
+  function _orderedAssignments() {
+    const turnoOrd = { 'MATUTINO': 1, 'VESPERTINO': 2, 'AMBOS': 3 };
+    return [..._capAssignments].sort((a, b) => {
+      const ta = turnoOrd[(a.turno || '').toUpperCase()] || 9;
+      const tb = turnoOrd[(b.turno || '').toUpperCase()] || 9;
+      if (ta !== tb) return ta - tb;
+      const ga = Number(a.grado) || 9;
+      const gb = Number(b.grado) || 9;
+      if (ga !== gb) return ga - gb;
+      const gna = (a.groupName || '').localeCompare(b.groupName || '');
+      if (gna !== 0) return gna;
+      return (a.subjectName || '').localeCompare(b.subjectName || '');
+    });
+  }
+
+  /** HTML de las pestañas de asignaciones del maestro con su estado. */
+  function _renderAssignmentTabs(currentAssignmentId) {
+    const ordered = _orderedAssignments();
+    if (ordered.length <= 1) return '';  // 1 sola asignación: no muestra pestañas
+
+    const tabs = ordered.map(a => {
+      const st = _assignmentStatusCache[a.id] || { filled: 0, total: 0, percent: 0, status: 'empty' };
+      const isActive = a.id === currentAssignmentId;
+      const turnoShort = (a.turno || '').slice(0, 3).toUpperCase();
+      const subjShort = (K.getUACNombre(a.subjectName || '') || a.subjectId).slice(0, 22);
+      let icon = '⚪'; let cls = 'tab-empty';
+      if (st.status === 'complete')      { icon = '✅'; cls = 'tab-complete'; }
+      else if (st.status === 'partial')  { icon = '⚠️'; cls = 'tab-partial'; }
+      else if (st.status === 'empty')    { icon = '❌'; cls = 'tab-empty'; }
+      return `<button class="ge-tab ${cls}${isActive ? ' active' : ''}"
+        data-action="switch-assignment"
+        data-assignment-id="${a.id}"
+        data-group-id="${a.groupId}"
+        data-subject-id="${a.subjectId}"
+        title="${Utils.sanitize(a.turno || '')} · ${Utils.sanitize(a.groupName || '')} · ${Utils.sanitize(a.subjectName || '')}">
+        <span class="ge-tab-status">${icon}</span>
+        <span class="ge-tab-label">
+          <strong>${turnoShort} ${Utils.sanitize(a.groupName || '')}</strong>
+          <span class="ge-tab-subj">${Utils.sanitize(subjShort)}</span>
+        </span>
+        <span class="ge-tab-count">${st.filled}/${st.total}</span>
+      </button>`;
+    }).join('');
+
+    // Botones grandes Anterior / Siguiente
+    const idx = ordered.findIndex(a => a.id === currentAssignmentId);
+    const prev = idx > 0 ? ordered[idx - 1] : null;
+    const next = idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1] : null;
+    const currentLabel = idx >= 0
+      ? `${ordered[idx].turno || ''} ${ordered[idx].groupName || ''} — ${K.getUACNombre(ordered[idx].subjectName || '')}`
+      : '';
+    const nav = `
+      <div class="ge-nav">
+        <button class="btn btn-outline ge-nav-prev" ${!prev ? 'disabled' : ''}
+          data-action="switch-assignment"
+          data-assignment-id="${prev?.id || ''}"
+          data-group-id="${prev?.groupId || ''}"
+          data-subject-id="${prev?.subjectId || ''}">
+          ◀ Anterior
+        </button>
+        <span class="ge-nav-current">${idx + 1} de ${ordered.length} · ${Utils.sanitize(currentLabel)}</span>
+        <button class="btn btn-primary ge-nav-next" ${!next ? 'disabled' : ''}
+          data-action="switch-assignment"
+          data-assignment-id="${next?.id || ''}"
+          data-group-id="${next?.groupId || ''}"
+          data-subject-id="${next?.subjectId || ''}">
+          Siguiente ▶
+        </button>
+      </div>`;
+
+    return `
+      <div class="ge-tabs-container">
+        <div class="ge-tabs-scroll">${tabs}</div>
+        ${nav}
+      </div>`;
+  }
+
   async function renderTeacher() {
     const container = _container();
     // Cleanup from previous editor session
@@ -87,17 +246,16 @@ const GradesModule = (function () {
     const isAdmin = role === 'admin';
 
     try {
-      const allAssignments = await Store.getAssignments();
-
-      if (isAdmin) {
-        _capAssignments = allAssignments;
-      } else {
+      // Para maestros, getMyAssignments hace una query con where('teacherId','==', myId)
+      // que respeta las firestore.rules. Para admin, retorna todas.
+      _capAssignments = await Store.getMyAssignments();
+      if (!isAdmin && _capAssignments.length === 0) {
+        // Verificar si el problema es falta de vínculo o que no tiene asignaciones
         const teacherDocId = await Store.getTeacherDocId();
         if (!teacherDocId) {
           container.innerHTML = UI.moduleContainer(UI.emptyState('person_off', 'Tu cuenta no está vinculada a un registro de docente. Contacta al administrador.'));
           return;
         }
-        _capAssignments = allAssignments.filter(a => a.teacherId === teacherDocId);
       }
 
       // If teacher has only 1 assignment, open editor directly
@@ -291,9 +449,16 @@ const GradesModule = (function () {
     selectedSubject = subjectId;
 
     try {
-      // Use Store cache for students, groups, partials — only grades need fresh per-subject query
+      // Para maestros, getStudents() global es rechazado por reglas. Usar query
+      // filtrada por groupId (que sí está permitida porque el maestro tiene
+      // assignment de ese grupo). Para admin/orientador/directivo, usar global.
+      const role = App.currentUser?.role;
+      const fetchStudents = (role === 'admin' || role === 'orientador' || role === 'directivo')
+        ? Store.getStudents()
+        : Store.getStudentsByGroup(groupId);
+
       const [allStudents, partials, allGroups, groupGrades] = await Promise.all([
-        Store.getStudents(),
+        fetchStudents,
         Store.getPartials(),
         Store.getGroups(),
         Store.getGradesByGroup(groupId, true)
@@ -326,6 +491,10 @@ const GradesModule = (function () {
         const key = `${g.studentId}_${g.subjectId}_${g.partial}`;
         grades[key] = g;
       });
+
+      // Pre-cargar estado de TODAS las asignaciones del maestro para las pestañas
+      // (no bloquea — usa cache si ya está cargado para este parcial).
+      _loadAssignmentStatuses(currentPartial).catch(() => {});
 
       _renderGradeEditor(partials);
     } catch (error) {
@@ -580,6 +749,10 @@ const GradesModule = (function () {
         <span>Este parcial está <b>cerrado</b>. No se pueden guardar cambios a menos que tengas acceso especial.</span>
       </div>` : '';
 
+    // Pesta\u00f1as de asignaciones (solo si tiene >1 asignaci\u00f3n)
+    const currentAsg = assignments.find(a => a.groupId === selectedGroup && a.subjectId === selectedSubject);
+    const tabsHtml = currentAsg ? _renderAssignmentTabs(currentAsg.id) : '';
+
     container.innerHTML = `
       <div class="module-container">
         <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
@@ -594,6 +767,8 @@ const GradesModule = (function () {
             <button class="btn btn-outline" data-action="back-to-list">\u2190 Volver</button>
           </div>
         </div>
+
+        ${tabsHtml}
 
         ${lockWarning}
 
@@ -925,9 +1100,17 @@ const GradesModule = (function () {
       const maxVal = rubro ? rubro.max : (field === 'faltas' ? 99 : 10);
       const isInt = field === 'faltas';
 
-      // Split by newlines or tabs
-      const lines = raw.split(/[\n\r]+/).map(l => l.trim()).filter(l => l !== '');
+      // FIX BUG: preservar l\u00edneas vac\u00edas en MEDIO del paste. Antes se eliminaban
+      // con .filter() y el alumno #3 con valor 1 se aplicaba al alumno #1.
+      // Ahora una l\u00ednea vac\u00eda se marca como "sin cambio" y NO altera al alumno.
+      // Solo se quita whitespace decorativo al inicio y al final del paste.
+      let lines = raw.split(/\r?\n/).map(l => l.trim());
+      while (lines.length > 0 && lines[0] === '') lines.shift();
+      while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+
       parsedValues = lines.map(line => {
+        // L\u00ednea vac\u00eda = no tocar la celda del alumno (preserva su valor actual).
+        if (line === '') return { raw: '', value: null, empty: true, error: null };
         // Clean: remove commas used as decimal separator in some locales
         const cleaned = line.replace(',', '.').replace(/[^0-9.]/g, '');
         const num = isInt ? parseInt(cleaned) : parseFloat(cleaned);
@@ -937,34 +1120,60 @@ const GradesModule = (function () {
         return { raw: line, value: isInt ? Math.round(num) : Math.round(num * 10) / 10, error: null };
       });
 
-      // Show preview
-      const countMatch = Math.min(parsedValues.length, students.length);
+      // Conteos para el preview con etiquetas claras
       const countExtra = parsedValues.length - students.length;
-      let previewHtml = `<table><thead><tr><th>#</th><th>Alumno</th><th>Valor</th><th></th></tr></thead><tbody>`;
+      const countEmpty = parsedValues.filter(p => p.empty).length;
+      const countErrors = parsedValues.filter(p => p.error).length;
+      const countToApply = parsedValues.filter(p => p.value !== null && !p.error).length;
+
+      // Resumen ejecutivo arriba (lo que el maestro DEBE ver primero)
+      let summary = `<div style="padding:10px 12px;background:#ebf8ff;border-left:4px solid #3182ce;margin-bottom:8px;font-size:13px;border-radius:4px;">
+        <strong style="color:#2b6cb0;">Resumen:</strong> Se aplicar\u00e1n <strong>${countToApply}</strong> valor(es) de ${rubro?.label || field}.`;
+      if (countEmpty > 0) summary += ` <span style="color:#718096;"><strong>${countEmpty}</strong> alumno(s) quedar\u00e1n <em>sin cambio</em> (l\u00ednea vac\u00eda en su posici\u00f3n).</span>`;
+      if (countErrors > 0) summary += ` <span style="color:#c53030;"><strong>${countErrors}</strong> con error: no se aplicar\u00e1n.</span>`;
+      summary += '</div>';
+
+      // Tabla de detalle
+      let previewHtml = `<table><thead><tr><th>#</th><th style="text-align:left;">Alumno</th><th>Valor</th><th></th></tr></thead><tbody>`;
       for (let i = 0; i < Math.min(parsedValues.length, students.length); i++) {
         const pv = parsedValues[i];
         const s = students[i];
-        const cls = pv.error ? 'val-error' : 'val-ok';
+        let cls, displayVal, hint;
+        if (pv.empty) {
+          cls = 'val-empty';
+          displayVal = '<em style="color:#a0aec0;">\u2014 sin cambio \u2014</em>';
+          hint = '';
+        } else if (pv.error) {
+          cls = 'val-error';
+          displayVal = pv.raw;
+          hint = pv.error;
+        } else {
+          cls = 'val-ok';
+          displayVal = pv.value;
+          hint = '';
+        }
         previewHtml += `<tr><td>${i+1}</td><td style="text-align:left;">${Utils.sanitize(s.nombreCompleto || '')}</td>
-          <td class="${cls}">${pv.value !== null ? pv.value : pv.raw}</td>
-          <td style="color:#c53030;font-size:11px;">${pv.error || ''}</td></tr>`;
+          <td class="${cls}">${displayVal}</td>
+          <td style="color:#c53030;font-size:11px;">${hint}</td></tr>`;
       }
       previewHtml += '</tbody></table>';
 
+      // Advertencias adicionales
+      let warnings = '';
       if (countExtra > 0) {
-        previewHtml += `<p style="color:#c53030;font-size:12px;padding:6px;font-weight:600;">\u26A0 Hay ${countExtra} valores de m\u00e1s (se ignorar\u00e1n)</p>`;
+        warnings += `<p style="color:#c53030;font-size:12px;padding:6px;font-weight:600;">\u26A0 Hay ${countExtra} valor(es) de m\u00e1s al final de tu pegado. Se ignorar\u00e1n.</p>`;
       } else if (parsedValues.length < students.length) {
-        previewHtml += `<p style="color:#d69e2e;font-size:12px;padding:6px;font-weight:600;">\u26A0 Solo ${parsedValues.length} valores para ${students.length} alumnos (los dem\u00e1s quedan vac\u00edos)</p>`;
+        warnings += `<p style="color:#d69e2e;font-size:12px;padding:6px;font-weight:600;">\u26A0 Solo pegaste ${parsedValues.length} l\u00ednea(s) para ${students.length} alumnos. Los \u00faltimos ${students.length - parsedValues.length} alumno(s) NO se tocan.</p>`;
       }
 
-      const hasErrors = parsedValues.some(p => p.error);
-      pastePreview.innerHTML = `<div class="paste-preview">${previewHtml}</div>`;
-      pasteApply.disabled = parsedValues.length === 0;
+      const hasErrors = countErrors > 0;
+      pastePreview.innerHTML = `<div class="paste-preview">${summary}${previewHtml}${warnings}</div>`;
+      pasteApply.disabled = countToApply === 0;
       if (hasErrors) {
-        pasteApply.textContent = 'Aplicar valores (con advertencias)';
+        pasteApply.textContent = `Aplicar ${countToApply} valor(es) v\u00e1lidos`;
         pasteApply.style.background = '#dd6b20';
       } else {
-        pasteApply.textContent = 'Aplicar valores';
+        pasteApply.textContent = countToApply > 0 ? `Aplicar ${countToApply} valor(es)` : 'Aplicar valores';
         pasteApply.style.background = '';
       }
     });
