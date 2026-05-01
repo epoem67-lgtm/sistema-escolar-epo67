@@ -257,11 +257,11 @@ const BoletaOficialModule = (function () {
 
             <div style="text-align:center;margin-top:28px;font-family:Times,serif;">
               <div style="font-size:11px;font-weight:700;">ATENTAMENTE</div>
-              <div style="margin-top:30px;font-size:11px;font-weight:700;">MTRO. OCTAVIO V&Aacute;ZQUEZ BARRETO</div>
+              <div style="margin-top:30px;font-size:11px;font-weight:700;">${Utils.sanitize(App.staffName('director'))}</div>
+              <div style="font-size:9px;margin-top:2px;font-weight:600;">${Utils.sanitize(App.staffCargo('director'))}</div>
               <div style="font-size:8px;margin-top:2px;">
-                "Encargado del Despacho de la Direcci&oacute;n Escolar de la Escuela Preparatoria Oficial N&uacute;m. 67, con CCT 15EBH0134D,<br>
-                del municipio de Cuautitl&aacute;n Izcalli, de acuerdo con el Oficio N&uacute;m. 22802001000000L/7618/2025,<br>
-                firmado por el Director General de Educaci&oacute;n Media Superior".
+                ESCUELA PREPARATORIA OFICIAL N&Uacute;M. 67, con CCT 15EBH0134D,<br>
+                del municipio de Cuautitl&aacute;n Izcalli, Estado de M&eacute;xico.
               </div>
             </div>
           </div>`;

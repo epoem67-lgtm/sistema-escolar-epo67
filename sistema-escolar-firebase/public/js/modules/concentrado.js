@@ -630,15 +630,15 @@ html, body { margin:0; padding:0; height:100%; }
                     </td>
                     <td>
                         <div class="SG-tt">VO. BO. SUBDIRECCIÓN ESCOLAR</div>
-                        <div class="SG-nm">PROFR. OCTAVIO VÁZQUEZ BARRETO</div>
+                        <div class="SG-nm">${Utils.sanitize(App.staffName('subdirector'))}</div>
                     </td>
                     <td>
                         <div class="SG-tt">SECRETARÍA ESCOLAR</div>
-                        <div class="SG-nm">PROFR. ROBERTO PALOMARES MEJÍA</div>
+                        <div class="SG-nm">${Utils.sanitize(App.staffName('secretario'))}</div>
                     </td>
                     <td>
                         <div class="SG-tt">DIRECCIÓN ESCOLAR</div>
-                        <div class="SG-nm"></div>
+                        <div class="SG-nm">${Utils.sanitize(App.staffName('director'))}</div>
                     </td>
                 </tr>
             </table>

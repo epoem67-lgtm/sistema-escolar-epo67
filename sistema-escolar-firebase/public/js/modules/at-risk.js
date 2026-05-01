@@ -56,7 +56,7 @@ const AtRiskModule = (() => {
   // ─── ADMIN VIEW ───
   async function renderAdmin(container) {
     try {
-      if (!App.currentUser || !['admin', 'orientador'].includes(App.currentUser.role)) {
+      if (!App.currentUser || !(App.currentUser.role === 'admin' || App.canActAs('orientador'))) {
         container.innerHTML = `<div class="module-container"><div class="error-state"><span class="material-icons-round">block</span><p>Acceso denegado</p></div></div>`;
         return;
       }
@@ -78,7 +78,8 @@ const AtRiskModule = (() => {
       allAtRiskStudents = sortByRiskLevel(allAtRiskRaw);
 
       const turnos = [...new Set(allAtRiskStudents.map(s => s.turno))].sort();
-      const grados = [...new Set(allAtRiskStudents.map(s => s.grado))].sort((a, b) => a - b);
+      // Dedup robusto coercionando a Number — protege contra grado mixto (string + integer)
+      const grados = [...new Set(allAtRiskStudents.map(s => Number(s.grado)))].filter(g => Number.isFinite(g) && g > 0).sort((a, b) => a - b);
 
       // Stats per risk level
       const countAlto  = allAtRiskStudents.filter(s => s.riskLevel === 'ALTO').length;
@@ -411,7 +412,7 @@ const AtRiskModule = (() => {
   // ─── TEACHER VIEW ───
   async function renderTeacher(container) {
     try {
-      if (!App.currentUser || App.currentUser.role !== 'maestro') {
+      if (!App.currentUser || !App.canActAs('maestro')) {
         container.innerHTML = `<div class="module-container"><div class="error-state"><span class="material-icons-round">block</span><p>Acceso denegado</p></div></div>`;
         return;
       }

@@ -17,9 +17,10 @@ const AttendanceModule = (() => {
     const container = document.getElementById('moduleContainer');
     const role = App.currentUser?.role;
 
+    // orientador_docente: usa vista admin (acceso amplio); puede filtrar a sus grupos.
     if (role === 'maestro') {
       await renderTeacherView(container);
-    } else if (role === 'admin' || role === 'orientador') {
+    } else if (role === 'admin' || App.canActAs('orientador')) {
       await renderAdminView(container);
     } else {
       container.innerHTML = `<div class="module-container"><div class="error-state"><span class="material-icons-round">block</span><p>Acceso denegado</p></div></div>`;

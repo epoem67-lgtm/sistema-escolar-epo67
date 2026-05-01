@@ -18,6 +18,13 @@ auth-users.json
 extracted-grades.json
 *.secret
 *.credentials
+credenciales-docentes-*.csv
+formato-emails-docentes.csv
+migration-report-teacher-users.json
+migration-report-P1.json
+merge-duplicates-report.json
+AUDITORIA_*.xlsx
+REPORTE_*.xlsx
 
 # Temp files
 /tmp/

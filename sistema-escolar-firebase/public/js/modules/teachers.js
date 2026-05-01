@@ -159,7 +159,7 @@ const TeachersModule = (() => {
 
     const message = `
       <p>Está a punto de eliminar al docente:</p>
-      <p><strong>${S(teacher.nombre)}</strong></p>
+      <p><strong>${S(Utils.displayName(teacher.nombre))}</strong></p>
       ${warningMsg}
       <div class="alert alert-danger">Esta acción es irreversible.</div>`;
 
@@ -188,7 +188,6 @@ const TeachersModule = (() => {
     'MORLAN ORTIZ NEFTALI MARGARITA',
     'RANGEL PALACIOS JUANA',
     'SALAZAR ZUNIGA JOSE EDGAR',
-    'VALDES ESCALONA ROSALVA',
     'CEDILLO POLO IVONNE GABRIELA',
     'GARCIA GONZALEZ BEATRIZ ALEJANDRA',
     'MARTINEZ PEREZ LAURITA',
@@ -221,7 +220,7 @@ const TeachersModule = (() => {
           <option value="">-- Sin asignar --</option>
           ${matchingTeachers.map(t => `
             <option value="${S(t.id)}" data-name="${S(t.nombre)}" ${group.orientadorId === t.id ? 'selected' : ''}>
-              ${S(t.nombre)} (${S(t.turno)})
+              ${S(Utils.displayName(t.nombre))} (${S(t.turno)})
             </option>
           `).join('')}
         </select>
@@ -277,7 +276,7 @@ const TeachersModule = (() => {
             ${state.teachers.map(t => `
               <option value="${S(t.id)}" data-name="${S(t.nombre)}"
                 ${isEdit && assignment.teacherId === t.id ? 'selected' : ''}>
-                ${S(t.nombre)} (${S(t.turno)})
+                ${S(Utils.displayName(t.nombre))} (${S(t.turno)})
               </option>
             `).join('')}
           </select>
@@ -381,13 +380,16 @@ const TeachersModule = (() => {
         const teacherEl = document.getElementById('af_teacher');
         const subjectEl = document.getElementById('af_subject');
         const groupEl = document.getElementById('af_group');
-        const grado = gradoSel.value;
+        const gradoRaw = gradoSel.value;
         const turno = turnoSel.value;
 
-        if (!teacherEl.value || !grado || !subjectEl.value || !turno || !groupEl.value) {
+        if (!teacherEl.value || !gradoRaw || !subjectEl.value || !turno || !groupEl.value) {
           Toast.show('Todos los campos son obligatorios', 'error');
           return;
         }
+        // Coerce a Number siempre — el value del select viene como string.
+        const gradoN = Number(gradoRaw);
+        const grado = Number.isFinite(gradoN) && gradoN > 0 ? gradoN : gradoRaw;
 
         const data = {
           teacherId: teacherEl.value,
@@ -431,7 +433,7 @@ const TeachersModule = (() => {
   const deleteAssignment = (assignment) => {
     const message = `
       <p>Está a punto de eliminar la asignación:</p>
-      <p><strong>${S(assignment.teacherName)}</strong> &rarr; ${S(assignment.subjectName)} (${S(assignment.groupName)})</p>
+      <p><strong>${S(Utils.displayName(assignment.teacherName))}</strong> &rarr; ${S(assignment.subjectName)} (${S(assignment.groupName)})</p>
       <div class="alert alert-danger">Esta acción es irreversible.</div>`;
 
     Modal.confirmTyped('Eliminar Asignación', message, 'ELIMINAR', async () => {
@@ -533,7 +535,7 @@ const TeachersModule = (() => {
               <tbody>
                 ${filtered.map(t => `
                   <tr>
-                    <td><strong>${S(t.nombre) || 'N/A'}</strong></td>
+                    <td><strong>${S(Utils.displayName(t.nombre)) || 'N/A'}</strong></td>
                     <td>${turnoBadge(t.turno)}</td>
                     <td>${S(t.especialidad) || '-'}</td>
                     <td><span class="badge badge-success">${S(t.status) || 'N/A'}</span></td>
@@ -665,7 +667,7 @@ const TeachersModule = (() => {
                 const teachers = assigned[t];
                 return teachers.map(tc =>
                   `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-                    <span class="font-semibold" style="font-size:12px;">${S(tc.teacherName)}</span>
+                    <span class="font-semibold" style="font-size:12px;">${S(Utils.displayName(tc.teacherName))}</span>
                     <span class="badge ${t === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino'}" style="font-size:10px;">${S(t).substring(0,3)}</span>
                     <span class="text-muted" style="font-size:11px;">${S(tc.groupName)}</span>
                   </div>`
@@ -724,10 +726,16 @@ const TeachersModule = (() => {
               </select>
             </div>
           </div>
-          <button class="btn btn-success" data-action="print-carga-masiva" title="Imprime la carga academica completa de ambos turnos">
-            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>
-            Imprimir Carga Acad&eacute;mica (Ambos Turnos)
-          </button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-primary" data-action="excel-carga-masiva" title="Descargar carga academica como Excel">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">download</span>
+              Descargar Excel
+            </button>
+            <button class="btn btn-success" data-action="print-carga-masiva" title="Imprime la carga academica completa de ambos turnos">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>
+              Imprimir
+            </button>
+          </div>
         </div>
       </div>`;
 
@@ -787,9 +795,11 @@ const TeachersModule = (() => {
         const key = sub.id + '_' + grp.id;
         const asg = asgMap[key];
         if (asg) {
-          // Assigned — show teacher name, clickeable to change
-          const shortName = (asg.teacherName || '').split(' ').slice(0, 2).join(' ');
-          return `<td style="text-align:center;cursor:pointer;padding:6px 4px;" data-action="assign-cell" data-subject-id="${sub.id}" data-subject-name="${S(sub.nombre)}" data-group-id="${grp.id}" data-group-name="${S(grp.nombre)}" data-grado="${grado}" data-turno="${turno}" data-asg-id="${asg.id}" title="Clic para cambiar: ${S(asg.teacherName)}">
+          // Assigned — show teacher name, clickeable to change.
+          // Display "Nombre Apellido1" (más reconocible que solo apellidos).
+          const shortName = Utils.shortName(asg.teacherName || '');
+          const fullDisplay = Utils.displayName(asg.teacherName || '');
+          return `<td style="text-align:center;cursor:pointer;padding:6px 4px;" data-action="assign-cell" data-subject-id="${sub.id}" data-subject-name="${S(sub.nombre)}" data-group-id="${grp.id}" data-group-name="${S(grp.nombre)}" data-grado="${grado}" data-turno="${turno}" data-asg-id="${asg.id}" title="Clic para cambiar: ${S(fullDisplay)}">
             <span style="font-size:11px;font-weight:600;color:var(--color-primary);">${S(shortName)}</span>
           </td>`;
         } else {
@@ -825,7 +835,7 @@ const TeachersModule = (() => {
         <select id="carga-teacher-select" style="font-size:11px;width:130px;padding:2px;">
           <option value="">-- Elegir --</option>
           <option value="__remove__" style="color:var(--color-danger);">Quitar asignaci\u00f3n</option>
-          ${availableTeachers.map(t => `<option value="${t.id}" data-name="${S(t.nombre)}">${S(t.nombre)}</option>`).join('')}
+          ${availableTeachers.map(t => `<option value="${t.id}" data-name="${S(t.nombre)}">${S(Utils.displayName(t.nombre))}</option>`).join('')}
         </select>
       </div>`;
 
@@ -838,7 +848,12 @@ const TeachersModule = (() => {
     const subjectName = cell.dataset.subjectName;
     const groupId = cell.dataset.groupId;
     const groupName = cell.dataset.groupName;
-    const grado = cell.dataset.grado;
+    // dataset siempre devuelve string — convertir grado a Number para que las
+    // assignments siempre tengan el tipo correcto (evita el bug de "dos terceros"
+    // en dropdowns que dedupean por valor).
+    const gradoRaw = cell.dataset.grado;
+    const gradoNum = Number(gradoRaw);
+    const grado = Number.isFinite(gradoNum) && gradoNum > 0 ? gradoNum : gradoRaw;
     const turno = cell.dataset.turno;
     const existingAsgId = cell.dataset.asgId;
 
@@ -917,6 +932,139 @@ const TeachersModule = (() => {
   };
 
 
+  // ── Descarga Excel de Carga Academica (ambos turnos, por grado) ──
+  // Genera un .xlsx real (no HTML→.xls) usando XlsxWorker. Estructura:
+  // 8 hojas — 6 matrices (turno × grado) con materia en filas y grupos en
+  // columnas, + 2 hojas consolidadas (una por turno) con todas las clases
+  // listadas como filas.
+
+  const downloadCargaExcel = async () => {
+    if (!state.groups.length || !state.subjects.length) {
+      Toast.show('Espera a que carguen los datos', 'warning');
+      return;
+    }
+    Toast.show('Generando Excel…', 'info');
+
+    const asgMap = {};
+    state.assignments.forEach(a => { asgMap[a.subjectId + '_' + a.groupId] = a; });
+
+    const today = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+    const sheets = [];
+
+    // 6 HOJAS POR (TURNO × GRADO) — matriz materia × grupos
+    for (const turno of K.TURNOS) {
+      for (const grado of K.GRADOS) {
+        const gruposGrado = state.groups
+          .filter(g => g.turno === turno && Number(g.grado) === Number(grado))
+          .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+        if (gruposGrado.length === 0) continue;
+
+        const subjectsGrado = state.subjects.filter(s => Number(s.grado) === Number(grado));
+        const subjectsOrdered = K.sortSubjectsByGrado(subjectsGrado, grado);
+        if (subjectsOrdered.length === 0) continue;
+
+        const aoa = [];
+        // Fila título (mergeada)
+        aoa.push([`EPO 67 — CARGA ACADÉMICA — TURNO ${turno} — ${grado}° GRADO`]);
+        aoa.push([`Ciclo Escolar 2025-2026 · Generado el ${today}`]);
+        aoa.push([]); // fila vacía
+        // Header
+        const headerRow = ['MATERIA', ...gruposGrado.map(g => `Grupo ${g.nombre}`)];
+        aoa.push(headerRow);
+        // Filas de datos
+        for (const sub of subjectsOrdered) {
+          const row = [K.getUACNombre(sub.nombre)];
+          for (const grp of gruposGrado) {
+            const asg = asgMap[sub.id + '_' + grp.id];
+            row.push(asg ? Utils.displayName(asg.teacherName) : 'SIN ASIGNAR');
+          }
+          aoa.push(row);
+        }
+        // Resumen al final
+        const totalCells = gruposGrado.length * subjectsOrdered.length;
+        const asignadas = subjectsOrdered.reduce((acc, sub) =>
+          acc + gruposGrado.filter(g => asgMap[sub.id + '_' + g.id]).length, 0);
+        aoa.push([]);
+        aoa.push([`Total: ${asignadas}/${totalCells} asignaciones (${Math.round(asignadas/totalCells*100)}%)`]);
+
+        const ncols = headerRow.length;
+        sheets.push({
+          name: `${turno.slice(0,3)} ${grado}°`,  // ej. "MAT 1°", "VES 2°"
+          aoa,
+          cols: [{ wch: 38 }, ...gruposGrado.map(() => ({ wch: 28 }))],
+          merges: [
+            { s: { r: 0, c: 0 }, e: { r: 0, c: ncols - 1 } }, // título
+            { s: { r: 1, c: 0 }, e: { r: 1, c: ncols - 1 } }, // subtítulo
+          ],
+          rows: [{ hpx: 28 }, { hpx: 18 }],
+        });
+      }
+    }
+
+    // 2 HOJAS CONSOLIDADAS — una por turno con todas las clases listadas
+    for (const turno of K.TURNOS) {
+      const gruposTurno = state.groups.filter(g => g.turno === turno);
+      if (gruposTurno.length === 0) continue;
+
+      const aoa = [];
+      aoa.push([`EPO 67 — CARGA ACADÉMICA CONSOLIDADA — TURNO ${turno}`]);
+      aoa.push([`Ciclo Escolar 2025-2026 · Generado el ${today}`]);
+      aoa.push([]);
+      aoa.push(['Grado', 'Grupo', 'Materia', 'Docente', 'Estatus']);
+
+      // Ordenar: grado asc, grupo asc, materia
+      const ordered = [...gruposTurno].sort((a, b) =>
+        (Number(a.grado) - Number(b.grado)) || (a.nombre || '').localeCompare(b.nombre || ''));
+
+      for (const grp of ordered) {
+        const subjectsGrado = state.subjects.filter(s => Number(s.grado) === Number(grp.grado));
+        const subjectsOrdered = K.sortSubjectsByGrado(subjectsGrado, grp.grado);
+        for (const sub of subjectsOrdered) {
+          const asg = asgMap[sub.id + '_' + grp.id];
+          aoa.push([
+            grp.grado + '°',
+            grp.nombre || grp.id,
+            K.getUACNombre(sub.nombre),
+            asg ? Utils.displayName(asg.teacherName) : '',
+            asg ? 'Asignada' : 'VACANTE',
+          ]);
+        }
+      }
+
+      sheets.push({
+        name: `Consolidado ${turno.slice(0,3)}`,
+        aoa,
+        cols: [{ wch: 8 }, { wch: 10 }, { wch: 38 }, { wch: 36 }, { wch: 12 }],
+        merges: [
+          { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+          { s: { r: 1, c: 0 }, e: { r: 1, c: 4 } },
+        ],
+      });
+    }
+
+    if (sheets.length === 0) {
+      Toast.show('No hay datos para exportar', 'warning');
+      return;
+    }
+
+    try {
+      const buf = await XlsxWorker.serialize({ sheets });
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const datestr = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `carga-academica-EPO67-${datestr}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 100);
+      Toast.show(`Excel descargado (${sheets.length} hojas)`, 'success');
+    } catch (e) {
+      console.error('Error generando Excel:', e);
+      Toast.show('Error al generar Excel: ' + e.message, 'error');
+    }
+  };
+
   // ── Impresion masiva de Carga Academica (ambos turnos) ────────
 
   const printCargaMasiva = () => {
@@ -963,7 +1111,8 @@ const TeachersModule = (() => {
         for (const grp of gruposGrado) {
           const rows = subjectsOrdered.map(sub => {
             const asg = asgMap[sub.id + '_' + grp.id];
-            const maestro = asg ? asg.teacherName : '';
+            // Mostrar nombre primero ("CLAUDIA TORRES MORENO") en lugar de "TORRES MORENO CLAUDIA"
+            const maestro = asg ? Utils.displayName(asg.teacherName) : '';
             const rowClass = asg ? '' : ' class="vacante"';
             const maestroCell = asg ? S(maestro) : '<em>SIN ASIGNAR</em>';
             return `<tr${rowClass}>
@@ -1117,6 +1266,10 @@ const TeachersModule = (() => {
         }
         case 'print-carga-masiva': {
           printCargaMasiva();
+          break;
+        }
+        case 'excel-carga-masiva': {
+          downloadCargaExcel();
           break;
         }
       }

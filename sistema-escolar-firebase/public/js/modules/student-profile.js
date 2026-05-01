@@ -44,7 +44,8 @@ const StudentProfileModule = (() => {
         _students = _students.filter(s => oriSet.has(s.groupId));
       }
 
-      // Maestro: filter to groups they're assigned to
+      // Solo maestro puro: limita estrictamente a sus grupos asignados.
+      // El orientador_docente ya tuvo el filtro amplio de orientador arriba.
       if (role === 'maestro') {
         const teacherDocId = await Store.getTeacherDocId();
         if (teacherDocId) {

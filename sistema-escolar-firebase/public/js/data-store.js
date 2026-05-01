@@ -273,7 +273,7 @@ const Store = (() => {
       const role = App.currentUser?.role;
       if (role === 'admin') return null; // admin sees everything
 
-      if (role !== 'orientador') return []; // other roles get empty (no access)
+      if (!App.canActAs('orientador')) return []; // other roles get empty
 
       return get('orientadorGroups', async () => {
         const teacherDocId = await Store.getTeacherDocId();
@@ -302,7 +302,7 @@ const Store = (() => {
     async getStudentsForOrientador(force) {
       const role = App.currentUser?.role;
       if (role === 'admin') return this.getStudents(force);
-      if (role !== 'orientador') return [];
+      if (!App.canActAs('orientador')) return [];
 
       const teacherDocId = await Store.getTeacherDocId();
       const cacheKey = 'students_ori_' + (teacherDocId || 'none');

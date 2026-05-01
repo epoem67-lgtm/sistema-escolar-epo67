@@ -190,7 +190,9 @@ const GradesModule = (function () {
         return;
       }
       const filtered = _capAssignments.filter(a => a.turno === turno);
-      const grados = [...new Set(filtered.map(a => a.grado).filter(Boolean))].sort((a, b) => a - b);
+      // Coerce a Number antes de Set para que un dato sucio mixto (string "3" + integer 3)
+      // no produzca dos opciones "3" en el dropdown.
+      const grados = [...new Set(filtered.map(a => Number(a.grado)).filter(g => Number.isFinite(g) && g > 0))].sort((a, b) => a - b);
       gradoEl.innerHTML = '<option value="">Selecciona grado</option>' +
         grados.map(g => `<option value="${g}">${g}° Grado</option>`).join('');
       gradoEl.disabled = false;
@@ -269,7 +271,7 @@ const GradesModule = (function () {
             <div class="text-muted" style="margin-top:4px;">
               <span class="badge ${turnoClass}" style="margin-right:4px;">${Utils.sanitize(asg.turno || '')}</span>
               <span class="badge">Grupo ${Utils.sanitize(asg.groupName || asg.groupId)}</span>
-              <span class="badge" style="background:rgba(0,0,0,0.06);margin-left:4px;">${Utils.sanitize(asg.teacherName || '')}</span>
+              <span class="badge" style="background:rgba(0,0,0,0.06);margin-left:4px;">${Utils.sanitize(Utils.displayName(asg.teacherName || ''))}</span>
             </div>
           </div>
           <button class="btn btn-primary" data-action="open-editor" data-assignment-id="${asg.id}" data-group-id="${asg.groupId}" data-subject-id="${asg.subjectId}">
@@ -1557,7 +1559,7 @@ html, body { margin:0; padding:0; height:100%; }
 <table class="nfo">
     <tr>
         <td style="width:10%"><span class="lb">Profesor(a):</span></td>
-        <td style="width:35%" class="vl">${Utils.sanitize(teacherName)}</td>
+        <td style="width:35%" class="vl">${Utils.sanitize(Utils.displayName(teacherName))}</td>
         <td style="width:10%"><span class="lb">Grado:</span> <span class="vl">${grado}°</span></td>
         <td style="width:10%"><span class="lb">Grupo:</span> <span class="vl">${groupNum}</span></td>
         <td style="width:20%" class="sm" rowspan="2">${semText}<br><span style="font-size:5.5pt;color:#333;">${Utils.sanitize(turno)}</span></td>
@@ -1632,7 +1634,7 @@ html, body { margin:0; padding:0; height:100%; }
                 <tr class="sg-text-row">
                     <td>
                         <div class="SG-tt">FIRMA DEL PROFESOR</div>
-                        <div class="SG-nm">${Utils.sanitize(teacherName)}</div>
+                        <div class="SG-nm">${Utils.sanitize(Utils.displayName(teacherName))}</div>
                     </td>
                     <td>
                         <div class="SG-tt">FIRMA DEL ORIENTADOR</div>
@@ -1640,11 +1642,11 @@ html, body { margin:0; padding:0; height:100%; }
                     </td>
                     <td>
                         <div class="SG-tt">VO. BO. SUBDIRECCIÓN ESCOLAR</div>
-                        <div class="SG-nm">PROFR. OCTAVIO VÁZQUEZ BARRETO</div>
+                        <div class="SG-nm">${Utils.sanitize(App.staffName('subdirector'))}</div>
                     </td>
                     <td>
                         <div class="SG-tt">REVISADO POR SECRETARÍA ESCOLAR</div>
-                        <div class="SG-nm">PROFR. ROBERTO PALOMARES MEJÍA</div>
+                        <div class="SG-nm">${Utils.sanitize(App.staffName('secretario'))}</div>
                     </td>
                 </tr>
             </table>
@@ -1800,7 +1802,7 @@ html, body { margin:0; padding:0; height:100%; }
 
   async function renderAdmin() {
     const role = App.currentUser?.role;
-    if (role !== 'admin' && role !== 'orientador' && role !== 'maestro') {
+    if (role !== 'admin' && !App.canActAs('orientador') && !App.canActAs('maestro')) {
       _container().innerHTML = UI.moduleContainer(UI.emptyState('block', 'Acceso denegado'));
       return;
     }
@@ -1824,8 +1826,8 @@ html, body { margin:0; padding:0; height:100%; }
       _admin.turno = ''; _admin.grado = ''; _admin.grupo = '';
       _admin.parcial = ''; _admin.materia = ''; _admin.docente = '';
 
-      // For maestros: auto-filter to their assigned groups/subjects
-      if (role === 'maestro') {
+      // For maestros (incluyendo orientador_docente): auto-filter a sus grupos/materias
+      if (App.canActAs('maestro')) {
         _admin._teacherDocId = await Store.getTeacherDocId();
         if (_admin._teacherDocId) {
           _admin._teacherAssignments = a.filter(asg => asg.teacherId === _admin._teacherDocId);
@@ -1847,7 +1849,7 @@ html, body { margin:0; padding:0; height:100%; }
   function _renderAdminUI() {
     const container = _container();
     const role = App.currentUser?.role;
-    const isMaestro = role === 'maestro';
+    const isMaestro = App.canActAs('maestro') && role !== 'admin';
     const subtitle = isMaestro
       ? 'Consulta de calificaciones de tus grupos y materias asignadas'
       : 'Consulta de calificaciones por grupo (solo lectura)';
@@ -1917,14 +1919,16 @@ html, body { margin:0; padding:0; height:100%; }
 
   function _updateGradoOptions() {
     const el = _el('gf-grado');
+    // Dedup robusto: coerce a Number primero para no producir "dos terceros"
+    // si hay datos mixtos (string "3" + integer 3) en la base.
     let grados = _admin.turno
-      ? [...new Set(_admin.allStudents.filter(s => s.turno === _admin.turno).map(s => s.grado))].filter(Boolean).sort((a,b) => a-b)
+      ? [...new Set(_admin.allStudents.filter(s => s.turno === _admin.turno).map(s => Number(s.grado)))].filter(g => Number.isFinite(g) && g > 0).sort((a,b) => a-b)
       : [...K.GRADOS];
     // For maestros: only show grados where they have assignments
     if (_admin._teacherAssignments) {
       const teacherGroupIds = new Set(_admin._teacherAssignments.map(a => a.groupId));
-      const teacherGrados = new Set(_admin.allGroups.filter(g => teacherGroupIds.has(g.id)).map(g => String(g.grado)));
-      grados = grados.filter(g => teacherGrados.has(String(g)));
+      const teacherGrados = new Set(_admin.allGroups.filter(g => teacherGroupIds.has(g.id)).map(g => Number(g.grado)));
+      grados = grados.filter(g => teacherGrados.has(Number(g)));
     }
     el.innerHTML = '<option value="">Seleccionar...</option>' + grados.map(g => `<option value="${g}">${g}° Grado</option>`).join('');
   }
@@ -1991,7 +1995,7 @@ html, body { margin:0; padding:0; height:100%; }
     const tIds = [...new Set(filtered.map(a => a.teacherId))];
     const teachers = _admin.allTeachers.filter(t => tIds.includes(t.id));
     teachers.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
-    el.innerHTML = '<option value="">Todos los docentes</option>' + teachers.map(t => `<option value="${t.id}">${Utils.sanitize(t.nombre || t.id)}</option>`).join('');
+    el.innerHTML = '<option value="">Todos los docentes</option>' + teachers.map(t => `<option value="${t.id}">${Utils.sanitize(Utils.displayName(t.nombre || t.id))}</option>`).join('');
   }
 
   async function _updateTable() {

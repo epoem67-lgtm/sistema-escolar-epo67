@@ -238,13 +238,16 @@ const EnrollmentModule = (() => {
       const groupDoc = await db.collection('groups').doc(groupId).get();
       const groupData = groupDoc.data();
 
+      // Coerce grado a Number siempre — evita el bug de "dos terceros" en dropdowns
+      // cuando un grupo trae el campo como string.
+      const gradoNum = Number(groupData.grado);
       const studentData = {
         nombres, apellido1, apellido2,
         nombreCompleto: `${apellido1} ${apellido2} ${nombres}`.trim(),
         sexo,
         grupo: groupData.nombre,
         groupId,
-        grado: groupData.grado,
+        grado: Number.isFinite(gradoNum) ? gradoNum : groupData.grado,
         turno: groupData.turno,
         expediente, folio, curp,
         tutorNombre, direccionContacto, telefonoContacto,
@@ -300,9 +303,11 @@ const EnrollmentModule = (() => {
       try {
         const groupDoc = await db.collection('groups').doc(newGroupId).get();
         const groupData = groupDoc.data();
+        const gradoNum = Number(groupData.grado);
         await db.collection('students').doc(studentId).update({
           grupo: groupData.nombre, groupId: newGroupId,
-          grado: groupData.grado, turno: groupData.turno
+          grado: Number.isFinite(gradoNum) ? gradoNum : groupData.grado,
+          turno: groupData.turno
         });
         Modal.close();
         Toast.show('Grupo actualizado correctamente', 'success');

@@ -653,11 +653,11 @@ table.main tr { min-height:30px; }
 <div class="sigs"><table>
   <tr>
     <td><div class="line">ORIENTADOR(A)</div><div class="nm">${Utils.sanitize(orientador)}</div></td>
-    <td><div class="line">VO. BO. SUBDIRECCION ESCOLAR</div><div class="nm">PROFR. OCTAVIO VAZQUEZ BARRETO</div></td>
+    <td><div class="line">VO. BO. SUBDIRECCION ESCOLAR</div><div class="nm">${Utils.sanitize(App.staffName('subdirector'))}</div></td>
   </tr>
   <tr>
-    <td><div class="line">SECRETARIA ESCOLAR</div><div class="nm">PROFR. ROBERTO PALOMARES MEJIA</div></td>
-    <td><div class="line">DIRECCION ESCOLAR</div><div class="nm"></div></td>
+    <td><div class="line">SECRETARIA ESCOLAR</div><div class="nm">${Utils.sanitize(App.staffName('secretario'))}</div></td>
+    <td><div class="line">DIRECCION ESCOLAR</div><div class="nm">${Utils.sanitize(App.staffName('director'))}</div></td>
   </tr>
 </table></div>
 
@@ -847,9 +847,9 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
 </table>
 
 <div class="sigs"><table><tr>
-  <td><div class="line">VO. BO. SUBDIRECCION ESCOLAR</div><div class="nm">PROFR. OCTAVIO VAZQUEZ BARRETO</div></td>
-  <td><div class="line">SECRETARIA ESCOLAR</div><div class="nm">PROFR. ROBERTO PALOMARES MEJIA</div></td>
-  <td><div class="line">DIRECCION ESCOLAR</div><div class="nm"></div></td>
+  <td><div class="line">VO. BO. SUBDIRECCION ESCOLAR</div><div class="nm">${Utils.sanitize(App.staffName('subdirector'))}</div></td>
+  <td><div class="line">SECRETARIA ESCOLAR</div><div class="nm">${Utils.sanitize(App.staffName('secretario'))}</div></td>
+  <td><div class="line">DIRECCION ESCOLAR</div><div class="nm">${Utils.sanitize(App.staffName('director'))}</div></td>
 </tr></table></div>
 
 <div class="ftr">

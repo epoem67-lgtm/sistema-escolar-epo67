@@ -43,6 +43,7 @@ Modifican datos. Diseñados para ser seguros si se re-ejecutan.
 | `migrate-from-drive.js` | Importó 73 hojas de Google Drive al arranque inicial |
 | `migrate-grades.js` | Bulk upload de calificaciones extraídas |
 | `migrate-p1.js` | Migración específica de Parcial 1 al inicio del ciclo |
+| `create-teacher-users.js` | Genera cuentas Firebase Auth + docs `users/{uid}` con `role='maestro'` y `teacherId` para todos los docentes activos. Idempotente. Soporta `--dry-run` y `--only=<teacherId>`. Produce CSV con credenciales temporales (`credenciales-docentes-FECHA.csv`, chmod 600, en `.gitignore`). |
 
 ## Convenciones para nuevos scripts
 

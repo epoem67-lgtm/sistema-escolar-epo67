@@ -88,13 +88,48 @@ const App = {
       el.style.display = 'none';
     });
 
-    // Mostrar elementos que coinciden con el rol actual
-    const visibleElements = document.querySelectorAll(`[data-roles*="${role}"]`);
-    visibleElements.forEach(el => {
-      el.style.display = '';
-    });
+    // Roles efectivos = el rol propio + roles heredados (ver K.ROLE_INHERITS)
+    const inherited = (K.ROLE_INHERITS && K.ROLE_INHERITS[role]) || [];
+    const effectiveRoles = [role, ...inherited];
 
-    console.log(`👤 Visibilidad aplicada para rol: ${role}`);
+    for (const r of effectiveRoles) {
+      const visibleElements = document.querySelectorAll(`[data-roles*="${r}"]`);
+      visibleElements.forEach(el => { el.style.display = ''; });
+    }
+
+    console.log(`👤 Visibilidad aplicada para rol: ${role} (efectivos: ${effectiveRoles.join(',')})`);
+  },
+
+  /**
+   * ¿El usuario actual puede actuar como targetRole? Considera el rol propio y
+   * los roles heredados via K.ROLE_INHERITS. Útil para verificaciones en módulos
+   * que antes hacían `App.currentUser.role === 'maestro'`.
+   */
+  canActAs(targetRole) {
+    const role = this.currentUser?.role;
+    if (!role) return false;
+    if (role === targetRole) return true;
+    const inherited = (K.ROLE_INHERITS && K.ROLE_INHERITS[role]) || [];
+    return inherited.includes(targetRole);
+  },
+
+  /**
+   * Devuelve el nombre completo formateado del personal directivo según
+   * su rol ('director', 'subdirector', 'secretario'). Lee de
+   * `App.schoolConfig.staff[role]` que tiene { titulo, nombre, cargo }.
+   * Retorna string como "DRA. KARINA LAGUERENNE CHIQUETE" o '' si no existe.
+   * Las plantillas de boletas, concentrados y correcciones llaman aquí
+   * en lugar de hardcodear nombres.
+   */
+  staffName(role) {
+    const s = this.schoolConfig?.staff?.[role];
+    if (!s || !s.nombre) return '';
+    return ((s.titulo || '') + ' ' + s.nombre).trim();
+  },
+
+  /** Cargo oficial del personal directivo (DIRECTORA ESCOLAR, etc.). */
+  staffCargo(role) {
+    return this.schoolConfig?.staff?.[role]?.cargo || '';
   },
 
   /**
@@ -684,6 +719,54 @@ const Utils = {
     if (value >= 8) return 'grade-excellent';
     if (value >= 6) return 'grade-good';
     return 'grade-poor';
+  },
+
+  /**
+   * Parsea un nombre mexicano "APELLIDO1 [APELLIDO2] NOMBRES" en sus partes,
+   * reconociendo conectores (DE, DEL, LA, LAS, LOS, Y) que agrupan el siguiente
+   * token con el anterior como apellido compuesto, y abreviaciones (MA., JOSE,
+   * etc.) que terminan con punto y se interpretan como nombre.
+   */
+  _parseName(fullName) {
+    const CONNECTORS = new Set(['DE', 'DEL', 'LA', 'LAS', 'LOS', 'Y']);
+    const t = (fullName || '').trim().split(/\s+/).filter(Boolean);
+    if (t.length === 0) return { apellidos: [], nombres: [] };
+    if (t.length === 1) return { apellidos: [], nombres: [t[0]] };
+    if (t.length === 2) return { apellidos: [t[0]], nombres: [t[1]] };
+
+    // Toma 1 apellido a partir del índice i. Si el siguiente token es conector
+    // y hay otro después, agrupa los 3. Si el token actual termina en "." se
+    // interpreta como abreviación de nombre — no es apellido.
+    const take = (i) => {
+      if (i >= t.length) return ['', i];
+      if (t[i].endsWith('.')) return ['', i]; // abreviación → es nombre
+      if (i + 2 < t.length && CONNECTORS.has(t[i + 1].toUpperCase())) {
+        return [`${t[i]} ${t[i + 1]} ${t[i + 2]}`, i + 3];
+      }
+      return [t[i], i + 1];
+    };
+
+    const [a1, i1] = take(0);
+    const [a2, i2] = take(i1);
+    return {
+      apellidos: [a1, a2].filter(Boolean),
+      nombres: t.slice(i2).filter(Boolean),
+    };
+  },
+
+  /** "Nombre Apellido1" — versión corta para celdas estrechas. */
+  shortName(fullName) {
+    const { apellidos, nombres } = this._parseName(fullName);
+    const apCorto = apellidos[0] ? apellidos[0].split(/\s+/)[0] : '';
+    if (nombres.length === 0) return apCorto;
+    if (!apCorto) return nombres[0];
+    return `${nombres[0]} ${apCorto}`;
+  },
+
+  /** "NOMBRES APELLIDO1 APELLIDO2" — versión completa. */
+  displayName(fullName) {
+    const { apellidos, nombres } = this._parseName(fullName);
+    return [...nombres, ...apellidos].join(' ');
   },
 
   /**

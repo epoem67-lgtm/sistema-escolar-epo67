@@ -321,7 +321,7 @@ const CapturaProgressModule = (function () {
 
       return `<tr ${clickable ? `data-action="open-capture" data-assignment-id="${p.assignmentId}" data-group-id="${p.groupId}" data-subject-id="${p.subjectId}" style="cursor:pointer;" title="Clic para abrir editor"` : ''}>
         <td>${i + 1}</td>
-        <td class="font-semibold">${Utils.sanitize(p.teacherName)}${clickable ? ' <span class="material-icons-round" style="font-size:14px;vertical-align:middle;color:var(--color-primary);opacity:0.6;">open_in_new</span>' : ''}</td>
+        <td class="font-semibold">${Utils.sanitize(Utils.displayName(p.teacherName))}${clickable ? ' <span class="material-icons-round" style="font-size:14px;vertical-align:middle;color:var(--color-primary);opacity:0.6;">open_in_new</span>' : ''}</td>
         <td>${Utils.sanitize(p.groupName)}</td>
         <td style="font-size:12px;">${Utils.sanitize(p.subjectName)}</td>
         <td style="text-align:center;">${p.totalStudents}</td>
@@ -357,7 +357,7 @@ const CapturaProgressModule = (function () {
     let rows = pending.map((p, i) => `
       <tr>
         <td>${i + 1}</td>
-        <td>${Utils.sanitize(p.teacherName)}</td>
+        <td>${Utils.sanitize(Utils.displayName(p.teacherName))}</td>
         <td>${Utils.sanitize(p.groupName)}</td>
         <td>${Utils.sanitize(p.subjectName)}</td>
         <td style="text-align:center;">${p.gradedCount}/${p.totalStudents}</td>
@@ -404,7 +404,7 @@ const CapturaProgressModule = (function () {
       const t = sorted[i];
       rows += `<tr style="height:28px;">
         <td style="text-align:center;">${i + 1}</td>
-        <td style="font-weight:${t ? '600' : '400'};">${t ? Utils.sanitize(t.nombre || '') : ''}</td>
+        <td style="font-weight:${t ? '600' : '400'};">${t ? Utils.sanitize(Utils.displayName(t.nombre || '')) : ''}</td>
         <td>${t ? Utils.sanitize(t.email || '') : ''}</td>
         <td></td>
         <td>${t ? Utils.sanitize(t.turno || '') : ''}</td>

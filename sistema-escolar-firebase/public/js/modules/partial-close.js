@@ -134,7 +134,7 @@ const PartialCloseModule = (() => {
               return `
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
                 <div>
-                  <span style="font-weight:600;font-size:11px;">${Utils.sanitize(o.teacherName)}</span>
+                  <span style="font-weight:600;font-size:11px;">${Utils.sanitize(Utils.displayName(o.teacherName))}</span>
                   ${expInfo}
                 </div>
                 <button class="btn btn-sm" style="color:#dc2626;padding:2px 6px;font-size:11px;" data-action="remove-override" data-override-id="${o.id}">&times;</button>

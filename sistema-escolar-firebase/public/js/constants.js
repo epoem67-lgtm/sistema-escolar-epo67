@@ -19,12 +19,20 @@ const K = Object.freeze({
 
   // ─── Roles del sistema ─────────────────────────────────────
   ROLES: Object.freeze([
-    { id: 'admin',      label: 'Administrador', color: '#9333ea' },
-    { id: 'maestro',    label: 'Docente',       color: '#3b82f6' },
-    { id: 'orientador', label: 'Orientador',    color: '#10b981' },
-    { id: 'directivo',  label: 'Directivo',     color: '#f59e0b' },
-    { id: 'consulta',   label: 'Consulta',      color: '#6b7280' }
+    { id: 'admin',              label: 'Administrador',     color: '#9333ea' },
+    { id: 'maestro',            label: 'Docente',           color: '#3b82f6' },
+    { id: 'orientador',         label: 'Orientador',        color: '#10b981' },
+    { id: 'orientador_docente', label: 'Orientador-Docente', color: '#0ea5e9' },
+    { id: 'directivo',          label: 'Directivo',         color: '#f59e0b' },
+    { id: 'consulta',           label: 'Consulta',          color: '#6b7280' }
   ]),
+
+  // Mapa de herencia de permisos. Si role === 'orientador_docente', se trata
+  // efectivamente como si tuviera 3 roles para fines de visibilidad de UI.
+  // Las reglas de Firestore replican esta semántica.
+  ROLE_INHERITS: Object.freeze({
+    orientador_docente: ['orientador', 'maestro'],
+  }),
 
   // ─── Mapeo de sexo ─────────────────────────────────────────
   SEX_MAP: Object.freeze({ M: 'Mujer', H: 'Hombre' }),
