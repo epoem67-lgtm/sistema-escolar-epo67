@@ -1326,6 +1326,20 @@ textarea {
   animation: shake-gentle 0.3s ease-in-out;
 }
 
+/* ─── Paste Ctrl+V feedback (nuevo flujo Excel-native) ─── */
+.ge-input.paste-applied {
+  border: 2px solid #3182ce !important;
+  background: #ebf8ff !important;
+  box-shadow: 0 0 0 2px rgba(49,130,206,0.2);
+  transition: background 0.3s ease, border 0.3s ease;
+}
+.ge-input.paste-invalid {
+  border: 2px solid #e53e3e !important;
+  background: #fed7d7 !important;
+  box-shadow: 0 0 0 2px rgba(229,62,62,0.2);
+  animation: shake-gentle 0.4s ease-in-out;
+}
+
 @keyframes shake-gentle {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-2px); }

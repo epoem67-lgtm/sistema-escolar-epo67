@@ -776,15 +776,12 @@ const GradesModule = (function () {
           <div class="form-group"><label>Parcial:</label><div class="btn-group">${partialsHtml}</div></div>
         </div>
 
-        <!-- ═══ INPUT MODE SELECTOR + UNDO ═══ -->
-        <div class="input-mode-bar">
-          <span class="mode-label">Modo de captura:</span>
-          <button class="mode-btn active" data-mode="manual">
-            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:3px;">edit</span>Dato por dato
-          </button>
-          <button class="mode-btn" data-mode="paste">
-            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:3px;">content_paste</span>Pegar columna desde Excel
-          </button>
+        <!-- ═══ TIP + UNDO BAR (sin modos, sin paneles confusos) ═══ -->
+        <div class="input-mode-bar" style="background:#ebf8ff;border:1px solid #bee3f8;border-radius:8px;flex-wrap:wrap;">
+          <span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#2b6cb0;font-weight:500;">
+            <span class="material-icons-round" style="font-size:20px;color:#3182ce;">lightbulb</span>
+            <span><strong>Tip:</strong> escribe directo en cada celda, o pega con <kbd style="padding:2px 6px;background:#fff;border:1px solid #cbd5e0;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;">Ctrl + V</kbd> desde tu Excel — los valores llenan hacia abajo desde donde haces clic</span>
+          </span>
           <div style="margin-left:auto;">
             <button class="btn btn-outline btn-sm" id="undo-btn" disabled title="Nada que deshacer" style="position:relative;">
               <span class="material-icons-round" style="font-size:18px;vertical-align:middle;">undo</span>
@@ -794,29 +791,6 @@ const GradesModule = (function () {
           </div>
         </div>
 
-        <!-- ═══ PASTE PANEL (hidden by default) ═══ -->
-        <div id="paste-panel" class="card" style="display:none;border:2px solid #3182ce;background:#f0f7ff;">
-          <h3 style="font-size:0.95rem;font-weight:700;color:#2b6cb0;margin-bottom:8px;">
-            <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">content_paste</span>
-            Pegar columna completa desde Excel
-          </h3>
-          <p style="font-size:0.85rem;color:#4a5568;margin-bottom:10px;">
-            Copia una columna completa de tu Excel (solo los valores, sin encabezado) y p\u00e9gala en el cuadro de abajo.
-            Los valores se asignar\u00e1n en orden a cada alumno.
-          </p>
-          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-            <label style="font-weight:600;font-size:13px;">Columna destino:</label>
-            <select id="paste-target-field" style="padding:6px 12px;border:2px solid #3182ce;border-radius:6px;font-weight:600;font-size:13px;">
-              ${pasteFieldOptions}
-            </select>
-          </div>
-          <textarea id="paste-area" class="paste-area" placeholder="Pega aqu\u00ed los valores copiados de Excel (uno por l\u00ednea)...\n\nEjemplo:\n7.5\n8\n6.2\n9\n..."></textarea>
-          <div id="paste-preview"></div>
-          <div style="display:flex;gap:8px;margin-top:10px;">
-            <button class="btn btn-primary" id="paste-apply-btn" disabled>Aplicar valores</button>
-            <button class="btn btn-outline" id="paste-clear-btn">Limpiar</button>
-          </div>
-        </div>
 
         <div class="table-container" style="overflow-x:auto;max-height:65vh;">
           <table class="grade-editor-table" style="min-width:750px;">
@@ -1064,163 +1038,120 @@ const GradesModule = (function () {
     });
   }
 
-  // ─── PASTE FROM EXCEL ───
+  // ─── PASTE NATIVO TIPO EXCEL ───
+  // El maestro hace clic en cualquier celda de la tabla y Ctrl+V.
+  // Si pegó una columna: llena hacia abajo desde esa celda.
+  // Si pegó un bloque (varias columnas): llena el bloque a partir de la celda.
+  // Celdas vacías en el clipboard NO sobrescriben los valores existentes.
+  // Valores fuera de rango se marcan en rojo y NO se aplican.
   function _bindInputModes(container) {
-    const modeBtns = container.querySelectorAll('.mode-btn');
-    const pastePanel = document.getElementById('paste-panel');
-    const pasteArea = document.getElementById('paste-area');
-    const pastePreview = document.getElementById('paste-preview');
-    const pasteApply = document.getElementById('paste-apply-btn');
-    const pasteClear = document.getElementById('paste-clear-btn');
-    const pasteFieldSelect = document.getElementById('paste-target-field');
+    const tableContainer = container.querySelector('.grade-editor-table');
+    if (!tableContainer) return;
 
-    let parsedValues = [];
-
-    modeBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        modeBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        _inputMode = btn.dataset.mode;
-        pastePanel.style.display = _inputMode === 'paste' ? '' : 'none';
-      });
-    });
-
-    // Parse pasted data
-    pasteArea.addEventListener('input', () => {
-      const raw = pasteArea.value.trim();
-      if (!raw) {
-        pastePreview.innerHTML = '';
-        pasteApply.disabled = true;
-        parsedValues = [];
-        return;
-      }
-
-      const field = pasteFieldSelect.value;
-      const rubro = K.getRubros(currentTurno).find(r => r.key === field);
-      const maxVal = rubro ? rubro.max : (field === 'faltas' ? 99 : 10);
-      const isInt = field === 'faltas';
-
-      // FIX BUG: preservar l\u00edneas vac\u00edas en MEDIO del paste. Antes se eliminaban
-      // con .filter() y el alumno #3 con valor 1 se aplicaba al alumno #1.
-      // Ahora una l\u00ednea vac\u00eda se marca como "sin cambio" y NO altera al alumno.
-      // Solo se quita whitespace decorativo al inicio y al final del paste.
-      let lines = raw.split(/\r?\n/).map(l => l.trim());
-      while (lines.length > 0 && lines[0] === '') lines.shift();
-      while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-
-      parsedValues = lines.map(line => {
-        // L\u00ednea vac\u00eda = no tocar la celda del alumno (preserva su valor actual).
-        if (line === '') return { raw: '', value: null, empty: true, error: null };
-        // Clean: remove commas used as decimal separator in some locales
-        const cleaned = line.replace(',', '.').replace(/[^0-9.]/g, '');
-        const num = isInt ? parseInt(cleaned) : parseFloat(cleaned);
-        if (isNaN(num)) return { raw: line, value: null, error: 'No es n\u00famero' };
-        if (num < 0) return { raw: line, value: num, error: 'Negativo' };
-        if (num > maxVal) return { raw: line, value: num, error: 'Excede m\u00e1x ' + maxVal };
-        return { raw: line, value: isInt ? Math.round(num) : Math.round(num * 10) / 10, error: null };
-      });
-
-      // Conteos para el preview con etiquetas claras
-      const countExtra = parsedValues.length - students.length;
-      const countEmpty = parsedValues.filter(p => p.empty).length;
-      const countErrors = parsedValues.filter(p => p.error).length;
-      const countToApply = parsedValues.filter(p => p.value !== null && !p.error).length;
-
-      // Resumen ejecutivo arriba (lo que el maestro DEBE ver primero)
-      let summary = `<div style="padding:10px 12px;background:#ebf8ff;border-left:4px solid #3182ce;margin-bottom:8px;font-size:13px;border-radius:4px;">
-        <strong style="color:#2b6cb0;">Resumen:</strong> Se aplicar\u00e1n <strong>${countToApply}</strong> valor(es) de ${rubro?.label || field}.`;
-      if (countEmpty > 0) summary += ` <span style="color:#718096;"><strong>${countEmpty}</strong> alumno(s) quedar\u00e1n <em>sin cambio</em> (l\u00ednea vac\u00eda en su posici\u00f3n).</span>`;
-      if (countErrors > 0) summary += ` <span style="color:#c53030;"><strong>${countErrors}</strong> con error: no se aplicar\u00e1n.</span>`;
-      summary += '</div>';
-
-      // Tabla de detalle
-      let previewHtml = `<table><thead><tr><th>#</th><th style="text-align:left;">Alumno</th><th>Valor</th><th></th></tr></thead><tbody>`;
-      for (let i = 0; i < Math.min(parsedValues.length, students.length); i++) {
-        const pv = parsedValues[i];
-        const s = students[i];
-        let cls, displayVal, hint;
-        if (pv.empty) {
-          cls = 'val-empty';
-          displayVal = '<em style="color:#a0aec0;">\u2014 sin cambio \u2014</em>';
-          hint = '';
-        } else if (pv.error) {
-          cls = 'val-error';
-          displayVal = pv.raw;
-          hint = pv.error;
-        } else {
-          cls = 'val-ok';
-          displayVal = pv.value;
-          hint = '';
-        }
-        previewHtml += `<tr><td>${i+1}</td><td style="text-align:left;">${Utils.sanitize(s.nombreCompleto || '')}</td>
-          <td class="${cls}">${displayVal}</td>
-          <td style="color:#c53030;font-size:11px;">${hint}</td></tr>`;
-      }
-      previewHtml += '</tbody></table>';
-
-      // Advertencias adicionales
-      let warnings = '';
-      if (countExtra > 0) {
-        warnings += `<p style="color:#c53030;font-size:12px;padding:6px;font-weight:600;">\u26A0 Hay ${countExtra} valor(es) de m\u00e1s al final de tu pegado. Se ignorar\u00e1n.</p>`;
-      } else if (parsedValues.length < students.length) {
-        warnings += `<p style="color:#d69e2e;font-size:12px;padding:6px;font-weight:600;">\u26A0 Solo pegaste ${parsedValues.length} l\u00ednea(s) para ${students.length} alumnos. Los \u00faltimos ${students.length - parsedValues.length} alumno(s) NO se tocan.</p>`;
-      }
-
-      const hasErrors = countErrors > 0;
-      pastePreview.innerHTML = `<div class="paste-preview">${summary}${previewHtml}${warnings}</div>`;
-      pasteApply.disabled = countToApply === 0;
-      if (hasErrors) {
-        pasteApply.textContent = `Aplicar ${countToApply} valor(es) v\u00e1lidos`;
-        pasteApply.style.background = '#dd6b20';
-      } else {
-        pasteApply.textContent = countToApply > 0 ? `Aplicar ${countToApply} valor(es)` : 'Aplicar valores';
-        pasteApply.style.background = '';
-      }
-    });
-
-    pasteFieldSelect.addEventListener('change', () => {
-      // Re-parse with new field limits
-      if (pasteArea.value.trim()) pasteArea.dispatchEvent(new Event('input'));
-    });
-
-    pasteApply.addEventListener('click', () => {
-      const field = pasteFieldSelect.value;
-      const fieldLabel = K.getRubros(currentTurno).find(r => r.key === field)?.label || 'FALTAS';
-      // Snapshot before paste
-      _pushUndo('Pegar columna: ' + fieldLabel);
-
-      const rows = document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]');
-      let applied = 0;
-
-      rows.forEach((row, i) => {
-        if (i >= parsedValues.length) return;
-        const pv = parsedValues[i];
-        if (pv.value === null) return;
-        const input = row.querySelector(`input[data-field="${field}"]`);
-        if (input) {
-          input.value = pv.value;
-          applied++;
-          // Trigger recalc if it's a rubro
-          if (input.classList.contains('grade-rubro')) _recalcRow(input);
-        }
-      });
-
-      Toast.show(`${applied} valores aplicados a ${fieldLabel}`, 'success');
-      pasteArea.value = '';
-      pastePreview.innerHTML = '';
-      pasteApply.disabled = true;
-      parsedValues = [];
-      _updateStats();
-      _markDirty();
-    });
-
-    pasteClear.addEventListener('click', () => {
-      pasteArea.value = '';
-      pastePreview.innerHTML = '';
-      pasteApply.disabled = true;
-      parsedValues = [];
-    });
+    tableContainer.addEventListener('paste', _handleTablePaste);
   }
+
+  function _handleTablePaste(e) {
+    const targetInput = e.target.closest('input.ge-input');
+    if (!targetInput) return;
+
+    const clipboardText = (e.clipboardData || window.clipboardData)?.getData('text');
+    if (!clipboardText) return;
+
+    // Parsear: filas separadas por \n, columnas por \t
+    let rows = clipboardText.split(/\r?\n/);
+    // Quitar filas vacías SOLO al inicio y al final (preservar vacías en medio)
+    while (rows.length > 0 && rows[0].trim() === '') rows.shift();
+    while (rows.length > 0 && rows[rows.length - 1].trim() === '') rows.pop();
+    if (rows.length === 0) return;
+
+    // Si es UN solo valor sin tabs, dejar el paste nativo del input
+    if (rows.length === 1 && !rows[0].includes('\t')) return;
+
+    // Multi-valor: tomamos control del paste y distribuimos
+    e.preventDefault();
+
+    // Localizar fila/columna inicial
+    const startRow = targetInput.closest('tr[data-student-id]');
+    if (!startRow) return;
+    const allRows = [...document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]')];
+    const startRowIdx = allRows.indexOf(startRow);
+    if (startRowIdx === -1) return;
+
+    // Orden de columnas editables (campos): rubros + faltas, en orden visual
+    const fieldOrder = [...startRow.querySelectorAll('input.ge-input')].map(i => i.dataset.field);
+    const startFieldIdx = fieldOrder.indexOf(targetInput.dataset.field);
+    if (startFieldIdx === -1) return;
+
+    // Snapshot para Deshacer
+    _pushUndo('Pegar (' + rows.length + ' fila' + (rows.length === 1 ? '' : 's') + ')');
+
+    let appliedCount = 0;
+    let invalidCount = 0;
+    let emptyCount = 0;
+    const changedInputs = [];
+    const invalidInputs = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const targetRowIdx = startRowIdx + i;
+      if (targetRowIdx >= allRows.length) break;
+      const targetRow = allRows[targetRowIdx];
+
+      // Una fila del clipboard puede tener múltiples columnas separadas por \t
+      const cells = rows[i].split('\t');
+
+      for (let j = 0; j < cells.length; j++) {
+        const targetFieldIdx = startFieldIdx + j;
+        if (targetFieldIdx >= fieldOrder.length) break;
+        const targetField = fieldOrder[targetFieldIdx];
+        const cellInput = targetRow.querySelector(`input.ge-input[data-field="${targetField}"]`);
+        if (!cellInput) continue;
+
+        const cellRaw = cells[j].trim();
+
+        // CELDA VACÍA: preservar valor existente del alumno (NO sobrescribir)
+        if (cellRaw === '') { emptyCount++; continue; }
+
+        // Limpiar y parsear (acepta coma decimal)
+        const cleaned = cellRaw.replace(',', '.').replace(/[^0-9.\-]/g, '');
+        const isInt = cellInput.classList.contains('grade-faltas');
+        const num = isInt ? parseInt(cleaned, 10) : parseFloat(cleaned);
+        const max = Number(cellInput.max) || (isInt ? 99 : 10);
+
+        // Inválido: marcar rojo, NO aplicar
+        if (isNaN(num) || num < 0 || num > max) {
+          cellInput.classList.add('paste-invalid');
+          invalidInputs.push(cellInput);
+          invalidCount++;
+          continue;
+        }
+
+        // Aplicar: redondear a 1 decimal (rubros) o entero (faltas)
+        const finalVal = isInt ? Math.round(num) : Math.round(num * 10) / 10;
+        cellInput.value = finalVal;
+        cellInput.classList.add('paste-applied');
+        changedInputs.push(cellInput);
+        if (cellInput.classList.contains('grade-rubro')) _recalcRow(cellInput);
+        appliedCount++;
+      }
+    }
+
+    _markDirty();
+    _updateStats();
+
+    // Quitar highlight tras 5 segundos
+    setTimeout(() => {
+      changedInputs.forEach(i => i.classList.remove('paste-applied'));
+      invalidInputs.forEach(i => i.classList.remove('paste-invalid'));
+    }, 5000);
+
+    // Toast informativo
+    let msg = `✅ ${appliedCount} valor${appliedCount === 1 ? '' : 'es'} aplicado${appliedCount === 1 ? '' : 's'}`;
+    if (emptyCount > 0) msg += ` · ${emptyCount} sin cambio`;
+    if (invalidCount > 0) msg += ` · ${invalidCount} en rojo (fuera de rango)`;
+    Toast.show(msg, invalidCount > 0 ? 'warning' : 'success');
+  }
+
 
   // ─── HORAS IMPARTIDAS ───
   async function _loadHoras() {
