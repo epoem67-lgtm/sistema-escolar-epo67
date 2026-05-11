@@ -3,8 +3,8 @@
  *
  * Genera boletas de calificaciones con formato oficial:
  * - Encabezado del Estado de México
- * - 2 modos: Parcial individual (EC, TR, EP, SUMA, FALTAS, CAL) o
- *            Todos los parciales (P1, P2, P3, FINAL)
+ * - 2 modos: Parcial individual (Evaluación Continua, Transversal, Examen Parcial,
+ *            Suma, Faltas, Calificación) o Todos los parciales (P1, P2, P3, FINAL)
  * - Líneas de firma: Orientador, Director, Firma de Enterado
  * - Formato carta (letter) optimizado para impresión
  */
@@ -29,7 +29,7 @@ const BoletasModule = (() => {
 
     container.innerHTML = `
       <div class="module-container">
-        ${UI.pageHeader('Pre Boletas de Calificaciones', 'Genera pre boletas individuales o por grupo con formato oficial')}
+        ${UI.pageHeader('Preboletas de Calificaciones', 'Genera preboletas individuales o por grupo con formato oficial (no oficiales hasta cierre)')}
 
         <div class="card filter-bar">
           <div class="filter-bar-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
@@ -69,7 +69,7 @@ const BoletasModule = (() => {
               <input type="date" id="bol-fecha" value="${new Date().toISOString().split('T')[0]}">
             </div>
             <div class="form-group" style="display:flex;align-items:flex-end;">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;margin-bottom:8px;" title="Oculta las columnas de EC, Transversal, Examen y Extras. Solo muestra materia, faltas y calificacion final.">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;margin-bottom:8px;" title="Oculta las columnas de Evaluación Continua, Transversal, Examen Parcial y Punto Extra. Solo muestra materia, faltas y calificación final.">
                 <input type="checkbox" id="bol-sin-desglose" style="width:16px;height:16px;">
                 Sin desglose (solo calificaci&oacute;n y faltas)
               </label>
@@ -99,6 +99,7 @@ const BoletasModule = (() => {
 
     await loadData();
     bindEvents(container);
+    Utils.restrictTurnoGradoOptions(groups, 'bol-turno', 'bol-grado');
   }
 
   async function loadData() {
@@ -233,7 +234,7 @@ const BoletasModule = (() => {
       }
 
       // Fetch grades for this group via Store cache
-      const groupGrades = await Store.getGradesByGroup(groupId, true);
+      const groupGrades = await Store.getGradesByGroup(groupId);
       const gradesMap = {};
       for (const g of groupGrades) {
         if (!gradesMap[g.studentId]) gradesMap[g.studentId] = {};
@@ -528,20 +529,32 @@ const BoletasModule = (() => {
       </div>` : `
       <table style="width:100%;margin-top:30px;border-collapse:collapse;">
         <tr>
-          <td style="width:33%;text-align:center;padding-top:30px;border-bottom:1px solid #333;">&nbsp;</td>
-          <td style="width:5%;">&nbsp;</td>
-          <td style="width:28%;text-align:center;padding-top:30px;border-bottom:1px solid #333;">&nbsp;</td>
-          <td style="width:5%;">&nbsp;</td>
-          <td style="width:29%;text-align:center;padding-top:30px;border-bottom:1px solid #333;">&nbsp;</td>
+          <td style="width:23%;text-align:center;padding-top:30px;border-bottom:1px solid #333;">&nbsp;</td>
+          <td style="width:3%;">&nbsp;</td>
+          <td style="width:23%;text-align:center;padding-top:30px;border-bottom:1px solid #333;">&nbsp;</td>
+          <td style="width:3%;">&nbsp;</td>
+          <td style="width:23%;text-align:center;padding-top:30px;border-bottom:1px solid #333;">&nbsp;</td>
+          <td style="width:3%;">&nbsp;</td>
+          <td style="width:22%;text-align:center;padding-top:30px;border-bottom:1px solid #333;">&nbsp;</td>
         </tr>
         <tr>
           <td style="text-align:center;font-size:9px;padding-top:4px;font-weight:600;">ORIENTADOR(A)</td>
           <td>&nbsp;</td>
-          <td style="text-align:center;font-size:9px;padding-top:4px;font-weight:600;">DIRECTOR</td>
+          <td style="text-align:center;font-size:9px;padding-top:4px;font-weight:600;">VO. BO. SUBDIRECCIÓN</td>
+          <td>&nbsp;</td>
+          <td style="text-align:center;font-size:9px;padding-top:4px;font-weight:600;">DIRECCIÓN ESCOLAR</td>
           <td>&nbsp;</td>
           <td style="text-align:center;font-size:9px;padding-top:4px;font-weight:600;">FIRMA DE ENTERADO</td>
         </tr>
-        ${meta.orientador ? `<tr><td style="text-align:center;font-size:9px;color:#555;">${Utils.sanitize(meta.orientador)}</td><td></td><td></td><td></td><td></td></tr>` : ''}
+        <tr>
+          <td style="text-align:center;font-size:9px;color:#555;">${Utils.sanitize(meta.orientador || '')}</td>
+          <td></td>
+          <td style="text-align:center;font-size:9px;color:#555;">${Utils.sanitize(App.staffName('subdirector'))}</td>
+          <td></td>
+          <td style="text-align:center;font-size:9px;color:#555;">${Utils.sanitize(App.staffName('director'))}</td>
+          <td></td>
+          <td></td>
+        </tr>
       </table>`;
 
     const pageBreak = isLast ? '' : ' style="page-break-after:always;"';
@@ -639,11 +652,20 @@ const BoletasModule = (() => {
     }
 
     const printWindow = window.open('', '_blank');
+    const _printGroupInfo = groups.find(g => g.id === document.getElementById('bol-grupo')?.value);
+    const _printOrient = _printGroupInfo ? K.getOrientador(_printGroupInfo.turno, _printGroupInfo.nombre) : '';
+    const _printTitle = Utils.fileName({
+      tipo: 'BOLETAS',
+      turno: _printGroupInfo?.turno,
+      grupo: _printGroupInfo?.nombre,
+      maestro: _printOrient,
+      parcial: document.getElementById('bol-parcial')?.value || 'TODOS'
+    });
     printWindow.document.write(`<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Boletas EPO 67</title>
+  <title>${Utils.sanitize(_printTitle)}</title>
   <style>
     @page { size: letter portrait; margin: 10mm 12mm 8mm 12mm; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -693,7 +715,7 @@ const BoletasModule = (() => {
       targetStudents = found ? [found] : [];
     }
 
-    Store.getGradesByGroup(groupId, true).then(groupGrades => {
+    Store.getGradesByGroup(groupId).then(groupGrades => {
       const gMap = {};
       for (const g of groupGrades) {
         if (!gMap[g.studentId]) gMap[g.studentId] = {};
@@ -734,7 +756,16 @@ const BoletasModule = (() => {
       });
 
       const groupInfo = groups.find(g => g.id === groupId);
-      Utils.exportToExcel(data, `Boletas_${groupInfo?.nombre || groupId}_${parcialMode}.xlsx`);
+      const orient = groupInfo ? K.getOrientador(groupInfo.turno, groupInfo.nombre) : '';
+      const filename = Utils.fileName({
+        tipo: 'BOLETAS',
+        turno: groupInfo?.turno,
+        grupo: groupInfo?.nombre || groupId,
+        maestro: orient,
+        parcial: parcialMode === 'todos' ? 'TODOS' : parcialMode,
+        ext: 'xlsx'
+      });
+      Utils.exportToExcel(data, filename);
     }).catch(err => {
       console.error('Error exportando:', err);
       Toast.show('Error al exportar', 'error');
@@ -818,7 +849,7 @@ const BoletasModule = (() => {
         const groupSubjects = K.sortSubjectsByGrado(subjects.filter(s => subjectIds.includes(s.id)), groupInfo.grado || grado);
 
         // Get grades
-        const groupGrades = await Store.getGradesByGroup(groupId, true);
+        const groupGrades = await Store.getGradesByGroup(groupId);
         const gradesMap = {};
         for (const g of groupGrades) {
           if (!gradesMap[g.studentId]) gradesMap[g.studentId] = {};

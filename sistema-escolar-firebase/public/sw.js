@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'v5.11-paste';
+const SW_VERSION = 'v6.12-nombres-nunca-cortados';
 const STATIC_CACHE = `epo67-static-${SW_VERSION}`;
 
 // Recursos a precachear durante la instalacion (la app shell minima)
@@ -26,6 +26,16 @@ const PRECACHE_URLS = [
   '/',
   '/index.html',
 ];
+
+// ─── MESSAGE: SKIP_WAITING desde la pagina ────────────────────
+// La pagina pide al SW nuevo que se active sin esperar a que se cierren
+// las pestanias viejas. Pareado con clientsClaim() en activate, el cliente
+// recibe controllerchange y se auto-recarga.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
 
 // ─── INSTALL ──────────────────────────────────────────────────
 self.addEventListener('install', (event) => {

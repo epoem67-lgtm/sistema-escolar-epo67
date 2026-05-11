@@ -187,8 +187,14 @@ body {
   height: 100%;
   background: linear-gradient(135deg, #1a1f2e 0%, #4c1d95 100%);
   display: flex;
-  align-items: center;
+  /* No usar align-items: center — al combinarse con overflow-y:auto, cuando el
+     card supera la altura del viewport, el centrado empuja el contenido fuera y
+     no es scrolleable. Usar margin:auto en el card centra cuando hay espacio y
+     permite scroll cuando no lo hay (es el problema que dejaba sin botón
+     "Guardar y entrar" a los maestros en la pantalla de primer ingreso). */
   justify-content: center;
+  overflow-y: auto;
+  padding: 24px 16px;
   z-index: 2000;
 }
 
@@ -199,6 +205,7 @@ body {
   padding: var(--spacing-2xl);
   width: 100%;
   max-width: 420px;
+  margin: auto;
   animation: slideIn var(--transition-base) ease;
 }
 
@@ -962,6 +969,43 @@ textarea {
   margin-bottom: 12px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
+.ge-assignment-nav-header {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 460px);
+  gap: 12px;
+  align-items: end;
+}
+.ge-assignment-nav-header h3 {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 2px;
+}
+.ge-assignment-nav-header p {
+  color: var(--color-text-light);
+  font-size: var(--font-size-sm);
+}
+.ge-assignment-nav-header select {
+  width: 100%;
+  min-height: 42px;
+  font-weight: var(--font-weight-semibold);
+}
+.ge-status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ge-status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  padding: 4px 10px;
+}
+.ge-status-complete { background: #c6f6d5; color: #22543d; }
+.ge-status-partial { background: #fefcbf; color: #744210; }
+.ge-status-empty { background: #edf2f7; color: #4a5568; }
 .ge-tabs-scroll {
   display: flex;
   gap: 6px;
@@ -1035,6 +1079,17 @@ textarea {
 .ge-nav-prev:disabled, .ge-nav-next:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.btn-danger-soft {
+  border-color: #feb2b2 !important;
+  color: #c53030 !important;
+  background: #fff5f5 !important;
+}
+
+.btn-danger-soft:hover {
+  border-color: #e53e3e !important;
+  background: #fed7d7 !important;
 }
 
 /* ─── Grade Editor Table — high contrast ─── */
@@ -1162,6 +1217,37 @@ textarea {
   background: #fff5f5;
 }
 
+/* ─── Highlight de fila activa ─────────────────────────────────────────────
+   Cuando el maestro está escribiendo en algún input de un alumno, toda la
+   fila se ilumina con amarillo "marcador" intenso para que sea imposible
+   perderse de cuál alumno está capturando. `focus-within` aplica mientras
+   cualquier descendiente tiene focus, sin JS. */
+.grade-editor-table tbody tr[data-student-id]:focus-within {
+  background: #fde047 !important;
+  box-shadow: inset 0 0 0 3px #b45309, 0 0 0 2px rgba(180, 83, 9, 0.35);
+  position: relative;
+  z-index: 1;
+}
+.grade-editor-table tbody tr[data-student-id]:focus-within td,
+.grade-editor-table tbody tr[data-student-id]:focus-within td.cell-num,
+.grade-editor-table tbody tr[data-student-id]:focus-within td.cell-name,
+.grade-editor-table tbody tr[data-student-id]:focus-within td.cell-rubro,
+.grade-editor-table tbody tr[data-student-id]:focus-within td.cell-suma,
+.grade-editor-table tbody tr[data-student-id]:focus-within td.cell-cal {
+  background: #fde047 !important;
+}
+/* La columna del nombre del alumno en la fila activa: la dejo con un toque
+   más oscuro para que el nombre sobresalga aún más */
+.grade-editor-table tbody tr[data-student-id]:focus-within td.cell-name {
+  background: #facc15 !important;
+  color: #422006;
+  font-weight: 700;
+}
+/* Si la fila es reprobada y está siendo editada, el highlight gana al rojo */
+.grade-editor-table tbody tr.row-reprobado[data-student-id]:focus-within {
+  background: #fde047 !important;
+}
+
 .grade-editor-table tbody td.cell-faltas {
   text-align: center;
   padding: 2px;
@@ -1200,6 +1286,80 @@ textarea {
 .grade-editor-table .ge-input.input-faltas:not(:placeholder-shown) {
   background: #fffaf0;
   border-color: #dd6b20;
+}
+
+.horas-card {
+  margin-top: 16px;
+  border-left: 4px solid var(--color-primary);
+}
+
+.horas-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.horas-card-header h3 {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+}
+
+.horas-card-header span {
+  color: #b7791f;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.horas-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.horas-month label,
+.horas-total-box label {
+  display: block;
+  color: var(--color-text-body);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.horas-input {
+  width: 100% !important;
+  min-height: 44px;
+  border-color: #3182ce !important;
+  background: #f7fbff !important;
+  color: #1a202c !important;
+  font-size: 18px !important;
+  font-weight: 800 !important;
+}
+
+.horas-input:not(:placeholder-shown),
+.horas-input.has-value {
+  background: #ebf8ff !important;
+  border-color: #2b6cb0 !important;
+  box-shadow: inset 0 0 0 1px rgba(49,130,206,0.25);
+}
+
+.horas-total-box {
+  padding: 8px 12px;
+  border: 1px solid #bee3f8;
+  border-radius: var(--radius-md);
+  background: #ebf8ff;
+  text-align: center;
+}
+
+.horas-total-box #horas-total {
+  color: #2b6cb0;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.1;
 }
 
 /* Paste mode column highlight */
@@ -1324,6 +1484,133 @@ textarea {
   border: 2px solid #e53e3e !important;
   background: #fff5f5 !important;
   animation: shake-gentle 0.3s ease-in-out;
+}
+
+/* ─── Horas requeridas: highlight cuando el maestro intenta guardar sin capturarlas ─── */
+.horas-required {
+  border: 3px solid #dd6b20 !important;
+  background: #fffaf0 !important;
+  box-shadow: 0 0 0 4px rgba(221,107,32,0.15);
+  animation: horas-pulse 1s ease-in-out 2;
+}
+@keyframes horas-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(221,107,32,0.15); }
+  50%      { box-shadow: 0 0 0 8px rgba(221,107,32,0.35); }
+}
+
+.horas-reminder {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: var(--color-text-body);
+}
+
+.horas-reminder-icon {
+  color: #dd6b20;
+  font-size: 32px;
+}
+
+.horas-reminder-title {
+  color: var(--color-text-dark);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  margin-bottom: 6px;
+}
+
+.horas-reminder-hint {
+  color: var(--color-text-light);
+  font-size: var(--font-size-sm);
+  margin-top: 8px;
+}
+
+.bulk-print-panel {
+  margin-top: 16px;
+}
+
+.bulk-print-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.bulk-print-header h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 4px;
+}
+
+.bulk-print-header p {
+  color: var(--color-text-light);
+  font-size: var(--font-size-sm);
+}
+
+.bulk-print-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bulk-print-actions .material-icons-round {
+  font-size: 16px;
+  vertical-align: middle;
+}
+
+.bulk-print-actions select {
+  min-width: 140px;
+}
+
+.bulk-print-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.bulk-print-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
+  cursor: pointer;
+}
+
+.bulk-print-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bulk-print-main span {
+  color: var(--color-text-light);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-print-status {
+  grid-column: 2;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.bulk-print-status--complete {
+  color: var(--color-success);
+}
+
+.bulk-print-status--partial {
+  color: #b7791f;
+}
+
+.bulk-print-status--empty {
+  color: var(--color-text-light);
 }
 
 /* ─── Paste Ctrl+V feedback (nuevo flujo Excel-native) ─── */
@@ -1494,6 +1781,644 @@ textarea {
 
 .typed-confirm-hint--err {
   color: #e53e3e;
+}
+
+.clear-list-confirm {
+  color: #2d3748;
+}
+
+.clear-list-confirm p {
+  margin: 0 0 12px;
+}
+
+.clear-list-confirm dl {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.clear-list-confirm dl div {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 8px 10px;
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.clear-list-confirm dt,
+.clear-list-confirm dd {
+  margin: 0;
+}
+
+.clear-list-confirm dt {
+  color: #718096;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.clear-list-confirm dd {
+  color: #1a202c;
+  font-weight: 700;
+}
+
+.clear-list-confirm ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #4a5568;
+}
+
+.clear-list-confirm li + li {
+  margin-top: 6px;
+}
+
+.clear-list-pending-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: #fffaf0;
+  border: 1px solid #fbd38d;
+  border-left: 4px solid #dd6b20;
+  border-radius: 8px;
+  color: #2d3748;
+}
+
+.clear-list-pending-notice > .material-icons-round {
+  color: #c05621;
+  flex: 0 0 auto;
+}
+
+.clear-list-pending-notice div {
+  flex: 1;
+  min-width: 180px;
+}
+
+.clear-list-pending-notice strong {
+  display: block;
+  font-size: 0.94rem;
+}
+
+.clear-list-pending-notice p {
+  margin: 2px 0 0;
+  color: #744210;
+  font-size: 0.84rem;
+}
+
+.clear-list-pending-notice .btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clear-list-pending-notice .material-icons-round {
+  font-size: 18px;
+}
+
+.failure-reason-modal > p {
+  margin: 0 0 12px;
+  color: #2d3748;
+  font-weight: 600;
+}
+
+.failure-reason-tools {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.failure-reason-tools select,
+.failure-reason-select,
+.failure-reason-detail {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-dark);
+}
+
+.failure-reason-tools select,
+.failure-reason-select {
+  min-height: 40px;
+  padding: 8px 10px;
+  background: var(--color-white);
+}
+
+.failure-reason-list {
+  display: grid;
+  gap: 10px;
+  max-height: 48vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.failure-reason-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 220px);
+  gap: 8px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #fed7d7;
+  border-radius: 8px;
+  background: #fffafa;
+}
+
+.failure-reason-student {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.failure-reason-student strong {
+  color: #1a202c;
+  font-size: 0.92rem;
+}
+
+.failure-reason-student span {
+  color: #c53030;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.failure-reason-detail {
+  min-height: 40px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+#failure-reason-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#failure-reason-save .material-icons-round {
+  font-size: 18px;
+}
+
+/* ============================================================================
+   Concentrado F1 Docente
+   ============================================================================ */
+.f1-filter-grid {
+  grid-template-columns: minmax(260px, 1.5fr) minmax(180px, 0.6fr);
+}
+
+.f1-report {
+  display: grid;
+  gap: 14px;
+}
+
+.f1-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.f1-report-header h2 {
+  color: var(--color-text-dark);
+  font-size: var(--font-size-xl);
+  font-weight: 800;
+  margin: 0 0 4px;
+}
+
+.f1-report-header p {
+  color: var(--color-text-light);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+.f1-hours-box {
+  min-width: 120px;
+  padding: 10px 14px;
+  background: #ebf8ff;
+  border: 1px solid #bee3f8;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.f1-hours-box span {
+  display: block;
+  color: #2b6cb0;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.f1-hours-box strong {
+  display: block;
+  color: #1a365d;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.f1-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.f1-table-wrap {
+  max-height: 66vh;
+  overflow: auto;
+}
+
+.f1-table {
+  min-width: 980px;
+}
+
+.f1-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.f1-table td {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.f1-table td:nth-child(2) {
+  min-width: 240px;
+  text-align: left;
+}
+
+.f1-cal-fail {
+  color: #c53030;
+  font-weight: 900;
+}
+
+.f1-row-extra {
+  background: #fff5f5;
+}
+
+.f1-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 76px;
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+}
+
+.f1-status-ord {
+  background: #c6f6d5;
+  color: #22543d;
+}
+
+.f1-status-extra {
+  background: #fed7d7;
+  color: #9b2c2c;
+}
+
+.f1-status-empty {
+  background: #edf2f7;
+  color: #4a5568;
+}
+
+.f1-meta-grid {
+  display: flex;
+  gap: 14px;
+  margin: 8px 0 16px;
+  flex-wrap: wrap;
+}
+
+.f1-meta-grid > div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 6px 14px;
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 110px;
+}
+
+.f1-meta-grid span {
+  color: #64748b;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.f1-meta-grid strong {
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.f1-table tfoot tr.f1-totales-row {
+  background: #f1f5f9;
+  font-weight: 700;
+}
+
+.f1-table tfoot tr.f1-totales-row td {
+  border-top: 2px solid #cbd5e1;
+}
+
+.f1-table tfoot tr.f1-totales-summary {
+  background: #e0e7ff;
+}
+
+.f1-table tfoot td.f1-totales-label {
+  text-align: left;
+  color: #1e293b;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+.f1-risk-banner {
+  display: flex;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  margin: 12px 0 16px;
+  border: 2px solid;
+  align-items: flex-start;
+}
+
+.f1-risk-banner.f1-risk-danger {
+  background: #fef2f2;
+  border-color: #dc2626;
+  color: #7f1d1d;
+}
+
+.f1-risk-banner.f1-risk-warning {
+  background: #fffbeb;
+  border-color: #d97706;
+  color: #78350f;
+}
+
+.f1-risk-banner.f1-risk-ok {
+  background: #f0fdf4;
+  border-color: #16a34a;
+  color: #14532d;
+  align-items: center;
+  padding: 10px 16px;
+}
+
+.f1-risk-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.f1-risk-banner.f1-risk-danger .f1-risk-icon {
+  background: #dc2626;
+  color: #fff;
+}
+
+.f1-risk-banner.f1-risk-warning .f1-risk-icon {
+  background: #d97706;
+  color: #fff;
+}
+
+.f1-risk-banner.f1-risk-ok .f1-risk-icon {
+  background: #16a34a;
+  color: #fff;
+  width: 30px;
+  height: 30px;
+}
+
+.f1-risk-banner.f1-risk-ok .f1-risk-icon .material-icons-round {
+  font-size: 18px;
+}
+
+.f1-risk-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.f1-risk-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.f1-risk-msg {
+  font-size: 12.5px;
+  line-height: 1.4;
+  opacity: 0.9;
+  margin-bottom: 8px;
+}
+
+.f1-risk-banner.f1-risk-ok .f1-risk-msg {
+  margin-bottom: 0;
+}
+
+.f1-risk-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed currentColor;
+}
+
+.f1-risk-section-title {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.f1-risk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.f1-risk-chip {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.f1-risk-chip strong {
+  font-weight: 700;
+  color: #111;
+}
+
+.f1-risk-chip em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: #555;
+  margin-top: 1px;
+}
+
+.f1-risk-chip-danger {
+  border-color: #dc2626;
+  border-left: 4px solid #dc2626;
+}
+
+.f1-risk-chip-warning {
+  border-color: #d97706;
+  border-left: 4px solid #d97706;
+}
+
+/* ============================================================================
+   Risk Banner (Editor de Calificaciones — solo pantalla)
+   ============================================================================ */
+.risk-banner {
+  display: flex;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  margin: 10px 0 14px;
+  border: 2px solid;
+  align-items: flex-start;
+}
+
+.risk-banner.risk-danger {
+  background: #fef2f2;
+  border-color: #dc2626;
+  color: #7f1d1d;
+}
+
+.risk-banner.risk-warning {
+  background: #fffbeb;
+  border-color: #d97706;
+  color: #78350f;
+}
+
+.risk-banner.risk-info {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  color: #1e3a8a;
+  align-items: center;
+}
+
+.risk-banner-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+
+.risk-banner.risk-danger .risk-banner-icon {
+  background: #dc2626;
+  color: #fff;
+}
+
+.risk-banner.risk-warning .risk-banner-icon {
+  background: #d97706;
+  color: #fff;
+}
+
+.risk-banner.risk-info .material-icons-round {
+  color: #3b82f6;
+  font-size: 26px;
+  flex-shrink: 0;
+}
+
+.risk-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.risk-banner-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.risk-banner-msg {
+  font-size: 13px;
+  line-height: 1.4;
+  opacity: 0.9;
+  margin-bottom: 10px;
+}
+
+.risk-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed currentColor;
+}
+
+.risk-section:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.risk-section-title {
+  font-size: 13px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.risk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.risk-chip {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  font-size: 12px;
+  line-height: 1.3;
+  min-width: 0;
+}
+
+.risk-chip strong {
+  font-weight: 700;
+  color: #111;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.risk-chip em {
+  font-style: normal;
+  font-size: 11px;
+  color: #555;
+  margin-top: 1px;
+}
+
+.risk-chip-danger {
+  border-color: #dc2626;
+  border-left: 4px solid #dc2626;
+}
+
+.risk-chip-warning {
+  border-color: #d97706;
+  border-left: 4px solid #d97706;
+}
+
+@media print {
+  .risk-banner { display: none !important; }
 }
 
 /* ============================================================================
@@ -2405,6 +3330,54 @@ textarea {
 }
 
 /* ============================================================================
+   User-management actions — compact icon-only buttons (avoid row overflow
+   when 5+ actions per row; tooltips via title preserve discoverability)
+   ============================================================================ */
+.users-actions-cell {
+  white-space: nowrap;
+  width: 1%;
+}
+.users-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.user-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+  color: #475569;
+}
+.user-icon-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.12);
+}
+.user-icon-btn .material-icons-round {
+  font-size: 18px;
+  line-height: 1;
+}
+.user-icon-impersonate { color: #475569; }
+.user-icon-impersonate:hover { background: #f1f5f9; }
+.user-icon-reset { color: #16a34a; border-color: #bbf7d0; }
+.user-icon-reset:hover { background: #f0fdf4; }
+.user-icon-force { color: #b45309; border-color: #fde68a; }
+.user-icon-force:hover { background: #fffbeb; }
+.user-icon-role { color: #1d4ed8; border-color: #bfdbfe; }
+.user-icon-role:hover { background: #eff6ff; }
+.user-icon-deactivate { color: #b91c1c; border-color: #fecaca; }
+.user-icon-deactivate:hover { background: #fef2f2; }
+.user-icon-activate { color: #15803d; border-color: #bbf7d0; }
+.user-icon-activate:hover { background: #f0fdf4; }
+
+/* ============================================================================
    Text align in tables
    ============================================================================ */
 .text-center {
@@ -2696,6 +3669,110 @@ textarea {
   .filter-bar-grid--search .filter-bar-actions {
     width: 100%;
   }
+}
+
+/* ============================================================================
+   Modo SOLO LECTURA para directivos
+   Oculta botones de escritura (Crear/Editar/Eliminar/Guardar) excepto
+   en el módulo de Grade Corrections que es el único donde sí pueden editar.
+   ============================================================================ */
+
+/* Ocultar botones de escritura globales para directivo */
+body.role-directivo button[data-action="new-teacher"],
+body.role-directivo button[data-action="add-user"],
+body.role-directivo button[data-action="save-teacher"],
+body.role-directivo button[data-action="edit-teacher"],
+body.role-directivo button[data-action="delete-teacher"],
+body.role-directivo button[data-action="save-assignment"],
+body.role-directivo button[data-action="edit-assignment"],
+body.role-directivo button[data-action="delete-assignment"],
+body.role-directivo button[data-action="save-grades"],
+body.role-directivo button[data-action="clear-grades-list"],
+body.role-directivo button[data-action="save-orientador"],
+body.role-directivo button[data-action="assign-orientador"],
+body.role-directivo button[data-action="auto-detect-coberturas"],
+body.role-directivo button[data-action="reassign-interim"],
+body.role-directivo button[data-action="unmark-interim"],
+body.role-directivo button[data-action="orientacion-masivo"],
+body.role-directivo button[data-action="open-editor"],
+body.role-directivo button[data-action="lock-partial"],
+body.role-directivo button[data-action="unlock-partial"],
+body.role-directivo .btn-danger,
+body.role-directivo .btn-warning,
+body.role-directivo input.grade-rubro:not([readonly]),
+body.role-directivo input.grade-faltas:not([readonly]),
+body.role-directivo input.horas-input:not([readonly]) {
+  display: none !important;
+}
+
+/* (Banner amarillo eliminado — los directivos no deben ver aviso, solo
+   los botones de escritura quedan ocultos silenciosamente vía las reglas
+   de arriba. Firestore.rules bloquea cualquier intento de escribir, así
+   que es seguro aunque el botón se les escapara.) */
+
+/* ============================================================================
+   ROL: SECRETARIO ESCOLAR (Roberto)
+   Mismo nivel de lectura silenciosa que directivo (oculta botones de escritura),
+   EXCEPTO en los módulos `students` (Listas de Alumnos) y `enrollment`
+   (Inscripciones) donde sí puede editar. Firestore.rules respaldan esto.
+   ============================================================================ */
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="new-teacher"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="add-user"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="save-teacher"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="edit-teacher"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="delete-teacher"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="save-assignment"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="edit-assignment"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="delete-assignment"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="save-grades"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="clear-grades-list"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="save-orientador"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="assign-orientador"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="auto-detect-coberturas"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="reassign-interim"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="unmark-interim"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="orientacion-masivo"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="open-editor"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="lock-partial"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) button[data-action="unlock-partial"],
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) .btn-danger,
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) .btn-warning,
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) input.grade-rubro:not([readonly]),
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) input.grade-faltas:not([readonly]),
+body.role-secretario_escolar:not(.module-students):not(.module-enrollment) input.horas-input:not([readonly]) {
+  display: none !important;
+}
+
+/* ============================================================================
+   ROL: SECRETARIA ADMINISTRATIVA (Lupita)
+   Mismo nivel de lectura silenciosa que directivo, EXCEPTO en `school-config`
+   (Datos de la Escuela) donde sí puede editar. Todo lo demás solo lee.
+   ============================================================================ */
+body.role-secretario_admin:not(.module-school-config) button[data-action="new-teacher"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="add-user"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="save-teacher"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="edit-teacher"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="delete-teacher"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="save-assignment"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="edit-assignment"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="delete-assignment"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="save-grades"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="clear-grades-list"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="save-orientador"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="assign-orientador"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="auto-detect-coberturas"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="reassign-interim"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="unmark-interim"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="orientacion-masivo"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="open-editor"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="lock-partial"],
+body.role-secretario_admin:not(.module-school-config) button[data-action="unlock-partial"],
+body.role-secretario_admin:not(.module-school-config) .btn-danger,
+body.role-secretario_admin:not(.module-school-config) .btn-warning,
+body.role-secretario_admin:not(.module-school-config) input.grade-rubro:not([readonly]),
+body.role-secretario_admin:not(.module-school-config) input.grade-faltas:not([readonly]),
+body.role-secretario_admin:not(.module-school-config) input.horas-input:not([readonly]) {
+  display: none !important;
 }
 
 /* End of styles.css */

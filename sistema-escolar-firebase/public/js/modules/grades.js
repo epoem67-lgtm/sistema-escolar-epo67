@@ -1,7 +1,8 @@
 /**
  * MÓDULO DE CALIFICACIONES — Sistema Escolar EPO 67
  *
- * Vista maestro: cards de asignaciones → editor con rubros (EC, TR, EP/EX, PE)
+ * Vista maestro: cards de asignaciones → editor con rubros (Evaluación Continua,
+ *   Transversal, Examen Parcial -solo vesp-, Punto Extra)
  *   auto-cálculo de SUMA y CAL, campo de FALTAS
  *   Solo editable cuando el parcial está abierto (o con override)
  *
@@ -9,8 +10,8 @@
  *   tabla con rubros completos, solo lectura (orientador), edición (admin)
  *
  * Rubros por turno:
- *   MATUTINO:   EC (máx 8) + TR (máx 2) + PE = SUMA → CAL
- *   VESPERTINO: EC (máx 5) + EX (máx 3) + TR (máx 2) + PE = SUMA → CAL
+ *   MATUTINO:   Evaluación Continua (máx 8) + Transversal (máx 2) + Punto Extra = SUMA → CAL
+ *   VESPERTINO: Evaluación Continua (máx 5) + Examen Parcial (máx 3) + Transversal (máx 2) + Punto Extra = SUMA → CAL
  *
  * Regla redondeo: ≥6 normal, <6 truncar (5.9→5). Mín 5, Máx 10.
  */
@@ -26,6 +27,7 @@ const GradesModule = (function () {
   let assignments = [];
   let grades = {};
   let currentTurno = 'MATUTINO';
+  let _listCleared = false;
 
   // ─── Admin view state ───
   let _admin = {
@@ -41,8 +43,17 @@ const GradesModule = (function () {
   function _el(id) { return document.getElementById(id); }
   function _container() { return document.querySelector(CONTAINER); }
 
+  // BUGFIX v5.96 — el listener se acumulaba en cada render porque
+  // _delegateClick se llamaba desde 3 lugares (renderTeacher, openGradeEditor,
+  // renderAdmin). Cada addEventListener apilaba un handler nuevo. Resultado:
+  // cada clic en Imprimir abría N pestañas (donde N = número de renders).
+  // El flag previene duplicados. El listener es delegado en moduleContainer
+  // (que persiste entre renders), así que un solo bind cubre todo.
+  let _delegateBound = false;
   function _delegateClick(container) {
-    container.addEventListener('click', function (e) {
+    if (_delegateBound) return;
+    _delegateBound = true;
+    container.addEventListener('click', async function (e) {
       const t = e.target.closest('[data-action]');
       if (!t) return;
       const a = t.dataset.action;
@@ -51,6 +62,12 @@ const GradesModule = (function () {
         // Cambio de pestaña / botón Anterior-Siguiente
         const newAsgId = t.dataset.assignmentId;
         if (!newAsgId) return;
+        if (!_canLeaveEditor('switch')) return;
+
+        // BLOQUEO: si hay reprobados sin incidencia registrada, forzar captura
+        const ok = await _enforceIncidentsBeforeLeave('cambiar de lista');
+        if (!ok) return;
+
         if (_isDirty) {
           if (!confirm('Tienes cambios sin guardar en esta lista. ¿Cambiar de lista sin guardar?')) return;
         }
@@ -58,7 +75,14 @@ const GradesModule = (function () {
       }
       else if (a === 'switch-partial') api.switchPartial(t.dataset.partial);
       else if (a === 'save-grades') api.saveGrades();
+      else if (a === 'clear-grades-list') _confirmClearCurrentList();
       else if (a === 'back-to-list') {
+        if (!_canLeaveEditor('back')) return;
+
+        // BLOQUEO: si hay reprobados sin incidencia, forzar captura
+        const ok = await _enforceIncidentsBeforeLeave('volver a la lista de grupos');
+        if (!ok) return;
+
         if (_isDirty) {
           if (!confirm('Tienes cambios sin guardar. ¿Deseas salir sin guardar?')) return;
         }
@@ -66,9 +90,68 @@ const GradesModule = (function () {
       }
       else if (a === 'export-grades') api.exportGrades();
       else if (a === 'print-grades') api.printGrades();
+      else if (a === 'print-selected-assignments') _printSelectedAssignments(false);
+      else if (a === 'print-all-assignments') _printSelectedAssignments(true);
       else if (a === 'print-admin-grades') api.printAdminGrades();
       else if (a === 'report-incident') _showIncidentModal(t.dataset.studentId, t.dataset.studentName);
     });
+  }
+
+  // Verifica si hay alumnos reprobados sin incidencia y FUERZA al maestro a
+  // capturarla antes de cambiar de lista. Si captura, persiste y permite seguir.
+  // Si cancela, NO permite el cambio.
+  async function _enforceIncidentsBeforeLeave(actionLabel) {
+    if (!_isTeacherCaptureRole() || _listCleared) return true;
+    if (!selectedSubject || !selectedGroup) return true;
+    try {
+      const rubros = K.getRubros(currentTurno);
+      const failingStudents = _getFailingStudentsForIncident(rubros);
+      if (failingStudents.length === 0) return true;
+      const missing = await _getMissingFailureIncidents(failingStudents);
+      if (missing.length === 0) return true;
+
+      // Forzar captura. _collectFailureIncidentReasons retorna null si cancelan.
+      const reports = await _collectFailureIncidentReasons(missing);
+      if (reports === null) {
+        Toast.show(`No puedes ${actionLabel} sin registrar el motivo de los alumnos reprobados.`, 'warning');
+        return false;
+      }
+      if (!Array.isArray(reports) || reports.length === 0) return true;
+
+      // Persistir incidencias en Firestore
+      const currentList = _getCurrentListLabel();
+      const batch = db.batch();
+      reports.forEach(r => {
+        const ref = db.collection('incidents').doc(_failureIncidentDocId(r.studentId));
+        batch.set(ref, {
+          studentId: r.studentId,
+          groupId: selectedGroup,
+          turno: currentTurno,
+          type: 'academica',
+          incidentKind: 'reprobación',
+          requiredBy: 'switch-assignment',
+          title: `Reprobación en ${currentList.subjectName}`,
+          description: r.reason,
+          subjectId: selectedSubject,
+          subjectName: currentList.subjectName,
+          partial: currentPartial,
+          partialName: currentList.partialName,
+          grade: r.cal,
+          suma: r.suma,
+          date: new Date(),
+          status: 'activa',
+          createdAt: new Date(),
+          createdBy: auth.currentUser.uid,
+        }, { merge: true });
+      });
+      await batch.commit();
+      Toast.show(`Incidencias registradas (${reports.length}). Esto ayuda a Orientación cuando vienen los papás.`, 'success');
+      return true;
+    } catch (e) {
+      console.error('Error verificando incidencias antes de cambiar de lista:', e);
+      Toast.show('No se pudieron verificar las incidencias. Intenta de nuevo.', 'error');
+      return false;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -169,62 +252,124 @@ const GradesModule = (function () {
   /** HTML de las pestañas de asignaciones del maestro con su estado. */
   function _renderAssignmentTabs(currentAssignmentId) {
     const ordered = _orderedAssignments();
-    if (ordered.length <= 1) return '';  // 1 sola asignación: no muestra pestañas
+    if (ordered.length <= 1) return '';  // 1 sola asignación: no muestra navegador
 
-    const tabs = ordered.map(a => {
+    const options = ordered.map(a => {
       const st = _assignmentStatusCache[a.id] || { filled: 0, total: 0, percent: 0, status: 'empty' };
       const isActive = a.id === currentAssignmentId;
-      const turnoShort = (a.turno || '').slice(0, 3).toUpperCase();
-      const subjShort = (K.getUACNombre(a.subjectName || '') || a.subjectId).slice(0, 22);
-      let icon = '⚪'; let cls = 'tab-empty';
-      if (st.status === 'complete')      { icon = '✅'; cls = 'tab-complete'; }
-      else if (st.status === 'partial')  { icon = '⚠️'; cls = 'tab-partial'; }
-      else if (st.status === 'empty')    { icon = '❌'; cls = 'tab-empty'; }
-      return `<button class="ge-tab ${cls}${isActive ? ' active' : ''}"
-        data-action="switch-assignment"
-        data-assignment-id="${a.id}"
-        data-group-id="${a.groupId}"
-        data-subject-id="${a.subjectId}"
-        title="${Utils.sanitize(a.turno || '')} · ${Utils.sanitize(a.groupName || '')} · ${Utils.sanitize(a.subjectName || '')}">
-        <span class="ge-tab-status">${icon}</span>
-        <span class="ge-tab-label">
-          <strong>${turnoShort} ${Utils.sanitize(a.groupName || '')}</strong>
-          <span class="ge-tab-subj">${Utils.sanitize(subjShort)}</span>
-        </span>
-        <span class="ge-tab-count">${st.filled}/${st.total}</span>
-      </button>`;
+      const statusLabel = st.status === 'complete' ? 'Completa'
+        : st.status === 'partial' ? 'En captura'
+        : 'Sin captura';
+      const label = `${a.turno || ''} ${a.groupName || ''} - ${K.getUACNombre(a.subjectName || a.subjectId || '')} (${statusLabel}: ${st.filled}/${st.total})`;
+      return `<option value="${Utils.sanitize(a.id)}" ${isActive ? 'selected' : ''}>${Utils.sanitize(label)}</option>`;
     }).join('');
 
-    // Botones grandes Anterior / Siguiente
+    // Botones grandes Anterior / Siguiente — ahora muestran nombre de lista destino
     const idx = ordered.findIndex(a => a.id === currentAssignmentId);
     const prev = idx > 0 ? ordered[idx - 1] : null;
     const next = idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1] : null;
     const currentLabel = idx >= 0
       ? `${ordered[idx].turno || ''} ${ordered[idx].groupName || ''} — ${K.getUACNombre(ordered[idx].subjectName || '')}`
       : '';
+    const prevLabel = prev ? `${prev.groupName || ''} ${K.getUACNombre(prev.subjectName || '').slice(0, 28)}` : 'Sin anterior';
+    const nextLabel = next ? `${next.groupName || ''} ${K.getUACNombre(next.subjectName || '').slice(0, 28)}` : 'Última lista';
     const nav = `
-      <div class="ge-nav">
+      <div class="ge-nav" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#f8fafc;padding:12px;border-radius:8px;margin-top:8px;">
         <button class="btn btn-outline ge-nav-prev" ${!prev ? 'disabled' : ''}
           data-action="switch-assignment"
           data-assignment-id="${prev?.id || ''}"
           data-group-id="${prev?.groupId || ''}"
-          data-subject-id="${prev?.subjectId || ''}">
-          ◀ Anterior
+          data-subject-id="${prev?.subjectId || ''}"
+          style="display:flex;align-items:center;gap:6px;padding:10px 14px;text-align:left;flex:1;min-width:200px;max-width:300px;">
+          <span style="font-size:18px;line-height:1;">◀</span>
+          <span style="display:flex;flex-direction:column;align-items:flex-start;line-height:1.2;">
+            <span style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Anterior</span>
+            <span style="font-size:13px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;">${Utils.sanitize(prevLabel)}</span>
+          </span>
         </button>
-        <span class="ge-nav-current">${idx + 1} de ${ordered.length} · ${Utils.sanitize(currentLabel)}</span>
+
+        <div style="flex:0 0 auto;text-align:center;padding:8px 12px;background:#3182ce;color:#fff;border-radius:6px;font-weight:700;">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.85;">Lista actual</div>
+          <div style="font-size:14px;margin-top:2px;">${idx + 1} de ${ordered.length}</div>
+          <div style="font-size:11px;opacity:0.92;margin-top:2px;">${Utils.sanitize(currentLabel)}</div>
+        </div>
+
         <button class="btn btn-primary ge-nav-next" ${!next ? 'disabled' : ''}
           data-action="switch-assignment"
           data-assignment-id="${next?.id || ''}"
           data-group-id="${next?.groupId || ''}"
-          data-subject-id="${next?.subjectId || ''}">
-          Siguiente ▶
+          data-subject-id="${next?.subjectId || ''}"
+          style="display:flex;align-items:center;gap:6px;padding:10px 14px;text-align:right;flex:1;min-width:200px;max-width:300px;justify-content:flex-end;">
+          <span style="display:flex;flex-direction:column;align-items:flex-end;line-height:1.2;">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;opacity:0.85;">Siguiente</span>
+            <span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;">${Utils.sanitize(nextLabel)}</span>
+          </span>
+          <span style="font-size:18px;line-height:1;">▶</span>
         </button>
       </div>`;
 
     return `
-      <div class="ge-tabs-container">
-        <div class="ge-tabs-scroll">${tabs}</div>
+      <div class="ge-tabs-container ge-assignment-nav">
+        <div class="ge-assignment-nav-header">
+          <div>
+            <h3>Cambiar de lista</h3>
+            <p>El avance indica cuántos alumnos ya tienen captura en este parcial.</p>
+          </div>
+          <select id="assignment-jump" aria-label="Cambiar de lista">${options}</select>
+        </div>
+        <div class="ge-status-legend">
+          <span class="ge-status-pill ge-status-complete">Completa: todos los alumnos tienen captura</span>
+          <span class="ge-status-pill ge-status-partial">En captura: faltan alumnos por capturar</span>
+          <span class="ge-status-pill ge-status-empty">Sin captura: todavía no hay registros</span>
+        </div>
         ${nav}
+      </div>`;
+  }
+
+  function _renderBulkPrintPanel() {
+    const ordered = _orderedAssignments();
+    if (ordered.length === 0) return '';
+
+    const partialOptions = K.PARCIALES.map(p =>
+      `<option value="${p.id}" ${p.id === currentPartial ? 'selected' : ''}>${Utils.sanitize(p.nombre)}</option>`
+    ).join('');
+
+    const rows = ordered.map(a => {
+      const st = _assignmentStatusCache[a.id] || { filled: 0, total: 0, percent: 0, status: 'empty' };
+      const statusLabel = st.status === 'complete' ? 'Lista completa'
+        : st.status === 'partial' ? 'Lista en captura'
+        : 'Sin captura';
+      return `
+        <label class="bulk-print-item">
+          <input type="checkbox" class="bulk-print-check" value="${Utils.sanitize(a.id)}">
+          <span class="bulk-print-main">
+            <strong>${Utils.sanitize(a.groupName || a.groupId || '')}</strong>
+            <span>${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId || ''))}</span>
+          </span>
+          <span class="bulk-print-status bulk-print-status--${st.status}">
+            ${statusLabel} · ${st.filled}/${st.total}
+          </span>
+        </label>`;
+    }).join('');
+
+    return `
+      <div class="card bulk-print-panel">
+        <div class="bulk-print-header">
+          <div>
+            <h3>Imprimir listas</h3>
+            <p>Elige el parcial y marca las listas que quieres imprimir en un solo documento.</p>
+          </div>
+          <div class="bulk-print-actions">
+            <select id="bulk-print-partial" aria-label="Parcial para imprimir">${partialOptions}</select>
+            <button class="btn btn-outline" data-action="print-selected-assignments">
+              <span class="material-icons-round">print</span> Seleccionadas
+            </button>
+            <button class="btn btn-primary" data-action="print-all-assignments">
+              <span class="material-icons-round">print</span> Todas
+            </button>
+          </div>
+        </div>
+        <div class="bulk-print-list">${rows}</div>
       </div>`;
   }
 
@@ -271,6 +416,8 @@ const GradesModule = (function () {
         return;
       }
 
+      if (!isAdmin) await _loadAssignmentStatuses(currentPartial);
+
       const title = isAdmin ? 'Captura de Calificaciones' : 'Mis Asignaciones';
       const subtitle = 'Selecciona turno, grado, grupo y materia para abrir el editor';
 
@@ -310,6 +457,7 @@ const GradesModule = (function () {
           </div>
         </div>
         <div id="cap-preview"></div>
+        ${!isAdmin ? _renderBulkPrintPanel() : ''}
       `);
 
       assignments = _capAssignments;
@@ -653,9 +801,98 @@ const GradesModule = (function () {
       const firstRubro = row.querySelector('.grade-rubro');
       if (firstRubro) _recalcRow(firstRubro);
     });
+    if (snapshot.label === 'Antes de dejar lista en blanco') {
+      _listCleared = false;
+      _hideClearPendingNotice();
+    }
     _updateStats();
     _updateUndoBtn();
     Toast.show(`Deshecho: ${snapshot.label}`, 'info');
+  }
+
+  function _getCurrentListLabel() {
+    const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
+    const partial = K.PARCIALES.find(p => p.id === currentPartial);
+    return {
+      subjectName: asg ? K.getUACNombre(asg.subjectName || asg.subjectId) : selectedSubject,
+      groupName: asg ? (asg.groupName || asg.groupId) : selectedGroup,
+      partialName: partial ? partial.nombre : currentPartial
+    };
+  }
+
+  function _confirmClearCurrentList() {
+    const rows = document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]');
+    if (rows.length === 0) return;
+
+    const list = _getCurrentListLabel();
+    const message = `
+      <div class="clear-list-confirm">
+        <p>Esta accion prepara la lista para guardarse en blanco.</p>
+        <dl>
+          <div><dt>Grupo</dt><dd>${Utils.sanitize(list.groupName)}</dd></div>
+          <div><dt>Materia</dt><dd>${Utils.sanitize(list.subjectName)}</dd></div>
+          <div><dt>Parcial</dt><dd>${Utils.sanitize(list.partialName)}</dd></div>
+        </dl>
+        <ul>
+          <li>Quita calificaciones, suma, calificación final y faltas de esta lista.</li>
+          <li>No borra alumnos ni horas impartidas.</li>
+          <li>No necesitas capturar horas impartidas para guardar una lista en blanco.</li>
+          <li>Después de confirmar todavia debes presionar Guardar Calificaciones.</li>
+        </ul>
+      </div>`;
+
+    Modal.confirmTyped('Dejar lista en blanco', message, 'BLANCO', _clearCurrentList);
+  }
+
+  function _showClearPendingNotice() {
+    if (document.getElementById('clear-list-pending-notice')) return;
+    const table = document.querySelector('.table-container');
+    if (!table) return;
+    const notice = document.createElement('div');
+    notice.id = 'clear-list-pending-notice';
+    notice.className = 'clear-list-pending-notice';
+    notice.innerHTML = `
+      <span class="material-icons-round">warning</span>
+      <div>
+        <strong>Lista preparada en blanco.</strong>
+        <p>Revisa la tabla y presiona Guardar Calificaciones para aplicar el cambio.</p>
+      </div>
+      <button class="btn btn-primary btn-sm" data-action="save-grades">
+        <span class="material-icons-round">save</span>
+        Guardar ahora
+      </button>`;
+    table.parentNode.insertBefore(notice, table);
+  }
+
+  function _hideClearPendingNotice() {
+    document.getElementById('clear-list-pending-notice')?.remove();
+  }
+
+  function _clearCurrentList() {
+    const rows = document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]');
+    if (rows.length === 0) return;
+
+    _pushUndo('Antes de dejar lista en blanco');
+    rows.forEach(row => {
+      row.querySelectorAll('.grade-rubro, .grade-faltas').forEach(input => {
+        input.value = '';
+        input.classList.remove('ge-input-invalid', 'paste-applied', 'paste-invalid');
+      });
+      const sumaCell = row.querySelector('.col-suma');
+      const calCell = row.querySelector('.col-cal');
+      if (sumaCell) sumaCell.textContent = '';
+      if (calCell) {
+        calCell.textContent = '';
+        calCell.className = 'cell-cal col-cal';
+      }
+      row.classList.remove('row-reprobado');
+    });
+
+    _listCleared = true;
+    _markDirty();
+    _updateStats();
+    _showClearPendingNotice();
+    Toast.show('Lista preparada en blanco. Guarda para aplicar el cambio.', 'warning', 6000);
   }
 
   function _updateUndoBtn() {
@@ -753,6 +990,20 @@ const GradesModule = (function () {
     const currentAsg = assignments.find(a => a.groupId === selectedGroup && a.subjectId === selectedSubject);
     const tabsHtml = currentAsg ? _renderAssignmentTabs(currentAsg.id) : '';
 
+    // Banner de cobertura temporal
+    const interimBanner = currentAsg && currentAsg.interim ? `
+      <div class="card" style="background:#fffbeb;border-left:6px solid #d97706;padding:14px 18px;margin-bottom:12px;">
+        <div style="font-weight:700;font-size:14px;color:#78350f;margin-bottom:4px;">
+          \ud83d\udfe0 Esta lista es una cobertura temporal
+        </div>
+        <div style="font-size:13px;color:#78350f;line-height:1.4;">
+          Est\u00e1s cubriendo esta materia mientras se asigna al docente oficial.
+          Todo lo que captures (calificaciones, faltas, horas) <strong>se transferir\u00e1 autom\u00e1ticamente</strong>
+          cuando administraci\u00f3n apruebe la transici\u00f3n al docente definitivo.
+          ${currentAsg.interimNote ? `<br><em style="opacity:0.85;">Nota: ${Utils.sanitize(currentAsg.interimNote)}</em>` : ''}
+        </div>
+      </div>` : '';
+
     container.innerHTML = `
       <div class="module-container">
         <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
@@ -770,7 +1021,13 @@ const GradesModule = (function () {
 
         ${tabsHtml}
 
+        ${interimBanner}
+
         ${lockWarning}
+
+        <div id="capture-deadline-banner"></div>
+
+        <div id="risk-banner-faltas"></div>
 
         <div class="card">
           <div class="form-group"><label>Parcial:</label><div class="btn-group">${partialsHtml}</div></div>
@@ -788,6 +1045,10 @@ const GradesModule = (function () {
               Deshacer
               <span id="undo-count" style="position:absolute;top:-6px;right:-6px;background:#e53e3e;color:#fff;font-size:10px;font-weight:700;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;"></span>
             </button>
+            <button class="btn btn-outline btn-sm btn-danger-soft" data-action="clear-grades-list" title="Deja en blanco calificaciones y faltas de esta lista. No borra alumnos ni horas.">
+              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;">backspace</span>
+              Dejar lista en blanco
+            </button>
           </div>
         </div>
 
@@ -799,9 +1060,9 @@ const GradesModule = (function () {
                 <th class="col-num">#</th>
                 <th class="col-name" style="text-align:left;padding-left:12px;">Estudiante</th>
                 ${headerCols}
-                <th class="col-suma" style="width:60px;">SUMA</th>
-                <th class="col-cal" style="width:55px;">CAL.</th>
-                <th class="col-faltas" style="width:58px;">FALTAS</th>
+                <th class="col-suma" style="width:60px;">SUMA${typeof HelpTip !== 'undefined' ? HelpTip.html('Suma de Evaluación Continua + Transversal + (Examen Parcial solo vespertino) + Punto Extra. El sistema la calcula automáticamente. Si excede 10, se queda en 10.', { size: 13 }) : ''}</th>
+                <th class="col-cal" style="width:55px;">CAL.${typeof HelpTip !== 'undefined' ? HelpTip.html('Calificación final. Si SUMA es ≥6, redondea normal (máx 10). Si SUMA es <6, automáticamente queda en 5. Tú NUNCA escribes esta columna.', { size: 13 }) : ''}</th>
+                <th class="col-faltas" style="width:58px;">FALTAS${typeof HelpTip !== 'undefined' ? HelpTip.html('Total de faltas del alumno en el parcial. Si supera el 20% de las horas impartidas, el alumno pierde derecho a calificación ordinaria (extraordinario).', { size: 13 }) : ''}</th>
                 <th style="width:32px;background:#4a5568;" title="Reportar incidencia"></th>
               </tr>
             </thead>
@@ -816,20 +1077,22 @@ const GradesModule = (function () {
           <div class="stat-card--compact"><div class="stat-label">Sin calificaci\u00f3n</div><div class="stat-number" id="stat-sin-calif">-</div></div>
         </div>
 
-        <div class="card" style="margin-top:16px;">
-          <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:8px;">Horas Impartidas</h3>
-          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <div class="card horas-card">
+          <div class="horas-card-header">
+            <h3>Horas impartidas</h3>
+            <span>Obligatorio antes de guardar</span>
+          </div>
+          <div class="horas-grid">
             ${['Febrero','Marzo','Abril','Mayo','Junio','Julio'].map(m =>
-              `<div style="text-align:center;">
-                <label style="font-size:0.78rem; color:var(--text-light);font-weight:600;">${m}</label>
+              `<div class="horas-month">
+                <label>${m}</label>
                 <input type="number" min="0" max="99" step="1" id="horas-${m.toLowerCase()}"
-                  class="ge-input horas-input" data-month="${m.toLowerCase()}"
-                  style="width:56px; display:block; margin-top:4px;">
+                  class="ge-input horas-input" data-month="${m.toLowerCase()}">
               </div>`
             ).join('')}
-            <div style="text-align:center;">
-              <label style="font-size:0.78rem; font-weight:700;">Total</label>
-              <div id="horas-total" style="font-weight:800; font-size:16px; padding:8px 0; color:#2b6cb0;">0</div>
+            <div class="horas-total-box">
+              <label>Total</label>
+              <div id="horas-total">0</div>
             </div>
           </div>
         </div>
@@ -851,6 +1114,7 @@ const GradesModule = (function () {
     _undoStack.length = 0;
     _isDirty = false;
     _isSaving = false;
+    _listCleared = false;
     _draftKey = `grade_draft_${selectedGroup}_${selectedSubject}_${currentPartial}`;
 
     // ═══ INPUT CLAMPING + UNDO + DIRTY TRACKING (event delegation) ═══
@@ -967,6 +1231,21 @@ const GradesModule = (function () {
 
     // ═══ UNDO ═══
     document.getElementById('undo-btn')?.addEventListener('click', _popUndo);
+    document.getElementById('assignment-jump')?.addEventListener('change', (e) => {
+      const targetAsg = _orderedAssignments().find(a => a.id === e.target.value);
+      if (!targetAsg) return;
+      if (!_canLeaveEditor()) {
+        const currentAsg = assignments.find(a => a.groupId === selectedGroup && a.subjectId === selectedSubject);
+        e.target.value = currentAsg?.id || '';
+        return;
+      }
+      if (_isDirty && !confirm('Tienes cambios sin guardar en esta lista. ¿Cambiar de lista sin guardar?')) {
+        const currentAsg = assignments.find(a => a.groupId === selectedGroup && a.subjectId === selectedSubject);
+        e.target.value = currentAsg?.id || '';
+        return;
+      }
+      api.openGradeEditor(targetAsg.id, targetAsg.groupId, targetAsg.subjectId);
+    });
     container._undoHandler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         if (_undoStack.length > 0) { e.preventDefault(); _popUndo(); }
@@ -983,9 +1262,15 @@ const GradesModule = (function () {
 
     // ═══ HORAS IMPARTIDAS ═══
     container.querySelectorAll('.horas-input').forEach(input => {
-      input.addEventListener('input', () => { _updateHorasTotal(); _markDirty(); });
+      input.addEventListener('input', () => { _updateHorasTotal(); _markDirty(); _scheduleRiskBannerUpdate(); });
     });
-    _loadHoras();
+    _loadHoras().then(() => _updateRiskBanner());
+    _updateCaptureDeadlineBanner();
+
+    // ═══ FALTAS → actualizar banner de riesgo ═══
+    container.querySelectorAll('input.grade-faltas').forEach(input => {
+      input.addEventListener('input', _scheduleRiskBannerUpdate);
+    });
 
     _updateStats();
     _updateUndoBtn();
@@ -1174,9 +1459,190 @@ const GradesModule = (function () {
     document.querySelectorAll('.horas-input').forEach(input => {
       const v = parseInt(input.value);
       if (!isNaN(v)) total += v;
+      input.classList.toggle('has-value', input.value.trim() !== '');
     });
     const el = document.getElementById('horas-total');
     if (el) el.textContent = total;
+  }
+
+  async function _saveHorasData(horasData) {
+    if (!horasData || Object.keys(horasData).length === 0) return false;
+    const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
+    await db.collection('teacherHours').doc(horasDocId).set({
+      ...horasData,
+      groupId: selectedGroup,
+      subjectId: selectedSubject,
+      partial: currentPartial,
+      updatedBy: auth.currentUser.uid,
+      updatedAt: new Date()
+    }, { merge: true });
+    return true;
+  }
+
+  function _failureIncidentDocId(studentId) {
+    return `${studentId}_${selectedSubject}_${currentPartial}_reprobación`;
+  }
+
+  function _getFailingStudentsForIncident(rubros) {
+    if (_listCleared) return [];
+    const failing = [];
+
+    document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+      const studentId = row.dataset.studentId;
+      const key = `${studentId}_${selectedSubject}_${currentPartial}`;
+      const stored = grades[key] || {};
+      const sumaData = {};
+      let hasData = false;
+
+      rubros.forEach(r => {
+        const input = row.querySelector(`input[data-field="${r.key}"]`);
+        const raw = input ? input.value.trim() : '';
+        const value = raw === '' ? 0 : Math.max(0, Math.min(parseFloat(raw) || 0, r.max));
+        sumaData[r.key] = value;
+        if (raw !== '' || stored[r.key] !== undefined) hasData = true;
+      });
+
+      if (!hasData) return;
+      const suma = K.calcSuma(sumaData);
+      const cal = K.calcCal(suma);
+      if (cal !== '' && Number(cal) < K.THRESHOLDS.PASS_GRADE) {
+        failing.push({
+          studentId,
+          studentName: row.querySelector('.cell-name')?.textContent.trim() || studentId,
+          suma,
+          cal
+        });
+      }
+    });
+
+    return failing;
+  }
+
+  async function _getMissingFailureIncidents(failingStudents) {
+    if (failingStudents.length === 0) return [];
+    const refs = failingStudents.map(s => db.collection('incidents').doc(_failureIncidentDocId(s.studentId)));
+    const snaps = await Promise.all(refs.map(ref => ref.get()));
+    return failingStudents.filter((student, index) => !snaps[index].exists);
+  }
+
+  function _buildFailureDescription(reason, detail) {
+    const cleanReason = (reason || '').trim();
+    const cleanDetail = (detail || '').trim();
+    return cleanDetail ? `${cleanReason}. ${cleanDetail}` : cleanReason;
+  }
+
+  function _collectFailureIncidentReasons(missingStudents) {
+    if (missingStudents.length === 0) return Promise.resolve([]);
+
+    return new Promise(resolve => {
+      const rowsHtml = missingStudents.map((s, index) => `
+        <div class="failure-reason-row" data-index="${index}">
+          <div class="failure-reason-student">
+            <strong>${Utils.sanitize(s.studentName)}</strong>
+            <span>Calificación: ${Utils.sanitize(String(s.cal))}</span>
+          </div>
+          <select class="failure-reason-select" data-index="${index}">
+            <option value="">Selecciona motivo</option>
+            <option value="No entrego evidencias suficientes">No entrego evidencias suficientes</option>
+            <option value="Evaluación parcial insuficiente">Evaluación parcial insuficiente</option>
+            <option value="Trabajos incompletos">Trabajos incompletos</option>
+            <option value="Inasistencias afectaron su desempeno">Inasistencias afectaron su desempeno</option>
+            <option value="No acredito los aprendizajes esperados">No acredito los aprendizajes esperados</option>
+            <option value="Otro">Otro</option>
+          </select>
+          <textarea class="failure-reason-detail" data-index="${index}" rows="2"
+            placeholder="Detalle breve opcional. Si eliges Otro, escribe el motivo."></textarea>
+        </div>`).join('');
+
+      const body = `
+        <div class="failure-reason-modal">
+          <p>Antes de guardar, registra el motivo de reprobación de cada alumno.</p>
+          <div class="failure-reason-tools">
+            <select id="failure-reason-bulk">
+              <option value="">Motivo rapido para todos</option>
+              <option value="No entrego evidencias suficientes">No entrego evidencias suficientes</option>
+              <option value="Evaluación parcial insuficiente">Evaluación parcial insuficiente</option>
+              <option value="Trabajos incompletos">Trabajos incompletos</option>
+              <option value="Inasistencias afectaron su desempeno">Inasistencias afectaron su desempeno</option>
+              <option value="No acredito los aprendizajes esperados">No acredito los aprendizajes esperados</option>
+            </select>
+            <button class="btn btn-outline btn-sm" id="failure-reason-apply">Aplicar</button>
+          </div>
+          <div class="failure-reason-list">${rowsHtml}</div>
+        </div>`;
+
+      const footer = `
+        <button class="btn btn-outline" id="failure-reason-cancel">Cancelar</button>
+        <button class="btn btn-primary" id="failure-reason-save">
+          <span class="material-icons-round">save</span>
+          Registrar motivos y guardar
+        </button>`;
+
+      Modal.open('Motivo de reprobación obligatorio', body, footer);
+
+      setTimeout(() => {
+        const cancelBtn = document.getElementById('failure-reason-cancel');
+        const saveBtn = document.getElementById('failure-reason-save');
+        const applyBtn = document.getElementById('failure-reason-apply');
+        const bulkSelect = document.getElementById('failure-reason-bulk');
+
+        cancelBtn?.addEventListener('click', () => {
+          Modal.close();
+          resolve(null);
+        });
+
+        applyBtn?.addEventListener('click', () => {
+          const value = bulkSelect?.value || '';
+          if (!value) {
+            Toast.show('Selecciona un motivo rapido primero', 'warning');
+            return;
+          }
+          document.querySelectorAll('.failure-reason-select').forEach(select => { select.value = value; });
+        });
+
+        saveBtn?.addEventListener('click', () => {
+          const reports = [];
+          let missing = 0;
+
+          missingStudents.forEach((student, index) => {
+            const select = document.querySelector(`.failure-reason-select[data-index="${index}"]`);
+            const detail = document.querySelector(`.failure-reason-detail[data-index="${index}"]`);
+            const reason = select?.value || '';
+            const detailText = detail?.value.trim() || '';
+            const requiresDetail = reason === 'Otro';
+            const invalid = !reason || (requiresDetail && detailText.length < 5);
+
+            select?.classList.toggle('ge-input-invalid', !reason);
+            detail?.classList.toggle('ge-input-invalid', requiresDetail && detailText.length < 5);
+
+            if (invalid) {
+              missing++;
+              return;
+            }
+
+            reports.push({
+              ...student,
+              reason: _buildFailureDescription(reason, detailText)
+            });
+          });
+
+          if (missing > 0) {
+            Toast.show('Completa el motivo de todos los alumnos reprobados', 'warning');
+            return;
+          }
+
+          Modal.close();
+          resolve(reports);
+        });
+      }, 100);
+    });
+  }
+
+  async function _collectRequiredFailureIncidents(rubros) {
+    if (!_isTeacherCaptureRole() || _listCleared) return [];
+    const failingStudents = _getFailingStudentsForIncident(rubros);
+    const missingStudents = await _getMissingFailureIncidents(failingStudents);
+    return _collectFailureIncidentReasons(missingStudents);
   }
 
   // ─── INCIDENT REPORTING FROM GRADE EDITOR ───
@@ -1257,6 +1723,82 @@ const GradesModule = (function () {
     return data;
   }
 
+  function _isTeacherCaptureRole() {
+    return App.currentUser?.role === 'maestro' || App.currentUser?.role === 'orientador_docente';
+  }
+
+  function _hasRequiredHoras() {
+    const horasInputs = document.querySelectorAll('.horas-input');
+    return [...horasInputs].some(input => {
+      const v = parseInt(input.value, 10);
+      return !isNaN(v) && v > 0;
+    });
+  }
+
+  function _showHorasRequiredReminder() {
+    const horasSection = document.querySelector('#horas-total')?.closest('.card');
+    if (horasSection) {
+      horasSection.classList.add('horas-required');
+      // Mantener resaltado MÁS tiempo para que el maestro lo vea bien
+      setTimeout(() => horasSection.classList.remove('horas-required'), 30000);
+    }
+
+    // Mensaje súper claro con instrucciones paso a paso
+    const bodyHtml = `
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="background:#fee2e2;border-left:5px solid #dc2626;padding:14px 18px;border-radius:8px;">
+          <h3 style="margin:0 0 8px;color:#991b1b;font-size:17px;">⚠ Tus calificaciones NO se guardaron todavía</h3>
+          <p style="margin:0;color:#991b1b;font-size:14px;">
+            El sistema necesita que <strong>primero captures las HORAS IMPARTIDAS</strong> de este parcial antes de guardar las calificaciones. Es obligatorio para calcular el % de faltas (regla del 20%).
+          </p>
+        </div>
+
+        <div style="background:#fef3c7;border-left:4px solid #d97706;padding:12px 16px;border-radius:6px;font-size:14px;">
+          <strong style="color:#78350f;">📋 Qué hacer (toma 30 segundos):</strong>
+          <ol style="margin:8px 0 0 20px;color:#78350f;line-height:1.7;">
+            <li>Cierra este mensaje (botón <strong>"Entendido"</strong> abajo).</li>
+            <li>Vas a ver una sección <strong style="background:#fff;padding:1px 6px;border-radius:3px;color:#d97706;">📅 HORAS IMPARTIDAS</strong> debajo de la tabla de alumnos (resaltada en naranja).</li>
+            <li>Escribe cuántas clases diste en <strong>P${(typeof currentPartial === 'string' ? currentPartial.replace('P','') : '?')}</strong>. Por ejemplo: <code style="background:#fff;padding:1px 6px;border-radius:3px;">24</code></li>
+            <li><strong>Vuelve a presionar el botón "Guardar"</strong> arriba.</li>
+            <li>Ahora SÍ se van a guardar tus calificaciones + las horas en bloque.</li>
+          </ol>
+        </div>
+
+        <div style="background:#dcfce7;border-left:4px solid #16a34a;padding:10px 14px;border-radius:6px;font-size:13px;color:#166534;">
+          💡 <strong>Tus calificaciones NO se perdieron.</strong> Siguen escritas en la pantalla.
+          Solo necesitas registrar las horas y volver a guardar — todas se guardan al mismo tiempo.
+        </div>
+      </div>`;
+    const footerHtml = `<button class="btn btn-primary" id="horas-reminder-ok" style="background:#dc2626;border-color:#dc2626;font-weight:700;padding:10px 22px;">Entendido, voy a capturar las horas</button>`;
+
+    if (typeof Modal !== 'undefined' && Modal.open) {
+      Modal.open('⚠ NO se guardaron — falta capturar las horas', bodyHtml, footerHtml);
+      document.getElementById('horas-reminder-ok')?.addEventListener('click', () => {
+        Modal.close();
+        // Después de cerrar, hacer scroll a la sección de horas con un delay
+        setTimeout(() => {
+          if (horasSection) {
+            horasSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Foco al primer input de horas
+            const firstHorasInput = horasSection.querySelector('.horas-input');
+            if (firstHorasInput) firstHorasInput.focus();
+          }
+        }, 200);
+      });
+    } else {
+      Toast.show('NO se guardó. Captura las horas impartidas primero.', 'error');
+    }
+  }
+
+  function _canLeaveEditor() {
+    if (!_isTeacherCaptureRole()) return true;
+    if (!_isDirty) return true;
+    if (_listCleared) return true;
+    if (_hasRequiredHoras()) return true;
+    _showHorasRequiredReminder();
+    return false;
+  }
+
   /** Auto-recalculate SUMA and CAL for a row when any rubro changes */
   function _recalcRow(input) {
     const row = input.closest('tr');
@@ -1293,6 +1835,159 @@ const GradesModule = (function () {
     return K.calcSuma(data);
   }
 
+  // Banner con fechas críticas leídas de config/captureWindow (admin las programa)
+  let _captureWindowCache = null;
+  async function _updateCaptureDeadlineBanner() {
+    const root = document.getElementById('capture-deadline-banner');
+    if (!root) return;
+    try {
+      if (!_captureWindowCache) {
+        const doc = await db.collection('config').doc('captureWindow').get();
+        _captureWindowCache = doc.exists ? doc.data() : {};
+      }
+      const cfg = _captureWindowCache;
+      const fmtDate = (ts) => {
+        if (!ts) return null;
+        const d = ts.toDate ? ts.toDate() : new Date(ts);
+        return d.toLocaleString('es-MX', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      };
+      const fmtJustDate = (ts) => {
+        if (!ts) return null;
+        const d = ts.toDate ? ts.toDate() : new Date(ts);
+        return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+      };
+      const closesStr = fmtDate(cfg.closesAt);
+      const deliveryStr = fmtJustDate(cfg.deliveryDate);
+      const corrStartStr = fmtJustDate(cfg.correctionsStart);
+      const corrEndStr = fmtJustDate(cfg.correctionsEnd);
+
+      // Si no hay nada configurado, mostrar banner genérico de recordatorio
+      if (!closesStr && !deliveryStr) {
+        root.innerHTML = `
+          <div class="card" style="background:#eff6ff;border-left:5px solid #3182ce;margin-bottom:12px;">
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <span class="material-icons-round" style="color:#3182ce;font-size:28px;">info</span>
+              <div style="flex:1;">
+                <strong style="font-size:14px;color:#1e40af;">Recordatorio importante</strong>
+                <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;color:#1e293b;">
+                  <li><strong>Imprime tus listas</strong> al terminar la captura para recolectar las firmas de los alumnos y entregarlas en Dirección antes de la fecha límite.</li>
+                  <li>Los <strong>cambios de calificación</strong> solo pueden solicitarse durante los <strong>2 días hábiles</strong> posteriores al cierre de captura.</li>
+                </ul>
+              </div>
+            </div>
+          </div>`;
+        return;
+      }
+
+      const items = [];
+      if (closesStr) items.push(`<li>📅 <strong>Cierre de captura:</strong> ${closesStr}</li>`);
+      if (deliveryStr) items.push(`<li>📋 <strong>Entrega de listas firmadas en Dirección:</strong> ${deliveryStr}</li>`);
+      if (corrStartStr && corrEndStr) {
+        items.push(`<li>✏️ <strong>Ventana de cambios de calificación:</strong> del ${corrStartStr} al ${corrEndStr} (días hábiles posteriores al cierre)</li>`);
+      }
+
+      root.innerHTML = `
+        <div class="card" style="background:#fff7ed;border-left:5px solid #d97706;margin-bottom:12px;">
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span class="material-icons-round" style="color:#d97706;font-size:28px;">event</span>
+            <div style="flex:1;">
+              <strong style="font-size:14px;color:#92400e;">Fechas importantes — Recuerda:</strong>
+              <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;color:#1e293b;">
+                ${items.join('')}
+              </ul>
+              <div style="margin-top:8px;font-size:12px;color:#78350f;font-style:italic;">
+                Imprime tus listas para recolectar las firmas de los alumnos y entrégalas en Dirección antes de la fecha límite.
+              </div>
+            </div>
+          </div>
+        </div>`;
+    } catch (e) {
+      console.warn('captureWindow banner:', e.message);
+    }
+  }
+
+  // Banner de alumnos en riesgo por faltas (solo pantalla, no imprime)
+  function _updateRiskBanner() {
+    const container = document.getElementById('risk-banner-faltas');
+    if (!container) return;
+
+    const totalEl = document.getElementById('horas-total');
+    const totalHoras = totalEl ? (parseInt(totalEl.textContent) || 0) : 0;
+
+    if (totalHoras === 0) {
+      container.innerHTML = `<div class="risk-banner risk-info">
+        <span class="material-icons-round">info</span>
+        <div>
+          <strong>Captura primero las horas impartidas</strong> de este parcial para que el sistema te avise de alumnos en riesgo de extraordinario por faltas.
+        </div>
+      </div>`;
+      return;
+    }
+
+    const RIESGO = 20, ALERTA = 15;
+    const danger = [], warning = [];
+    document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+      const faltasInput = row.querySelector('input[data-field="faltas"]');
+      if (!faltasInput) return;
+      const faltas = parseInt(faltasInput.value);
+      if (isNaN(faltas) || faltas <= 0) return;
+      const pct = (faltas * 100) / totalHoras;
+      if (pct < ALERTA) return;
+      const nombre = row.querySelector('.cell-name')?.textContent.trim() || '';
+      const item = { nombre, faltas, pct };
+      if (pct > RIESGO) danger.push(item);
+      else warning.push(item);
+    });
+
+    if (danger.length === 0 && warning.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+
+    const chip = (s, lvl) => `<span class="risk-chip risk-chip-${lvl}">
+      <strong>${Utils.sanitize(s.nombre)}</strong>
+      <em>${s.faltas} faltas · ${s.pct.toFixed(1)}%</em>
+    </span>`;
+
+    const dangerSection = danger.length > 0 ? `
+      <div class="risk-section">
+        <div class="risk-section-title">
+          <span class="material-icons-round" style="color:#b91c1c;font-size:18px;vertical-align:middle;">block</span>
+          <strong>${danger.length} en riesgo de EXTRAORDINARIO</strong>
+          (más del 20% de faltas — pierden derecho a calificación ordinaria)
+        </div>
+        <div class="risk-chips">${danger.map(s => chip(s, 'danger')).join('')}</div>
+      </div>` : '';
+
+    const warningSection = warning.length > 0 ? `
+      <div class="risk-section">
+        <div class="risk-section-title">
+          <span class="material-icons-round" style="color:#b45309;font-size:18px;vertical-align:middle;">warning</span>
+          <strong>${warning.length} en alerta</strong>
+          (entre 15% y 20% de faltas — atención cercana)
+        </div>
+        <div class="risk-chips">${warning.map(s => chip(s, 'warning')).join('')}</div>
+      </div>` : '';
+
+    const headerLevel = danger.length > 0 ? 'danger' : 'warning';
+    container.innerHTML = `<div class="risk-banner risk-${headerLevel}">
+      <span class="material-icons-round risk-banner-icon">priority_high</span>
+      <div class="risk-banner-body">
+        <div class="risk-banner-title">⚠ Atención: alumnos en riesgo por faltas</div>
+        <div class="risk-banner-msg">Profesor(a), revise estos alumnos. Con más del 20% de faltas pierden derecho a calificación ordinaria según reglamento.</div>
+        ${dangerSection}
+        ${warningSection}
+      </div>
+    </div>`;
+  }
+
+  // Debounced wrapper para no recalcular en cada tecla
+  let _riskBannerTimer = null;
+  function _scheduleRiskBannerUpdate() {
+    if (_riskBannerTimer) clearTimeout(_riskBannerTimer);
+    _riskBannerTimer = setTimeout(_updateRiskBanner, 250);
+  }
+
   function _updateStats() {
     const rows = document.querySelectorAll('tbody tr[data-student-id]');
     const cals = [];
@@ -1316,6 +2011,7 @@ const GradesModule = (function () {
   }
 
   function switchPartial(partialId) {
+    if (!_canLeaveEditor()) return;
     if (_isDirty) {
       if (!confirm('Tienes cambios sin guardar en este parcial. ¿Deseas cambiar sin guardar?')) return;
     }
@@ -1324,15 +2020,42 @@ const GradesModule = (function () {
     openGradeEditor(null, selectedGroup, selectedSubject);
   }
 
+  // SAFETY: si _isSaving lleva más de 60s en true, asume cuelgue y resetea.
+  // Esto evita que el botón se quede en "Guardando..." para siempre si una
+  // excepción no controlada deja el flag pegado.
+  let _saveStartedAt = 0;
+
   async function saveGrades() {
-    // ═══ PREVENT DOUBLE-CLICK ═══
-    if (_isSaving) return;
+    // ═══ PREVENT DOUBLE-CLICK + AUTO-RESCUE DE GUARDADO ATASCADO ═══
+    if (_isSaving) {
+      const stuckSeconds = (Date.now() - _saveStartedAt) / 1000;
+      if (stuckSeconds < 60) {
+        console.warn('[saveGrades] ya hay un guardado en curso desde hace', stuckSeconds.toFixed(1), 's');
+        return;
+      }
+      // Lleva más de 60s. Asumimos cuelgue y reseteamos.
+      console.warn('[saveGrades] auto-rescue: _isSaving llevaba', stuckSeconds.toFixed(0), 's atascado. Reseteando.');
+      _isSaving = false;
+      const stuckBtn = document.querySelector('[data-action="save-grades"]');
+      if (stuckBtn) {
+        stuckBtn.disabled = false;
+        stuckBtn.innerHTML = '<span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">save</span>Guardar';
+      }
+      Toast.show('El guardado anterior se quedó atorado. Reseteado. Intenta otra vez.', 'warning');
+      return;
+    }
 
     const saveBtn = document.querySelector('[data-action="save-grades"]');
 
     // ═══ CHECK NETWORK CONNECTIVITY ═══
     if (!navigator.onLine) {
       Toast.show('Sin conexión a internet. Verifica tu red e intenta de nuevo.', 'error');
+      return;
+    }
+
+    // ═══ VALIDAR HORAS IMPARTIDAS (obligatorio salvo cuando la lista se guarda en blanco) ═══
+    if (_isTeacherCaptureRole() && !_listCleared && !_hasRequiredHoras()) {
+      _showHorasRequiredReminder();
       return;
     }
 
@@ -1402,22 +2125,75 @@ const GradesModule = (function () {
       return;
     }
 
+    let failureIncidentReports = [];
+    try {
+      failureIncidentReports = await _collectRequiredFailureIncidents(rubros);
+      if (failureIncidentReports === null) return;
+    } catch (error) {
+      console.error('Error verificando incidencias de reprobación:', error);
+      Toast.show('No se pudieron revisar las incidencias obligatorias. Intenta de nuevo.', 'error');
+      return;
+    }
+
     // ═══ LOCK UI DURING SAVE ═══
     _isSaving = true;
+    _saveStartedAt = Date.now();
     const origBtnText = saveBtn?.innerHTML || '';
     if (saveBtn) {
       saveBtn.disabled = true;
       saveBtn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:18px;vertical-align:middle;margin-right:4px;">autorenew</span>Guardando...';
     }
 
+    // SAFETY: si después de 45 segundos seguimos atorados, forzar reset.
+    // Evita el caso "se queda eterno" reportado en producción.
+    const safetyTimer = setTimeout(() => {
+      if (_isSaving) {
+        console.error('[saveGrades] SAFETY TIMEOUT: 45s sin terminar. Forzando reset.');
+        _isSaving = false;
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
+        Toast.show('El guardado se tardó demasiado. Se canceló. Verifica tu internet y vuelve a intentar.', 'error');
+      }
+    }, 45000);
+
+    // ENVOLVER TODO EL SAVE EN TRY/FINALLY GLOBAL
+    // Garantiza que _isSaving y el botón SIEMPRE se liberen, sin importar
+    // qué excepción se lance dentro.
+    try {
     // ═══ BUILD BATCH (only changed rows) ═══
     const batch = db.batch();
     let count = 0;
+    let incidentCount = 0;
 
     document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
       const studentId = row.dataset.studentId;
       const key = `${studentId}_${selectedSubject}_${currentPartial}`;
       const stored = grades[key] || {};
+
+      if (_listCleared) {
+        const hasStoredGrade = rubros.some(r => stored[r.key] !== undefined)
+          || stored.faltas !== undefined
+          || stored.suma !== undefined
+          || stored.cal !== undefined
+          || stored.value !== undefined;
+        if (hasStoredGrade) {
+          const clearedData = {
+            studentId,
+            subjectId: selectedSubject,
+            groupId: selectedGroup,
+            partial: currentPartial,
+            updatedAt: new Date(),
+            updatedBy: auth.currentUser.uid,
+            suma: firebase.firestore.FieldValue.delete(),
+            cal: firebase.firestore.FieldValue.delete(),
+            value: firebase.firestore.FieldValue.delete(),
+            faltas: firebase.firestore.FieldValue.delete()
+          };
+          rubros.forEach(r => { clearedData[r.key] = firebase.firestore.FieldValue.delete(); });
+          batch.set(db.collection('grades').doc(key), clearedData, { merge: true });
+          count++;
+        }
+        return;
+      }
 
       let hasData = false;
       let hasChanges = false;
@@ -1464,12 +2240,62 @@ const GradesModule = (function () {
       }
     });
 
+    const currentList = _getCurrentListLabel();
+    failureIncidentReports.forEach(report => {
+      const ref = db.collection('incidents').doc(_failureIncidentDocId(report.studentId));
+      batch.set(ref, {
+        studentId: report.studentId,
+        groupId: selectedGroup,
+        turno: currentTurno,
+        type: 'academica',
+        incidentKind: 'reprobación',
+        requiredBy: 'grade-save',
+        title: `Reprobación en ${currentList.subjectName}`,
+        description: report.reason,
+        subjectId: selectedSubject,
+        subjectName: currentList.subjectName,
+        partial: currentPartial,
+        partialName: currentList.partialName,
+        grade: report.cal,
+        suma: report.suma,
+        date: new Date(),
+        status: 'activa',
+        reportedBy: App.currentUser?.displayName || App.currentUser?.email || '',
+        reportedByUid: auth.currentUser.uid,
+        updatedAt: new Date(),
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      incidentCount++;
+    });
+
+    const horasData = _getHorasData();
+    if (Object.keys(horasData).length > 0) {
+      const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
+      batch.set(db.collection('teacherHours').doc(horasDocId), {
+        ...horasData,
+        groupId: selectedGroup,
+        subjectId: selectedSubject,
+        partial: currentPartial,
+        updatedBy: auth.currentUser.uid,
+        updatedAt: new Date()
+      }, { merge: true });
+    }
+
     // Nothing to save?
-    if (count === 0) {
-      _isSaving = false;
-      if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
-      _markClean();
-      Toast.show('No hay cambios que guardar', 'info');
+    if (count === 0 && incidentCount === 0) {
+      try {
+        const horasSaved = await _saveHorasData(horasData);
+        _listCleared = false;
+        _hideClearPendingNotice();
+        _markClean();
+        Toast.show(horasSaved ? 'Horas impartidas guardadas' : 'No hay cambios que guardar', horasSaved ? 'success' : 'info');
+      } catch (error) {
+        console.warn('Error saving horas:', error);
+        Toast.show('Error al guardar horas impartidas. Intenta de nuevo.', 'error');
+      } finally {
+        _isSaving = false;
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
+      }
       return;
     }
 
@@ -1480,13 +2306,26 @@ const GradesModule = (function () {
 
     while (attempt <= maxRetries && !success) {
       try {
-        await batch.commit();
+        // TIMEOUT 20 segundos — si el commit tarda más, lanzamos error y entramos al retry
+        const commitWithTimeout = Promise.race([
+          batch.commit(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout: el guardado tardó más de 20 segundos. Verifica tu internet.')), 20000))
+        ]);
+        await commitWithTimeout;
         success = true;
         // Update local grades cache so next save detects changes correctly
         document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
           const sid = row.dataset.studentId;
           const k = `${sid}_${selectedSubject}_${currentPartial}`;
           if (!grades[k]) grades[k] = {};
+          if (_listCleared) {
+            rubros.forEach(r => { delete grades[k][r.key]; });
+            delete grades[k].faltas;
+            delete grades[k].suma;
+            delete grades[k].cal;
+            delete grades[k].value;
+            return;
+          }
           rubros.forEach(r => {
             const input = row.querySelector(`input[data-field="${r.key}"]`);
             if (input && input.value.trim() !== '') grades[k][r.key] = parseFloat(input.value);
@@ -1511,9 +2350,15 @@ const GradesModule = (function () {
       }
     }
 
-    // ═══ SUCCESS — unlock UI immediately, fire-and-forget horas + audit ═══
+    // ═══ SUCCESS — unlock UI immediately, audit in background ═══
+    const wasListCleared = _listCleared;
     Store.invalidateGradesForGroup(selectedGroup);
     Store.invalidate('allGrades');
+    if (typeof Store.invalidateTeacherHours === 'function') Store.invalidateTeacherHours();
+    _assignmentStatusCache = {};
+    _assignmentStatusForPartial = null;
+    _listCleared = false;
+    _hideClearPendingNotice();
     _markClean();
     _isSaving = false;
     if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
@@ -1523,40 +2368,86 @@ const GradesModule = (function () {
       setTimeout(() => saveBtn.classList.remove('btn-save-success'), 2000);
     }
 
-    Toast.show(`${count} calificaciones guardadas`, 'success');
+    const successParts = [];
+    if (wasListCleared) successParts.push(`${count} registros dejados en blanco`);
+    else if (count > 0) successParts.push(`${count} calificaciones guardadas`);
+    if (incidentCount > 0) successParts.push(`${incidentCount} incidencias registradas`);
+    Toast.show(successParts.length ? successParts.join(' y ') : 'Cambios guardados', 'success');
 
-    // Save horas + audit in background (don't block UI)
-    const horasData = _getHorasData();
-    if (Object.keys(horasData).length > 0) {
-      const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
-      db.collection('teacherHours').doc(horasDocId).set({
-        ...horasData, groupId: selectedGroup, subjectId: selectedSubject,
-        partial: currentPartial, updatedBy: auth.currentUser.uid, updatedAt: new Date()
-      }, { merge: true }).catch(e => console.warn('Error saving horas:', e));
-    }
+    // Audit in background (don't block UI)
     const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
-    DB.audit('editar', 'calificacion', `${selectedGroup}_${selectedSubject}_${currentPartial}`, {
+    DB.audit('editar', 'calificación', `${selectedGroup}_${selectedSubject}_${currentPartial}`, {
       description: `${count} calificaciones guardadas: ${asg?.subjectName || selectedSubject} · ${asg?.groupName || selectedGroup} · ${currentPartial}`,
-      extra: { groupId: selectedGroup, subjectId: selectedSubject, partial: currentPartial, count }
+      extra: { groupId: selectedGroup, subjectId: selectedSubject, partial: currentPartial, count, incidentCount }
     });
+    } catch (fatalError) {
+      // CATCH GLOBAL — captura cualquier excepción no manejada
+      console.error('[saveGrades] FATAL ERROR no manejado:', fatalError);
+      Toast.show('Error inesperado: ' + (fatalError?.message || 'desconocido') + '. Tus datos siguen en pantalla, intenta otra vez.', 'error');
+      try { _saveDraft(); } catch (_) {}
+    } finally {
+      // FINALLY GLOBAL — SIEMPRE libera el lock y restaura el botón
+      clearTimeout(safetyTimer);
+      _isSaving = false;
+      _saveStartedAt = 0;
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        // Solo restaurar texto si seguimos en "Guardando..." (no pisar otro estado)
+        if (saveBtn.innerHTML.includes('Guardando')) {
+          saveBtn.innerHTML = origBtnText || '<span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">save</span>Guardar';
+        }
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
   // PRINT — Formato Oficial v13 (Control Parcial)
   // ═══════════════════════════════════════════════════════════════
 
+  // Script de impresión: shrink-to-fit en celdas de nombre + window.print().
+  //
+  // NOTA HISTÓRICA: en v6.02 había un auto-fit con `zoom` para forzar 1 hoja.
+  // El `zoom` NO propaga al output de impresión de Chrome, así que recortaba
+  // alumnos (reportado por maestros 2026-05-10). NUNCA volver a usar zoom.
+  //
+  // BAJO NINGUNA CIRCUNSTANCIA se permite cortar el nombre de un alumno
+  // (reportado 2026-05-11). Por eso este script, antes de imprimir, mide
+  // cada celda `.nm` (apellidos, nombre) y, si el texto natural excede el
+  // ancho de la celda, REDUCE EL FONT-SIZE de esa celda específica en pasos
+  // de 0.3px hasta que quepa. Solo afecta la celda en cuestión, las demás
+  // (rubros, suma, calificación) mantienen su font. Si aún al mínimo legible
+  // el texto sobresale, se permite overflow visible (preferimos overlap a
+  // truncar). Funciona para grades.js y my-f1.js — ambos usan clase `.nm`.
+  const _PRINT_TRIGGER_SCRIPT = '<script>(function(){function shrinkNameCells(){document.querySelectorAll(".MT td.nm").forEach(function(td){if(td.scrollWidth<=td.clientWidth+1)return;var cur=parseFloat(getComputedStyle(td).fontSize);var min=5;var step=0.3;var guard=80;while(td.scrollWidth>td.clientWidth+1&&cur>min&&guard-->0){cur-=step;td.style.fontSize=cur+"px";}if(td.scrollWidth>td.clientWidth+1)td.style.overflow="visible";});}window.addEventListener("load",function(){setTimeout(function(){shrinkNameCells();window.print();},300);});})();<\/script>';
+
   function _buildOfficialPrintHTML(studentsList, gradeData, meta) {
     const { teacherName, subjectName, groupName, groupNum, grado, turno, parcialNum, parcialText, semText, orientador, horas } = meta;
     const horasData = horas || {};
     const n = studentsList.length;
 
-    // Dynamic font sizing based on student count
-    let fs;
-    if (n <= 30) { fs = '9pt'; }
-    else if (n <= 38) { fs = '8.5pt'; }
-    else if (n <= 45) { fs = '8pt'; }
-    else if (n <= 52) { fs = '7.5pt'; }
-    else { fs = '7pt'; }
+    // El turno MATUTINO no contempla Examen Parcial como rubro — solo se usa
+    // Evaluación Continua + Transversal + Punto Extra. Por eso ocultamos esa
+    // columna en la impresión del control para no mostrar campos vacíos que
+    // confundirían al docente al firmar. En VESPERTINO sí va incluida.
+    const isMatutino = String(turno || '').toUpperCase() === 'MATUTINO';
+
+    // Dynamic font sizing — más generoso porque el layout rediseñado libera
+    // ~15mm de altura útil para la tabla (bloque inferior compacto, márgenes
+    // ajustados, header denso). Disponible para filas: ~225mm.
+    //
+    // PRIORIDAD ABSOLUTA (recordatorio): ningún alumno se pierde NUNCA. Si por
+    // número extremo de alumnos no entra al font mínimo, se permite 2da hoja
+    // con thead repetido. JAMÁS overflow:hidden ni zoom (recortaban alumnos).
+    let fs, headerFs;
+    if (n <= 25)      { fs = '11pt';   headerFs = '9pt';   }
+    else if (n <= 32) { fs = '10.5pt'; headerFs = '9pt';   }
+    else if (n <= 40) { fs = '10pt';   headerFs = '8.5pt'; }
+    else if (n <= 48) { fs = '9pt';    headerFs = '8pt';   }
+    else if (n <= 55) { fs = '8.5pt';  headerFs = '7.5pt'; }
+    else if (n <= 62) { fs = '8pt';    headerFs = '7pt';   }
+    else if (n <= 70) { fs = '7.5pt';  headerFs = '6.8pt'; }
+    else if (n <= 80) { fs = '7pt';    headerFs = '6.5pt'; }
+    else              { fs = '6.5pt';  headerFs = '6.2pt'; }
 
     let rows = '';
     let aprobados = 0, reprobados = 0, totalCalif = 0, gradedCount = 0;
@@ -1593,7 +2484,7 @@ const GradesModule = (function () {
         '<td class="nm">' + Utils.sanitize(nom) + '</td>' +
         '<td class="c">' + ec + '</td>' +
         '<td class="c">' + tr + '</td>' +
-        '<td class="c">' + ep + '</td>' +
+        (isMatutino ? '' : '<td class="c">' + ep + '</td>') +
         '<td class="c">' + pe + '</td>' +
         '<td class="c">' + sm + '</td>' +
         '<td class="c">' + fa + '</td>' +
@@ -1612,64 +2503,91 @@ const GradesModule = (function () {
 
     return `
 <style>
+/* Márgenes mínimos para máxima altura útil: 4mm top, 3mm bottom, 5mm laterales.
+   Sigue siendo cómodo para impresoras estándar y maximiza espacio para alumnos. */
 @page { size: letter portrait; margin: 4mm 5mm 3mm 5mm; }
-html, body { margin:0; padding:0; height:100%; }
+html, body { margin:0; padding:0; }
 * { box-sizing:border-box; margin:0; padding:0; }
 
-/* ═══ FLEX PAGE LAYOUT — llena la hoja completa ═══ */
+/* ═══ PAGE LAYOUT ═══
+   PRIORIDAD ABSOLUTA: ver a TODOS los alumnos. NUNCA overflow:hidden ni
+   altura fija (v6.02 lo tuvo y recortaba). El font sizing dinámico (arriba)
+   busca caber en 1 hoja, pero si físicamente no cabe va a 2da hoja con
+   thead repetido — jamás perder un alumno. */
 .PG {
-    width:100%; height:100vh;
-    font-family:Arial,Helvetica,sans-serif; color:#000; line-height:1.1;
-    font-size:7pt;
-    display:flex; flex-direction:column;
-    overflow:hidden;
+    width:100%;
+    font-family:Arial,Helvetica,sans-serif; color:#000; line-height:1.05;
+    font-size:${fs};
 }
 .PG table { border-collapse:collapse; }
 
-.PG-hdr, .PG-ttl, .PG-nfo, .PG-bot, .PG-ftr { flex-shrink:0; flex-grow:0; }
-.PG-data { flex:1; overflow:hidden; display:flex; flex-direction:column; }
+@media screen {
+    body { background: #e2e8f0; padding: 16px 0; }
+    .PG { background: #fff; max-width: 215mm; min-height: 270mm; margin: 0 auto; padding: 4mm 5mm; box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
+}
 
-.hdr-t { width:100%; margin-bottom:0.3mm; }
+@media print {
+    .MT { page-break-inside: auto; }
+    .MT tr { page-break-inside: avoid; page-break-after: auto; }
+    .MT thead { display: table-header-group; }
+    .PG-bot, .PG-ftr { page-break-inside: avoid; }
+}
+
+/* Header: dirección general (derecha) + logo (izquierda). Mínimo. */
+.hdr-t { width:100%; margin-bottom:0; }
 .hdr-t td { vertical-align:middle; padding:0; }
-.hdr-t img { height:6.5mm; width:auto; }
-.hdr-r { text-align:right; font-size:6pt; line-height:1.25; color:#333; }
+.hdr-t img { height:5.5mm; width:auto; }
+.hdr-r { text-align:right; font-size:6pt; line-height:1.15; color:#333; }
 
-.ttl-esc { text-align:center; font-weight:bold; font-size:9pt; line-height:1.1; }
-.ttl-ctrl { text-align:center; font-weight:bold; font-size:8pt; line-height:1; margin:0.3mm 0;
-    border-bottom:0.5pt solid #000; padding-bottom:0.3mm; }
+/* Título de la escuela y del control. Mínimo. */
+.ttl-esc { text-align:center; font-weight:bold; font-size:9.5pt; line-height:1.05; }
+.ttl-ctrl { text-align:center; font-weight:bold; font-size:8.5pt; line-height:1; margin:0;
+    border-bottom:0.5pt solid #000; padding-bottom:0.2mm; }
 
-.nfo { width:100%; font-size:7pt; line-height:1.15; }
-.nfo td { border:0.4pt solid #000; padding:0.4mm 0.8mm; height:3.5mm; vertical-align:middle; }
-.nfo .lb { font-size:6.5pt; color:#333; }
-.nfo .vl { font-weight:bold; font-size:7pt; }
-.nfo .sm { text-align:center; font-weight:bold; font-size:7.5pt; line-height:1.15; }
+/* Info docente: padding ultra reducido. */
+.nfo { width:100%; font-size:7.5pt; line-height:1.1; margin-top:0.2mm; }
+.nfo td { border:0.5pt solid #000; padding:0.2mm 0.8mm; vertical-align:middle; }
+.nfo .lb { font-size:6.5pt; color:#444; }
+.nfo .vl { font-weight:bold; font-size:7.5pt; }
+.nfo .sm { text-align:center; font-weight:bold; font-size:8pt; line-height:1.1; }
 
-.MT { width:100%; height:100%; table-layout:fixed; font-size:${fs}; line-height:1; }
-.MT th { border:0.5pt solid #000; padding:0.2mm; text-align:center; font-weight:bold; font-size:6pt;
+/* Tabla principal de alumnos. Line-height más ajustado y padding mínimo
+   para empacar más filas sin tocar el font (legibilidad intacta). */
+.MT { width:100%; table-layout:fixed; font-size:${fs}; line-height:1.0; margin-top:0.3mm; }
+.MT th { border:0.5pt solid #000; padding:0.3mm 0.3mm; text-align:center; font-weight:bold; font-size:${headerFs};
     background:#000; color:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact;
-    line-height:1.1; vertical-align:middle; height:5mm; }
-.MT td { border:0.4pt solid #000; font-size:${fs}; line-height:1;
-    padding:0 0.4mm; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; vertical-align:middle; }
-.MT .c { text-align:center; padding:0; }
-.MT .nm { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    line-height:1.05; vertical-align:middle; }
+.MT td { border:0.4pt solid #000; font-size:${fs}; line-height:1.0;
+    padding:0.15mm 0.3mm; overflow:hidden; white-space:nowrap; vertical-align:middle; }
+.MT .c { text-align:center; padding:0.15mm 0; }
+/* La celda del nombre/apellidos NUNCA corta el texto. El script de print
+   reduce el font solo de esta celda hasta que el texto completo quepa. */
+.MT .nm { overflow:hidden; white-space:nowrap; padding-left:1mm; }
 
-.ST td { border:0.4pt solid #000; padding:0.25mm 0.6mm; font-size:7pt; line-height:1.1; height:2.6mm; }
-.ST .sl { font-weight:bold; }
-.ST .sv { text-align:center; font-weight:bold; font-size:7.5pt; width:10mm; }
-.HT td { border:0.4pt solid #000; padding:0.25mm 0.4mm; font-size:7pt; text-align:center; line-height:1.1; height:2.6mm; }
-.HT .hl { font-weight:bold; font-size:6.5pt; }
-.HT .hv { font-weight:bold; font-size:7.5pt; }
-.HT .ht { font-weight:bold; font-size:6pt; }
+/* Stats inferiores en horizontal — compacto al máximo. */
+.ST-row { width:100%; border-collapse:collapse; margin-top:0.3mm; }
+.ST-row td { border:0.4pt solid #000; padding:0.2mm 1mm; text-align:center; vertical-align:middle; }
+.ST-row .lb { font-size:5.8pt; color:#555; font-weight:600; text-transform:uppercase; line-height:1.05; }
+.ST-row .vl { font-size:8.5pt; font-weight:bold; line-height:1; }
 
-.SG-tbl { width:100%; border-collapse:collapse; }
-.SG-tbl td { width:25%; text-align:center; padding:0 1.5mm; }
-.SG-tbl .sg-line-row td { vertical-align:bottom; border-bottom:0.5pt solid #000; height:1mm; }
-.SG-tbl .sg-text-row td { vertical-align:top; padding-top:0.3mm; }
-.SG-tt { font-weight:bold; font-size:7pt; line-height:1.15; }
-.SG-nm { font-size:6.5pt; line-height:1.15; }
+/* Horas impartidas. */
+.HT { width:100%; border-collapse:collapse; margin-top:0.3mm; }
+.HT td { border:0.4pt solid #000; padding:0.2mm 0.4mm; text-align:center; line-height:1.0; }
+.HT .hl { font-weight:bold; font-size:5.8pt; color:#444; }
+.HT .hv { font-weight:bold; font-size:7pt; }
+.HT .ht { font-weight:bold; font-size:5.8pt; line-height:1.05; }
 
-.ftr img { width:100%; max-height:3mm; display:block; }
-.ftr-t { text-align:center; font-size:5.5pt; color:#333; line-height:1; margin-top:0.1mm; }
+/* Firmas: ya no tienen margin top exagerado — pegadas al bloque de horas. */
+.SG-tbl { width:100%; border-collapse:collapse; margin-top:0.5mm; }
+.SG-tbl td { width:25%; text-align:center; padding:0 1.5mm; vertical-align:bottom; }
+.SG-tbl .sg-line-row td { border-bottom:0.5pt solid #000; height:4mm; }
+.SG-tbl .sg-text-row td { vertical-align:top; padding-top:0.2mm; }
+.SG-tt { font-weight:bold; font-size:6.5pt; line-height:1.05; }
+.SG-nm { font-size:5.8pt; line-height:1.1; }
+
+/* Footer: logo de la cinta del Estado más bajo. */
+.ftr img { width:100%; max-height:2mm; display:block; }
+.ftr-t { text-align:center; font-size:5pt; color:#333; line-height:1; margin-top:0; }
 </style>
 
 <div class="PG">
@@ -1715,19 +2633,24 @@ html, body { margin:0; padding:0; height:100%; }
 <div class="PG-data">
 <table class="MT">
     <colgroup>
-        <col style="width:3%"><col style="width:10%"><col style="width:10%"><col style="width:13%">
-        <col style="width:6%"><col style="width:5.5%"><col style="width:5.5%"><col style="width:4.5%">
-        <col style="width:5%"><col style="width:4.5%"><col style="width:6%"><col style="width:7%">
+        ${isMatutino
+          ? '<col style="width:3%"><col style="width:11%"><col style="width:11%"><col style="width:15%">' +
+            '<col style="width:8%"><col style="width:7%"><col style="width:7%">' +
+            '<col style="width:7%"><col style="width:6%"><col style="width:8%"><col style="width:7%">'
+          : '<col style="width:3%"><col style="width:10%"><col style="width:10%"><col style="width:13%">' +
+            '<col style="width:6%"><col style="width:5.5%"><col style="width:5.5%"><col style="width:4.5%">' +
+            '<col style="width:5%"><col style="width:4.5%"><col style="width:6%"><col style="width:7%">'
+        }
     </colgroup>
     <thead><tr>
         <th>No.</th>
         <th>Apellido Paterno</th>
         <th>Apellido Materno</th>
         <th>Nombre(s)</th>
-        <th>Eval.<br>Continua</th>
-        <th>Trans-<br>versal</th>
-        <th>Examen<br>Parcial</th>
-        <th>Ptje.<br>Extra</th>
+        <th>Evaluación<br>Continua</th>
+        <th>Transversal</th>
+        ${isMatutino ? '' : '<th>Examen<br>Parcial</th>'}
+        <th>Punto<br>Extra</th>
         <th>Suma</th>
         <th>Faltas</th>
         <th>Cal.<br>Definitiva</th>
@@ -1737,62 +2660,62 @@ html, body { margin:0; padding:0; height:100%; }
 </table>
 </div>
 
-<!-- ═══ ESTADÍSTICAS + FIRMAS (fijo) ═══ -->
+<!-- ═══ ESTADÍSTICAS + FIRMAS (compacto en horizontal) ═══ -->
 <div class="PG-bot">
-<table style="width:100%; border-collapse:collapse; margin-top:0.3mm;">
-    <tr>
-        <td style="width:28%; vertical-align:top; padding:0;">
-            <table class="ST" style="width:100%; border-collapse:collapse;">
-                <tr><td class="sl">No. de Alumnos Inscritos</td><td class="sv">${inscritos}</td></tr>
-                <tr><td class="sl">Bajas Durante el Semestre</td><td class="sv">0</td></tr>
-                <tr><td class="sl">Existencia</td><td class="sv">${existencia}</td></tr>
-                <tr><td class="sl">No. de Alumnos Aprobados</td><td class="sv">${aprobados}</td></tr>
-                <tr><td class="sl">No. de Alumnos Reprobados</td><td class="sv">${reprobados}</td></tr>
-                <tr><td class="sl">Porcentaje de Aprobados</td><td class="sv">${pctAprob}</td></tr>
-                <tr><td class="sl">Promedio del Grupo</td><td class="sv">${promedio}</td></tr>
-            </table>
-            <table class="HT" style="width:100%; border-collapse:collapse; margin-top:0.3mm;">
-                <tr>
-                    <td class="ht" rowspan="2" style="width:12mm;">Horas<br>Impartidas</td>
-                    <td class="hl">Febrero</td><td class="hl">Marzo</td><td class="hl">Abril</td>
-                    <td class="hl">Mayo</td><td class="hl">Junio</td><td class="hl">Julio</td>
-                    <td class="hl" style="font-weight:bold">Total</td>
-                </tr>
-                <tr>
-                    <td class="hv">${horasData.febrero || ''}</td><td class="hv">${horasData.marzo || ''}</td><td class="hv">${horasData.abril || ''}</td>
-                    <td class="hv">${horasData.mayo || ''}</td><td class="hv">${horasData.junio || ''}</td><td class="hv">${horasData.julio || ''}</td>
-                    <td class="hv" style="font-weight:bold">${[horasData.febrero,horasData.marzo,horasData.abril,horasData.mayo,horasData.junio,horasData.julio].reduce((s,v) => s + (parseInt(v) || 0), 0) || ''}</td>
-                </tr>
-            </table>
-        </td>
 
-        <td style="width:72%; vertical-align:bottom; padding:0 0 0 1.5mm;">
-            <table class="SG-tbl">
-                <tr class="sg-line-row">
-                    <td></td><td></td><td></td><td></td>
-                </tr>
-                <tr class="sg-text-row">
-                    <td>
-                        <div class="SG-tt">FIRMA DEL PROFESOR</div>
-                        <div class="SG-nm">${Utils.sanitize(Utils.displayName(teacherName))}</div>
-                    </td>
-                    <td>
-                        <div class="SG-tt">FIRMA DEL ORIENTADOR</div>
-                        <div class="SG-nm">${Utils.sanitize(orientador)}</div>
-                    </td>
-                    <td>
-                        <div class="SG-tt">VO. BO. SUBDIRECCIÓN ESCOLAR</div>
-                        <div class="SG-nm">${Utils.sanitize(App.staffName('subdirector'))}</div>
-                    </td>
-                    <td>
-                        <div class="SG-tt">REVISADO POR SECRETARÍA ESCOLAR</div>
-                        <div class="SG-nm">${Utils.sanitize(App.staffName('secretario'))}</div>
-                    </td>
-                </tr>
-            </table>
+<!-- 7 stats en 1 sola fila horizontal: ocupa ~5mm en lugar de ~14mm verticales -->
+<table class="ST-row">
+    <tr>
+        <td><div class="lb">Inscritos</div><div class="vl">${inscritos}</div></td>
+        <td><div class="lb">Bajas</div><div class="vl">0</div></td>
+        <td><div class="lb">Existencia</div><div class="vl">${existencia}</div></td>
+        <td><div class="lb">Aprobados</div><div class="vl">${aprobados}</div></td>
+        <td><div class="lb">Reprobados</div><div class="vl">${reprobados}</div></td>
+        <td><div class="lb">% Aprobados</div><div class="vl">${pctAprob || '—'}</div></td>
+        <td><div class="lb">Promedio</div><div class="vl">${promedio || '—'}</div></td>
+    </tr>
+</table>
+
+<!-- Horas impartidas (1 línea, sin label "Horas Impartidas" que ahorra espacio) -->
+<table class="HT">
+    <tr>
+        <td class="ht" rowspan="2" style="width:18mm;">HORAS<br>IMPARTIDAS</td>
+        <td class="hl">Febrero</td><td class="hl">Marzo</td><td class="hl">Abril</td>
+        <td class="hl">Mayo</td><td class="hl">Junio</td><td class="hl">Julio</td>
+        <td class="hl" style="font-weight:bold">Total</td>
+    </tr>
+    <tr>
+        <td class="hv">${horasData.febrero || ''}</td><td class="hv">${horasData.marzo || ''}</td><td class="hv">${horasData.abril || ''}</td>
+        <td class="hv">${horasData.mayo || ''}</td><td class="hv">${horasData.junio || ''}</td><td class="hv">${horasData.julio || ''}</td>
+        <td class="hv" style="font-weight:bold">${[horasData.febrero,horasData.marzo,horasData.abril,horasData.mayo,horasData.junio,horasData.julio].reduce((s,v) => s + (parseInt(v) || 0), 0) || ''}</td>
+    </tr>
+</table>
+
+<!-- Firmas (4 columnas, líneas y nombres) -->
+<table class="SG-tbl">
+    <tr class="sg-line-row">
+        <td></td><td></td><td></td><td></td>
+    </tr>
+    <tr class="sg-text-row">
+        <td>
+            <div class="SG-tt">FIRMA DEL PROFESOR</div>
+            <div class="SG-nm">${Utils.sanitize(Utils.displayName(teacherName))}</div>
+        </td>
+        <td>
+            <div class="SG-tt">FIRMA DEL ORIENTADOR</div>
+            <div class="SG-nm">${Utils.sanitize(orientador)}</div>
+        </td>
+        <td>
+            <div class="SG-tt">VO. BO. SUBDIRECCIÓN ESCOLAR</div>
+            <div class="SG-nm">${Utils.sanitize(App.staffName('subdirector'))}</div>
+        </td>
+        <td>
+            <div class="SG-tt">DIRECCIÓN ESCOLAR</div>
+            <div class="SG-nm">${Utils.sanitize(App.staffName('director'))}</div>
         </td>
     </tr>
 </table>
+
 </div>
 
 <!-- ═══ FOOTER (fijo) ═══ -->
@@ -1864,8 +2787,140 @@ html, body { margin:0; padding:0; height:100%; }
     const printWindow = window.open('', '_blank');
     printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Control Parcial - ' +
       Utils.sanitize(groupName) + ' - ' + Utils.sanitize(subjectName) + '</title></head><body>' +
-      html + '<script>setTimeout(()=>window.print(),400)<\/script></body></html>');
+      html + _PRINT_TRIGGER_SCRIPT + '</body></html>');
     printWindow.document.close();
+  }
+
+  async function _printSelectedAssignments(printAll) {
+    const partialId = document.getElementById('bulk-print-partial')?.value || currentPartial;
+    let assignmentIds = [];
+
+    if (printAll) {
+      assignmentIds = _orderedAssignments().map(a => a.id);
+    } else {
+      assignmentIds = [...document.querySelectorAll('.bulk-print-check:checked')]
+        .map(input => input.value)
+        .filter(Boolean);
+    }
+
+    await printMultipleAssignments(assignmentIds, partialId);
+  }
+
+  // ─── BULK PRINT — varias asignaciones a la vez ───
+  /**
+   * Imprime múltiples listas en un solo documento (con page-break entre cada una).
+   * @param {string[]} assignmentIds - IDs de assignments a incluir
+   * @param {string} partialId - ej. 'P1', 'P2', 'P3'
+   */
+  async function printMultipleAssignments(assignmentIds, partialId) {
+    if (!Array.isArray(assignmentIds) || assignmentIds.length === 0) {
+      Toast.show('No hay listas seleccionadas para imprimir', 'warning');
+      return;
+    }
+
+    Toast.show(`Generando ${assignmentIds.length} lista(s)…`, 'info');
+
+    // Filtrar las assignments solicitadas
+    const myAsg = await Store.getMyAssignments();
+    const targetAsgs = assignmentIds.map(id => myAsg.find(a => a.id === id)).filter(Boolean);
+    if (targetAsgs.length === 0) {
+      Toast.show('No se encontraron las asignaciones solicitadas', 'error');
+      return;
+    }
+
+    const parcialObj = K.PARCIALES.find(p => p.id === partialId);
+    const parcialNum = parcialObj?.numero || 1;
+    const parcMap = { 1: 'PRIMER', 2: 'SEGUNDO', 3: 'TERCER' };
+    const parcialText = parcMap[parcialNum] || 'PRIMER';
+    const semMap = { 1: 'SEGUNDO SEMESTRE', 2: 'CUARTO SEMESTRE', 3: 'SEXTO SEMESTRE' };
+
+    // Pre-cargar grupos y students para cada uno
+    const groupIds = [...new Set(targetAsgs.map(a => a.groupId))];
+    const [allGroups, allStudents] = await Promise.all([
+      Store.getGroups(),
+      Store.getStudentsByGroups(groupIds),
+    ]);
+    const studentsByGroup = {};
+    for (const s of allStudents) {
+      if (!studentsByGroup[s.groupId]) studentsByGroup[s.groupId] = [];
+      studentsByGroup[s.groupId].push(s);
+    }
+
+    // Generar HTML por cada asignación, separados con page-break
+    const allHtml = [];
+    for (let i = 0; i < targetAsgs.length; i++) {
+      const asg = targetAsgs[i];
+      const grupo = allGroups.find(g => g.id === asg.groupId);
+      const turno = grupo?.turno || asg.turno || 'MATUTINO';
+      const grado = Number(grupo?.grado || asg.grado || 1);
+      const groupName = grupo?.nombre || asg.groupName || asg.groupId;
+      const groupNum = (groupName.split('-')[1] || groupName).trim();
+      const subjectName = K.getUACNombre(asg.subjectName || asg.subjectId);
+      const teacherName = (asg.teacherName || '').toUpperCase();
+      const orientador = K.getOrientador(turno, groupName) || '';
+      const semText = semMap[grado] || '';
+
+      // Alumnos del grupo, ordenados
+      const grpStudents = (studentsByGroup[asg.groupId] || [])
+        .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+
+      // Grades del grupo+materia+parcial
+      let groupGrades = [];
+      try {
+        const all = await Store.getGradesByGroupAndPartial(asg.groupId, partialId);
+        groupGrades = all.filter(g => g.subjectId === asg.subjectId);
+      } catch (e) {
+        console.warn('No se pudieron cargar grades para', asg.groupId, e);
+      }
+      const gradeDataMap = {};
+      groupGrades.forEach(g => {
+        gradeDataMap[g.studentId] = g;
+      });
+      // Para cada alumno asegurar entrada
+      grpStudents.forEach(s => {
+        if (!gradeDataMap[s.id]) gradeDataMap[s.id] = {};
+        // Adaptar al formato esperado por _buildOfficialPrintHTML (docId)
+        gradeDataMap[s.id || s.docId] = gradeDataMap[s.id] || {};
+      });
+
+      // Horas del docente para este grupo+materia+parcial
+      let horas = {};
+      try {
+        const docId = `${asg.groupId}_${asg.subjectId}_${partialId}`;
+        const horasDoc = await db.collection('teacherHours').doc(docId).get();
+        if (horasDoc.exists) horas = horasDoc.data() || {};
+      } catch (e) { /* ignorar */ }
+
+      // Adaptar students al formato (con docId) que espera _buildOfficialPrintHTML
+      const studentsForPrint = grpStudents.map(s => ({ docId: s.id, ...s }));
+      // Adaptar gradeDataMap a usar docId como key (id === docId aquí)
+      const gradeDataByDocId = {};
+      grpStudents.forEach(s => { gradeDataByDocId[s.id] = gradeDataMap[s.id] || {}; });
+
+      const meta = {
+        teacherName, subjectName, groupName, groupNum, grado, turno,
+        parcialNum, parcialText, semText, orientador, horas
+      };
+      const html = _buildOfficialPrintHTML(studentsForPrint, gradeDataByDocId, meta);
+
+      // Page break después de cada lista (excepto la última)
+      const pageBreak = i < targetAsgs.length - 1
+        ? '<div style="page-break-after:always;"></div>'
+        : '';
+      allHtml.push(html + pageBreak);
+    }
+
+    // Abrir ventana de impresión con todas las listas concatenadas
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(
+      '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+      '<title>Listas de calificaciones — ' + targetAsgs.length + ' grupos</title>' +
+      '</head><body>' + allHtml.join('') +
+      _PRINT_TRIGGER_SCRIPT +
+      '</body></html>'
+    );
+    printWindow.document.close();
+    Toast.show(`${targetAsgs.length} lista(s) generadas`, 'success');
   }
 
   function printAdminGrades() {
@@ -1932,7 +2987,7 @@ html, body { margin:0; padding:0; height:100%; }
     const printWindow = window.open('', '_blank');
     printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Control Parcial - ' +
       Utils.sanitize(groupName) + ' - ' + Utils.sanitize(subjectName) + '</title></head><body>' +
-      html + '<script>setTimeout(()=>window.print(),400)<\/script></body></html>');
+      html + _PRINT_TRIGGER_SCRIPT + '</body></html>');
     printWindow.document.close();
   }
 

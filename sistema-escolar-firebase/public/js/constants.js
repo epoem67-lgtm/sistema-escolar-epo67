@@ -19,12 +19,15 @@ const K = Object.freeze({
 
   // ─── Roles del sistema ─────────────────────────────────────
   ROLES: Object.freeze([
-    { id: 'admin',              label: 'Administrador',     color: '#9333ea' },
-    { id: 'maestro',            label: 'Docente',           color: '#3b82f6' },
-    { id: 'orientador',         label: 'Orientador',        color: '#10b981' },
-    { id: 'orientador_docente', label: 'Orientador-Docente', color: '#0ea5e9' },
-    { id: 'directivo',          label: 'Directivo',         color: '#f59e0b' },
-    { id: 'consulta',           label: 'Consulta',          color: '#6b7280' }
+    { id: 'admin',              label: 'Administrador',          color: '#9333ea' },
+    { id: 'subdirector',        label: 'Subdirector',            color: '#dc2626' },
+    { id: 'secretario_admin',   label: 'Secretaria Administrativa', color: '#7c3aed' },
+    { id: 'directivo',          label: 'Directivo',              color: '#f59e0b' },
+    { id: 'secretario_escolar', label: 'Secretario Escolar',     color: '#ea580c' },
+    { id: 'orientador',         label: 'Orientador',             color: '#10b981' },
+    { id: 'orientador_docente', label: 'Orientador-Docente',     color: '#0ea5e9' },
+    { id: 'maestro',            label: 'Docente',                color: '#3b82f6' },
+    { id: 'consulta',           label: 'Consulta',               color: '#6b7280' }
   ]),
 
   // Mapa de herencia de permisos. Si role === 'orientador_docente', se trata
@@ -32,6 +35,12 @@ const K = Object.freeze({
   // Las reglas de Firestore replican esta semántica.
   ROLE_INHERITS: Object.freeze({
     orientador_docente: ['orientador', 'maestro'],
+    // Secretario Escolar (Roberto): mismo nivel de VISTA que directivo
+    // (ve todo silenciosamente, sin banner) + escritura extra en students/enrollments.
+    secretario_escolar: ['directivo'],
+    // Secretaria Administrativa (Lupita): mismo nivel de VISTA que directivo
+    // + escritura en school-config (datos de la escuela).
+    secretario_admin: ['directivo'],
   }),
 
   // ─── Mapeo de sexo ─────────────────────────────────────────
@@ -50,23 +59,29 @@ const K = Object.freeze({
   // RUBROS DE EVALUACIÓN POR TURNO
   // ═══════════════════════════════════════════════════════════
   //
-  // MATUTINO: EC (máx 8) + Transversal (máx 2) + P.Extra = Suma → Calif
-  // VESPERTINO: EC (máx 5) + Examen (máx 3) + Transversal (máx 2) + P.Extra = Suma → Calif
+  // MATUTINO:   Evaluación Continua (máx 8) + Transversal (máx 2) + Punto Extra → Suma → Calif
+  // VESPERTINO: Evaluación Continua (máx 5) + Examen Parcial (máx 3) + Transversal (máx 2) + Punto Extra → Suma → Calif
+  //
+  // `key` es el campo interno en Firestore (NO TOCAR — rompería los datos).
+  // `label` es el nombre completo en una línea (uso normal en UI).
+  // `abbr` es el nombre completo con <br> para encabezados de tabla estrechos.
+  // El usuario pidió explícitamente que NO se usen abreviaturas en la UI
+  // (2026-05-09): nada de EC, TR, PE, EP, ni E.C./T.R./P.E./E.P.
   //
   // Regla de redondeo: ≥6 redondeo normal, <6 se trunca (5.9→5)
   // Máximo siempre: 10
 
   RUBROS_MATUTINO: Object.freeze([
-    { key: 'ec',  label: 'EVAL. CONT.',  abbr: 'E.C.', max: 8,  step: 0.1 },
-    { key: 'tr',  label: 'TRANSVERSAL',  abbr: 'T.R.', max: 2,  step: 0.1 },
-    { key: 'pe',  label: 'PTJE. EXTRA',  abbr: 'P.E.', max: 10, step: 0.1 }
+    { key: 'ec',  label: 'EVALUACIÓN CONTINUA',  abbr: 'EVALUACIÓN<br>CONTINUA',  max: 8,  step: 0.1 },
+    { key: 'tr',  label: 'TRANSVERSAL',          abbr: 'TRANSVERSAL',             max: 2,  step: 0.1 },
+    { key: 'pe',  label: 'PUNTO EXTRA',          abbr: 'PUNTO<br>EXTRA',          max: 10, step: 0.1 }
   ]),
 
   RUBROS_VESPERTINO: Object.freeze([
-    { key: 'ec',  label: 'EVAL. CONT.',  abbr: 'E.C.', max: 5,  step: 0.1 },
-    { key: 'ex',  label: 'EX. PARCIAL',  abbr: 'E.P.', max: 3,  step: 0.1 },
-    { key: 'tr',  label: 'TRANSVERSAL',  abbr: 'T.R.', max: 2,  step: 0.1 },
-    { key: 'pe',  label: 'PTJE. EXTRA',  abbr: 'P.E.', max: 10, step: 0.1 }
+    { key: 'ec',  label: 'EVALUACIÓN CONTINUA',  abbr: 'EVALUACIÓN<br>CONTINUA',  max: 5,  step: 0.1 },
+    { key: 'ex',  label: 'EXAMEN PARCIAL',       abbr: 'EXAMEN<br>PARCIAL',       max: 3,  step: 0.1 },
+    { key: 'tr',  label: 'TRANSVERSAL',          abbr: 'TRANSVERSAL',             max: 2,  step: 0.1 },
+    { key: 'pe',  label: 'PUNTO EXTRA',          abbr: 'PUNTO<br>EXTRA',          max: 10, step: 0.1 }
   ]),
 
   // ═══════════════════════════════════════════════════════════

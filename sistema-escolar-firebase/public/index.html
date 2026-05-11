@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sistema Escolar</title>
-  <link rel="stylesheet" href="/css/styles.css?v=5.11">
+  <link rel="stylesheet" href="/css/styles.css?v=6.12">
 
   <!-- Preconnect a dominios externos para acelerar el handshake TLS/DNS -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -17,11 +17,11 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round&display=swap" rel="stylesheet">
 
   <!-- Preload de assets criticos (anticipa descarga de los core scripts del body) -->
-  <link rel="preload" href="/js/firebase-config.js?v=5.11" as="script">
-  <link rel="preload" href="/js/constants.js?v=5.11" as="script">
-  <link rel="preload" href="/js/data-store.js?v=5.11" as="script">
-  <link rel="preload" href="/js/app.js?v=5.11" as="script">
-  <link rel="preload" href="/js/components.js?v=5.11" as="script">
+  <link rel="preload" href="/js/firebase-config.js?v=6.12" as="script">
+  <link rel="preload" href="/js/constants.js?v=6.12" as="script">
+  <link rel="preload" href="/js/data-store.js?v=6.12" as="script">
+  <link rel="preload" href="/js/app.js?v=6.12" as="script">
+  <link rel="preload" href="/js/components.js?v=6.12" as="script">
 
   <!-- Firebase SDKs -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
@@ -53,21 +53,45 @@
         <div class="form-group">
           <label for="loginEmail">Correo electrónico</label>
           <input type="email" id="loginEmail" placeholder="tu@correo.com" required autocomplete="email">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748b;margin-top:4px;cursor:pointer;font-weight:400;">
+            <input type="checkbox" id="rememberEmail" style="margin:0;width:auto;" checked>
+            Recordar mi correo en este dispositivo
+          </label>
         </div>
         <div class="form-group">
           <label for="loginPassword">Contraseña</label>
-          <input type="password" id="loginPassword" placeholder="Tu contraseña" required autocomplete="current-password" minlength="6">
+          <div class="pwd-input-wrapper" style="position:relative;display:block;">
+            <input type="password" id="loginPassword" placeholder="Tu contraseña" required autocomplete="current-password" minlength="6" style="padding-right:54px;width:100%;box-sizing:border-box;">
+            <span class="pwd-toggle-eye" data-target="loginPassword" tabindex="-1" role="button" aria-label="Mostrar u ocultar contraseña" title="Click para mostrar/ocultar contraseña" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#3182ce;background:#eef5fb;border-radius:6px;user-select:none;z-index:10;border:1px solid #cbd5e0;">
+              <span class="material-icons-round" style="font-size:22px;pointer-events:none;">visibility</span>
+            </span>
+          </div>
+          <div id="capsLockWarning" style="display:none;margin-top:6px;padding:6px 10px;background:#fef3c7;border-left:3px solid #d97706;font-size:12px;color:#78350f;border-radius:4px;">
+            ⚠️ <strong>Bloq Mayús está activo</strong> — tu contraseña podría escribirse en mayúsculas.
+          </div>
         </div>
         <button type="submit" class="btn btn-primary btn-block" id="btnLogin">
           <span class="material-icons-round" style="font-size:20px;vertical-align:middle;margin-right:6px;">login</span>
           Iniciar Sesión
         </button>
       </form>
-      <div class="login-toggle">
-        <span id="toggleAuth" class="link-button" onclick="Auth.toggleRegister()">¿No tienes cuenta? Regístrate</span>
+      <div class="login-toggle" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <span id="forgotPwd" class="link-button" onclick="App.openForgotPassword()" style="font-size:13px;">¿Olvidaste tu contraseña?</span>
+        <span id="toggleAuth" class="link-button" onclick="Auth.toggleRegister()" style="font-size:13px;">¿No tienes cuenta? Regístrate</span>
       </div>
       <div id="loginError" class="login-error" style="display:none"></div>
       <p class="login-footer">Acceso autorizado solo para personal de la institución</p>
+
+      <!-- BOTÓN SOS WHATSAPP -->
+      <a href="https://wa.me/525510782357?text=Hola%20Olivia%2C%20necesito%20ayuda%20con%20el%20Sistema%20Escolar%20EPO%2067"
+         target="_blank" rel="noopener"
+         style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;padding:12px;background:#25d366;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:14px;box-shadow:0 2px 6px rgba(0,0,0,0.1);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>
+        ¿No puedes entrar? Pídeme ayuda por WhatsApp
+      </a>
+      <div style="text-align:center;font-size:11px;color:#94a3b8;margin-top:6px;">
+        Soporte directo · Olivia · 55 1078 2357
+      </div>
     </div>
   </div>
 
@@ -81,60 +105,87 @@
         <span id="schoolName" class="school-name">Sistema Escolar</span>
       </div>
 
+      <!-- BUSCADOR VISIBLE -->
+      <div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.1);">
+        <button id="sidebarSearchBtn" type="button" onclick="window.GlobalSearch && window.GlobalSearch.open()"
+          style="width:100%;display:flex;align-items:center;gap:8px;padding:10px 12px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:rgba(255,255,255,0.85);cursor:pointer;font-size:13px;text-align:left;transition:background 0.15s;"
+          onmouseover="this.style.background='rgba(255,255,255,0.15)'"
+          onmouseout="this.style.background='rgba(255,255,255,0.08)'"
+          title="Buscar alumno, maestro, materia o cualquier cosa">
+          <span class="material-icons-round" style="font-size:18px;">search</span>
+          <span style="flex:1;">Buscar...</span>
+          <kbd style="font-size:9px;background:rgba(255,255,255,0.15);padding:1px 5px;border-radius:3px;color:rgba(255,255,255,0.7);">⌘K</kbd>
+        </button>
+      </div>
+
       <div class="sidebar-nav">
         <a href="#" class="nav-item active" data-module="dashboard" onclick="Router.navigate('dashboard')">
           <span class="material-icons-round">dashboard</span>
           <span class="nav-label">Inicio</span>
         </a>
 
+        <!-- CENTRO DE AYUDA — visible para TODOS los roles, destacado -->
+        <a href="#" class="nav-item" data-module="help-center" onclick="Router.navigate('help-center')"
+           style="background:rgba(34,197,94,0.15);border-left:3px solid #22c55e;margin:6px 0;">
+          <span class="material-icons-round" style="color:#22c55e;">help_outline</span>
+          <span class="nav-label" style="color:#bbf7d0;font-weight:700;">Centro de Ayuda</span>
+        </a>
+
         <!-- ═══════════════════════════════════════════════ -->
-        <!-- ADMINISTRACION (solo admin)                    -->
+        <!-- ADMINISTRACION                                  -->
+        <!-- - admin: ve todo                                -->
+        <!-- - subdirector (Octavio): ve y edita TODO        -->
+        <!-- - directivo (Karina/Lupita): ve todo, solo lee  -->
+        <!-- - secretario_escolar (Roberto): ve y edita      -->
+        <!--   solo Inscripciones y Listas de Alumnos        -->
         <!-- ═══════════════════════════════════════════════ -->
-        <div class="nav-section" data-roles="admin">
-          <span class="nav-section-title">Administracion</span>
-          <a href="#" class="nav-item" data-module="enrollment" onclick="Router.navigate('enrollment')">
+        <div class="nav-section" data-roles="admin,directivo,subdirector,secretario_escolar">
+          <span class="nav-section-title">Administración</span>
+          <a href="#" class="nav-item" data-module="enrollment" onclick="Router.navigate('enrollment')" data-roles="admin,directivo,subdirector,secretario_escolar">
             <span class="material-icons-round">how_to_reg</span>
             <span class="nav-label">Inscripciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="students" onclick="Router.navigate('students')">
+          <a href="#" class="nav-item" data-module="students" onclick="Router.navigate('students')" data-roles="admin,directivo,subdirector,secretario_escolar">
             <span class="material-icons-round">groups</span>
             <span class="nav-label">Listas de Alumnos</span>
           </a>
-          <a href="#" class="nav-item" data-module="school-config" onclick="Router.navigate('school-config')">
+          <a href="#" class="nav-item" data-module="school-config" onclick="Router.navigate('school-config')" data-roles="admin,directivo,subdirector">
             <span class="material-icons-round">settings</span>
             <span class="nav-label">Datos de la Escuela</span>
           </a>
-          <a href="#" class="nav-item" data-module="teachers" onclick="Router.navigate('teachers')">
+          <a href="#" class="nav-item" data-module="teachers" onclick="Router.navigate('teachers')" data-roles="admin,directivo,subdirector">
             <span class="material-icons-round">people</span>
             <span class="nav-label">Docentes y Asignaciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="partial-close" onclick="Router.navigate('partial-close')">
+          <a href="#" class="nav-item" data-module="partial-close" onclick="Router.navigate('partial-close')" data-roles="admin,directivo,subdirector">
             <span class="material-icons-round">lock</span>
             <span class="nav-label">Cierre de Parciales</span>
           </a>
-          <a href="#" class="nav-item" data-module="captura-progress" onclick="Router.navigate('captura-progress')">
+          <a href="#" class="nav-item" data-module="captura-progress" onclick="Router.navigate('captura-progress')" data-roles="admin,directivo,subdirector">
             <span class="material-icons-round">fact_check</span>
             <span class="nav-label">Monitor de Captura</span>
           </a>
-          <a href="#" class="nav-item" data-module="import-students" onclick="Router.navigate('import-students')">
+          <a href="#" class="nav-item" data-module="import-students" onclick="Router.navigate('import-students')" data-roles="admin,subdirector,secretario_escolar">
             <span class="material-icons-round">upload_file</span>
             <span class="nav-label">Importar Listas</span>
           </a>
-          <a href="#" class="nav-item" data-module="users-mgmt" onclick="Router.navigate('users-mgmt')">
+          <a href="#" class="nav-item" data-module="users-mgmt" onclick="Router.navigate('users-mgmt')" data-roles="admin">
             <span class="material-icons-round">admin_panel_settings</span>
             <span class="nav-label">Usuarios</span>
           </a>
-          <a href="#" class="nav-item" data-module="bitacora" onclick="Router.navigate('bitacora')">
+          <a href="#" class="nav-item" data-module="bitacora" onclick="Router.navigate('bitacora')" data-roles="admin,directivo,subdirector">
             <span class="material-icons-round">history</span>
-            <span class="nav-label">Bitacora de Cambios</span>
+            <span class="nav-label">Bitácora de Cambios</span>
           </a>
         </div>
 
         <!-- ═══════════════════════════════════════════════ -->
-        <!-- DIRECCION (admin + directivo)                  -->
+        <!-- DIRECCION (admin/directivo/subdirector)        -->
+        <!-- Subdirector tiene acceso a "cambio de          -->
+        <!-- calificaciones" (gradeCorrections)             -->
         <!-- ═══════════════════════════════════════════════ -->
-        <div class="nav-section" data-roles="admin,directivo">
-          <span class="nav-section-title">Direccion</span>
+        <div class="nav-section" data-roles="admin,directivo,subdirector">
+          <span class="nav-section-title">Dirección</span>
           <a href="#" class="nav-item" data-module="grade-corrections" onclick="Router.navigate('grade-corrections')">
             <span class="material-icons-round">rate_review</span>
             <span class="nav-label">Correcciones de Cal.</span>
@@ -142,13 +193,13 @@
         </div>
 
         <!-- ═══════════════════════════════════════════════ -->
-        <!-- ORIENTACION (admin + orientador)               -->
+        <!-- ORIENTACION (admin/orientador/directivo/subdirector) -->
         <!-- ═══════════════════════════════════════════════ -->
-        <div class="nav-section" data-roles="admin,orientador">
-          <span class="nav-section-title">Orientacion</span>
+        <div class="nav-section" data-roles="admin,orientador,directivo,subdirector">
+          <span class="nav-section-title">Orientación</span>
           <a href="#" class="nav-item" data-module="boletas" onclick="Router.navigate('boletas')">
             <span class="material-icons-round">description</span>
-            <span class="nav-label">Pre Boletas</span>
+            <span class="nav-label">Preboletas</span>
           </a>
           <a href="#" class="nav-item" data-module="boleta-oficial" onclick="Router.navigate('boleta-oficial')">
             <span class="material-icons-round">verified</span>
@@ -181,39 +232,61 @@
         </div>
 
         <!-- ═══════════════════════════════════════════════ -->
-        <!-- DOCENTES (admin + maestro)                     -->
+        <!-- DOCENTES (todos menos secretario_escolar)      -->
+        <!-- Subdirector lee todo, NO captura calificaciones-->
         <!-- ═══════════════════════════════════════════════ -->
-        <div class="nav-section" data-roles="admin,maestro">
+        <div class="nav-section" data-roles="admin,maestro,orientador,orientador_docente,directivo,subdirector,consulta">
           <span class="nav-section-title">Docentes</span>
-          <a href="#" class="nav-item" data-module="my-grades" onclick="Router.navigate('my-grades')">
+          <a href="#" class="nav-item" data-module="my-grades" onclick="Router.navigate('my-grades')" data-roles="admin,maestro,orientador_docente">
             <span class="material-icons-round">edit_note</span>
             <span class="nav-label">Capturar Calificaciones</span>
-          </a>
-          <a href="#" class="nav-item" data-module="grades-admin" onclick="Router.navigate('grades-admin')" data-roles="admin">
-            <span class="material-icons-round">search</span>
-            <span class="nav-label">Consultar Calificaciones</span>
           </a>
           <a href="#" class="nav-item" data-module="my-lists" onclick="Router.navigate('my-lists')">
             <span class="material-icons-round">list_alt</span>
             <span class="nav-label">Mis Listas</span>
           </a>
-          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')" data-roles="admin">
-            <span class="material-icons-round">insights</span>
-            <span class="nav-label">Indicadores</span>
+          <a href="#" class="nav-item" data-module="grades-query" onclick="Router.navigate('grades-query')">
+            <span class="material-icons-round">visibility</span>
+            <span class="nav-label">Consultar Calificaciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="attendance" onclick="Router.navigate('attendance')">
-            <span class="material-icons-round">fact_check</span>
-            <span class="nav-label">Asistencia</span>
+          <a href="#" class="nav-item" data-module="correction-request" onclick="Router.navigate('correction-request')" data-roles="admin,maestro,orientador_docente,subdirector">
+            <span class="material-icons-round">rate_review</span>
+            <span class="nav-label">Cambios de Calificación</span>
           </a>
-          <a href="#" class="nav-item" data-module="student-profile" onclick="Router.navigate('student-profile')">
-            <span class="material-icons-round">person_search</span>
-            <span class="nav-label">Consulta por Alumno</span>
+          <a href="#" class="nav-item" data-module="my-f1" onclick="Router.navigate('my-f1')">
+            <span class="material-icons-round">grid_on</span>
+            <span class="nav-label">Concentrado F1</span>
           </a>
           <a href="#" class="nav-item" data-module="my-at-risk" onclick="Router.navigate('my-at-risk')">
             <span class="material-icons-round">report_problem</span>
             <span class="nav-label">Alumnos en Riesgo</span>
           </a>
+          <a href="#" class="nav-item" data-module="student-profile" onclick="Router.navigate('student-profile')">
+            <span class="material-icons-round">person_search</span>
+            <span class="nav-label">Consulta por Alumno</span>
+          </a>
+          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')" data-roles="admin">
+            <span class="material-icons-round">insights</span>
+            <span class="nav-label">Indicadores</span>
+          </a>
+          <!-- Asistencia oculta para maestros (no se usa). Sigue accesible para admin. -->
+          <a href="#" class="nav-item" data-module="attendance" onclick="Router.navigate('attendance')" data-roles="admin">
+            <span class="material-icons-round">fact_check</span>
+            <span class="nav-label">Asistencia</span>
+          </a>
         </div>
+      </div>
+
+      <!-- Botón Ver Tutorial — siempre disponible para repetir el tour -->
+      <div style="padding:10px 14px;border-top:1px solid rgba(255,255,255,0.1);">
+        <button onclick="window.OnboardingTour && window.OnboardingTour.start()"
+          style="width:100%;display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(37,211,102,0.15);border:1px solid rgba(37,211,102,0.3);border-radius:8px;color:rgba(255,255,255,0.9);cursor:pointer;font-size:12px;font-weight:600;text-align:left;transition:background 0.15s;"
+          onmouseover="this.style.background='rgba(37,211,102,0.25)'"
+          onmouseout="this.style.background='rgba(37,211,102,0.15)'"
+          title="Volver a ver el tutorial paso a paso">
+          <span class="material-icons-round" style="font-size:16px;">help_outline</span>
+          <span>Ver tutorial otra vez</span>
+        </button>
       </div>
 
       <div class="sidebar-footer">
@@ -255,48 +328,121 @@
 
   <!-- ═══════ SCRIPTS ═══════ -->
   <!-- Core -->
-  <script src="/js/firebase-config.js?v=5.11"></script>
-  <script src="/js/constants.js?v=5.11"></script>
-  <script src="/js/data-store.js?v=5.11"></script>
-  <script src="/js/app.js?v=5.11"></script>
-  <script src="/js/components.js?v=5.11"></script>
-  <script src="/js/lib-loader.js?v=5.11"></script>
-  <script src="/js/logos.js?v=5.11"></script>
-  <script src="/js/modules/student-profile.js?v=5.11" defer></script>
+  <script src="/js/firebase-config.js?v=6.12"></script>
+  <script src="/js/constants.js?v=6.12"></script>
+  <script src="/js/data-store.js?v=6.12"></script>
+  <script src="/js/app.js?v=6.12"></script>
+  <script src="/js/components.js?v=6.12"></script>
+  <script src="/js/lib-loader.js?v=6.12"></script>
+  <script src="/js/logos.js?v=6.12"></script>
+  <script src="/js/modules/student-profile.js?v=6.12" defer></script>
 
   <!-- Módulos (defer: se descargan en paralelo y ejecutan tras parseo, en orden) -->
-  <script src="/js/modules/dashboard.js?v=5.11" defer></script>
-  <script src="/js/modules/school-config.js?v=5.11" defer></script>
-  <script src="/js/modules/teachers.js?v=5.11" defer></script>
-  <script src="/js/modules/students.js?v=5.11" defer></script>
-  <script src="/js/modules/grades.js?v=5.11" defer></script>
-  <script src="/js/modules/partial-close.js?v=5.11" defer></script>
-  <script src="/js/modules/at-risk.js?v=5.11" defer></script>
-  <script src="/js/modules/users-mgmt.js?v=5.11" defer></script>
-  <script src="/js/modules/my-lists.js?v=5.11" defer></script>
-  <script src="/js/modules/enrollment.js?v=5.11" defer></script>
-  <script src="/js/modules/honor-roll.js?v=5.11" defer></script>
+  <script src="/js/modules/help-center.js?v=6.12" defer></script>
+  <script src="/js/modules/dashboard.js?v=6.12" defer></script>
+  <script src="/js/modules/school-config.js?v=6.12" defer></script>
+  <script src="/js/modules/teachers.js?v=6.12" defer></script>
+  <script src="/js/modules/students.js?v=6.12" defer></script>
+  <script src="/js/modules/grades.js?v=6.12" defer></script>
+  <script src="/js/modules/partial-close.js?v=6.12" defer></script>
+  <script src="/js/modules/at-risk.js?v=6.12" defer></script>
+  <script src="/js/modules/users-mgmt.js?v=6.12" defer></script>
+  <script src="/js/modules/my-lists.js?v=6.12" defer></script>
+  <script src="/js/modules/my-f1.js?v=6.12" defer></script>
+  <script src="/js/modules/enrollment.js?v=6.12" defer></script>
+  <script src="/js/modules/honor-roll.js?v=6.12" defer></script>
 
   <!-- Nuevos módulos v3.1 -->
-  <script src="/js/modules/import-grades.js?v=5.11" defer></script>
-  <script src="/js/modules/import-students.js?v=5.11" defer></script>
-  <script src="/js/modules/boletas.js?v=5.11" defer></script>
-  <script src="/js/modules/indicadores.js?v=5.11" defer></script>
-  <script src="/js/modules/concentrado.js?v=5.11" defer></script>
-  <script src="/js/modules/attendance.js?v=5.11" defer></script>
-  <script src="/js/modules/reports-comparative.js?v=5.11" defer></script>
-  <script src="/js/modules/bitacora.js?v=5.11" defer></script>
-  <script src="/js/modules/captura-progress.js?v=5.11" defer></script>
-  <script src="/js/modules/grade-corrections.js?v=5.11" defer></script>
-  <script src="/js/modules/boleta-oficial.js?v=5.11" defer></script>
+  <script src="/js/modules/import-grades.js?v=6.12" defer></script>
+  <script src="/js/modules/import-students.js?v=6.12" defer></script>
+  <script src="/js/modules/boletas.js?v=6.12" defer></script>
+  <script src="/js/modules/indicadores.js?v=6.12" defer></script>
+  <script src="/js/modules/concentrado.js?v=6.12" defer></script>
+  <script src="/js/modules/attendance.js?v=6.12" defer></script>
+  <script src="/js/modules/reports-comparative.js?v=6.12" defer></script>
+  <script src="/js/modules/bitacora.js?v=6.12" defer></script>
+  <script src="/js/modules/captura-progress.js?v=6.12" defer></script>
+  <script src="/js/modules/grade-corrections.js?v=6.12" defer></script>
+  <script src="/js/global-search.js?v=6.12" defer></script>
+  <script src="/js/onboarding-tour.js?v=6.12" defer></script>
+  <script src="/js/offline-helper.js?v=6.12" defer></script>
+  <script src="/js/help-tips.js?v=6.12" defer></script>
+  <script src="/js/modules/correction-request.js?v=6.12" defer></script>
+  <script src="/js/modules/grades-query.js?v=6.12" defer></script>
+  <script src="/js/modules/boleta-oficial.js?v=6.12" defer></script>
 
-  <!-- Service Worker (cache offline + carga rapida en re-visitas) -->
+  <!-- ═══════ INDICADOR OFFLINE (aparece cuando se pierde la conexión) ═══════ -->
+  <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#dc2626;color:#fff;text-align:center;padding:8px 16px;font-size:13px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.2);">
+    📡 <strong>Sin conexión a internet</strong> — tus calificaciones se guardarán automáticamente cuando vuelva la conexión. Sigue capturando.
+  </div>
+
+  <!-- ═══════ BOTÓN SOS WHATSAPP FLOTANTE (visible siempre cuando estás logueado) ═══════ -->
+  <a id="sosFab" href="https://wa.me/525510782357?text=Hola%20Olivia%2C%20necesito%20ayuda%20con%20el%20Sistema%20Escolar%20EPO%2067."
+     target="_blank" rel="noopener" title="Soporte por WhatsApp · Olivia 55 1078 2357"
+     style="display:none;position:fixed;bottom:20px;right:20px;z-index:9998;background:#25d366;color:#fff;width:56px;height:56px;border-radius:50%;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.25);text-decoration:none;transition:transform 0.15s,box-shadow 0.15s;"
+     onmouseover="this.style.transform='scale(1.08)';this.style.boxShadow='0 6px 18px rgba(0,0,0,0.3)';"
+     onmouseout="this.style.transform='scale(1)';this.style.boxShadow='0 4px 12px rgba(0,0,0,0.25)';">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="margin:auto;display:block;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>
+  </a>
+
+  <!-- ═══════ BUSCADOR GLOBAL FLOTANTE (Cmd/Ctrl + K) ═══════ -->
+  <div id="globalSearch" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9997;background:rgba(15,23,42,0.5);backdrop-filter:blur(2px);align-items:flex-start;justify-content:center;padding-top:80px;">
+    <div style="background:#fff;width:90%;max-width:640px;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:12px;padding:16px;border-bottom:1px solid #e5e7eb;">
+        <span class="material-icons-round" style="color:#3182ce;font-size:24px;">search</span>
+        <input id="gsInput" type="text" placeholder="Busca o pregunta: 'como capturo', 'fechas', alumno, módulo..."
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+          style="flex:1;border:none;outline:none;font-size:16px;background:transparent;">
+        <kbd style="font-size:10px;background:#f1f5f9;padding:2px 6px;border-radius:4px;color:#64748b;border:1px solid #cbd5e0;">ESC</kbd>
+      </div>
+      <div id="gsResults" style="max-height:60vh;overflow-y:auto;"></div>
+      <div style="padding:8px 16px;font-size:11px;color:#94a3b8;background:#f8fafc;border-top:1px solid #e5e7eb;">
+        Tip: <kbd style="background:#fff;padding:1px 4px;border-radius:3px;border:1px solid #cbd5e0;">⌘K</kbd> o <kbd style="background:#fff;padding:1px 4px;border-radius:3px;border:1px solid #cbd5e0;">Ctrl+K</kbd> para abrir desde cualquier lugar.
+      </div>
+    </div>
+  </div>
+
+  <!-- Service Worker (cache offline + auto-actualizacion sin pedirle al usuario que recargue) -->
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch((err) => {
+      window.addEventListener('load', async () => {
+        try {
+          const reg = await navigator.serviceWorker.register('/sw.js');
+
+          // Auto-recarga: cuando un SW nuevo toma el control (porque el deploy
+          // hizo skipWaiting+clientsClaim), forzamos reload de la pestania.
+          // Asi el usuario ve la version nueva sin tocar Cmd+Shift+R.
+          let didReload = false;
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (didReload) return;
+            didReload = true;
+            console.log('[sw] nueva version detectada, recargando...');
+            window.location.reload();
+          });
+
+          // Cuando un SW nuevo termina de instalarse, lo activamos inmediatamente.
+          // (Backup por si skipWaiting no se aplico durante install.)
+          reg.addEventListener('updatefound', () => {
+            const sw = reg.installing;
+            if (!sw) return;
+            sw.addEventListener('statechange', () => {
+              if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+                sw.postMessage({ type: 'SKIP_WAITING' });
+              }
+            });
+          });
+
+          // Disparadores de chequeo: al volver a la pestania y cada 5 min.
+          // El navegador solo busca SW nuevos en navegacion por default (24h),
+          // demasiado lento. Esto fuerza el ciclo a minutos.
+          const checkUpdate = () => reg.update().catch(() => {});
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') checkUpdate();
+          });
+          setInterval(checkUpdate, 5 * 60 * 1000);
+        } catch (err) {
           console.warn('SW registration failed:', err);
-        });
+        }
       });
     }
   </script>
