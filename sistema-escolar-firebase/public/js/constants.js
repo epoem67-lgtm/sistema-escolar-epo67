@@ -272,6 +272,23 @@ const K = Object.freeze({
     return Math.min(Math.round(total * 10) / 10, 10); // 1 decimal, cap 10
   },
 
+  /** Indica si el PUNTO EXTRA esta siendo IGNORADO por la regla EPO67.
+   *  Util para mostrar feedback visual en captura ("PE no aplica").
+   *  Retorna true solo cuando: hay un PE > 0 ingresado Y la sumaBase < 6.
+   *  No tiene efecto sobre el calculo (eso lo hace calcSuma); solo es informativo. */
+  isPEIgnored(rubros) {
+    let sumaBase = 0;
+    let pe = 0;
+    for (const [key, val] of Object.entries(rubros || {})) {
+      if (val === null || val === undefined || val === '') continue;
+      const n = Number(val);
+      if (isNaN(n)) continue;
+      if (key === 'pe') pe = n;
+      else sumaBase += n;
+    }
+    return pe > 0 && sumaBase < 6;
+  },
+
   /** Calcula CAL (calificación final): redondeo especial EPO67
    *  ≥6: redondeo normal. <6: truncar a 5 (calificación mínima). Max 10. */
   calcCal(suma) {

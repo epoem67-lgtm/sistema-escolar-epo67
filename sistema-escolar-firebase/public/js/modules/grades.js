@@ -86,6 +86,7 @@ const GradesModule = (function () {
         if (_isDirty) {
           if (!confirm('Tienes cambios sin guardar. ¿Deseas salir sin guardar?')) return;
         }
+        _clearEditorState();
         api.renderTeacher();
       }
       else if (a === 'export-grades') api.exportGrades();
@@ -273,24 +274,34 @@ const GradesModule = (function () {
       : '';
     const prevLabel = prev ? `${prev.groupName || ''} ${K.getUACNombre(prev.subjectName || '').slice(0, 28)}` : 'Sin anterior';
     const nextLabel = next ? `${next.groupName || ''} ${K.getUACNombre(next.subjectName || '').slice(0, 28)}` : 'Última lista';
+
+    const navHint = `
+      <div style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:2px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;">
+        <span class="material-icons-round" style="font-size:30px;color:#b45309;flex-shrink:0;">swap_horiz</span>
+        <div style="flex:1;font-size:14px;color:#78350f;line-height:1.4;">
+          <strong>Tienes ${ordered.length} listas en total.</strong> Usa los botones <strong style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #b45309;">◀ ANTERIOR</strong> y <strong style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #b45309;">SIGUIENTE ▶</strong> de abajo para moverte entre ellas — tu trabajo NO se pierde al cambiar.
+        </div>
+      </div>`;
+
     const nav = `
-      <div class="ge-nav" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#f8fafc;padding:12px;border-radius:8px;margin-top:8px;">
-        <button class="btn btn-outline ge-nav-prev" ${!prev ? 'disabled' : ''}
+      <div class="ge-nav ge-nav-pulse" style="display:flex;align-items:stretch;gap:12px;flex-wrap:wrap;background:#f8fafc;padding:14px;border-radius:10px;margin-top:8px;border:2px dashed #94a3b8;">
+        <button class="btn btn-primary ge-nav-prev" ${!prev ? 'disabled' : ''}
           data-action="switch-assignment"
           data-assignment-id="${prev?.id || ''}"
           data-group-id="${prev?.groupId || ''}"
           data-subject-id="${prev?.subjectId || ''}"
-          style="display:flex;align-items:center;gap:6px;padding:10px 14px;text-align:left;flex:1;min-width:200px;max-width:300px;">
-          <span style="font-size:18px;line-height:1;">◀</span>
+          title="${prev ? 'Ir a la lista anterior: ' + Utils.sanitize(prevLabel) : 'Ya estás en la primera lista'}"
+          style="display:flex;align-items:center;gap:10px;padding:14px 18px;text-align:left;flex:1;min-width:220px;max-width:320px;font-size:14px;">
+          <span style="font-size:28px;line-height:1;font-weight:700;">◀</span>
           <span style="display:flex;flex-direction:column;align-items:flex-start;line-height:1.2;">
-            <span style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Anterior</span>
-            <span style="font-size:13px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;">${Utils.sanitize(prevLabel)}</span>
+            <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;opacity:0.9;">Anterior</span>
+            <span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px;">${Utils.sanitize(prevLabel)}</span>
           </span>
         </button>
 
-        <div style="flex:0 0 auto;text-align:center;padding:8px 12px;background:#3182ce;color:#fff;border-radius:6px;font-weight:700;">
+        <div style="flex:0 0 auto;text-align:center;padding:10px 14px;background:#3182ce;color:#fff;border-radius:8px;font-weight:700;display:flex;flex-direction:column;justify-content:center;">
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.85;">Lista actual</div>
-          <div style="font-size:14px;margin-top:2px;">${idx + 1} de ${ordered.length}</div>
+          <div style="font-size:16px;margin-top:2px;">${idx + 1} de ${ordered.length}</div>
           <div style="font-size:11px;opacity:0.92;margin-top:2px;">${Utils.sanitize(currentLabel)}</div>
         </div>
 
@@ -299,21 +310,26 @@ const GradesModule = (function () {
           data-assignment-id="${next?.id || ''}"
           data-group-id="${next?.groupId || ''}"
           data-subject-id="${next?.subjectId || ''}"
-          style="display:flex;align-items:center;gap:6px;padding:10px 14px;text-align:right;flex:1;min-width:200px;max-width:300px;justify-content:flex-end;">
+          title="${next ? 'Ir a la siguiente lista: ' + Utils.sanitize(nextLabel) : 'Ya estás en la última lista'}"
+          style="display:flex;align-items:center;gap:10px;padding:14px 18px;text-align:right;flex:1;min-width:220px;max-width:320px;justify-content:flex-end;font-size:14px;">
           <span style="display:flex;flex-direction:column;align-items:flex-end;line-height:1.2;">
-            <span style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;opacity:0.85;">Siguiente</span>
-            <span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;">${Utils.sanitize(nextLabel)}</span>
+            <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;opacity:0.9;">Siguiente</span>
+            <span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px;">${Utils.sanitize(nextLabel)}</span>
           </span>
-          <span style="font-size:18px;line-height:1;">▶</span>
+          <span style="font-size:28px;line-height:1;font-weight:700;">▶</span>
         </button>
       </div>`;
 
     return `
       <div class="ge-tabs-container ge-assignment-nav">
+        ${navHint}
         <div class="ge-assignment-nav-header">
           <div>
-            <h3>Cambiar de lista</h3>
-            <p>El avance indica cuántos alumnos ya tienen captura en este parcial.</p>
+            <h3 style="font-size:15px;font-weight:700;color:#1e293b;display:flex;align-items:center;gap:6px;">
+              <span class="material-icons-round" style="font-size:20px;color:#3182ce;">list_alt</span>
+              Cambiar de lista
+            </h3>
+            <p>O escoge directo de este menú; el avance indica cuántos alumnos ya tienen captura en este parcial.</p>
           </div>
           <select id="assignment-jump" aria-label="Cambiar de lista">${options}</select>
         </div>
@@ -401,6 +417,26 @@ const GradesModule = (function () {
           container.innerHTML = UI.moduleContainer(UI.emptyState('person_off', 'Tu cuenta no está vinculada a un registro de docente. Contacta al administrador.'));
           return;
         }
+      }
+
+      // Deep-link desde dashboard O restauración tras refresh: el editor
+      // guarda su estado en sessionStorage. Si hay un target válido (asignación
+      // del maestro), reabrimos el editor directamente.
+      const pendingOrSaved = _pendingOpen || _readEditorState();
+      if (!isAdmin && pendingOrSaved) {
+        const target = _capAssignments.find(a =>
+          a.id === pendingOrSaved.assignmentId ||
+          (a.groupId === pendingOrSaved.groupId && a.subjectId === pendingOrSaved.subjectId)
+        );
+        _pendingOpen = null;
+        if (target) {
+          if (pendingOrSaved.partial) currentPartial = pendingOrSaved.partial;
+          assignments = _capAssignments;
+          api.openGradeEditor(target.id, target.groupId, target.subjectId);
+          return;
+        }
+        // Estado obsoleto (cambió la asignación, fue revocada, etc.): limpiar.
+        _clearEditorState();
       }
 
       // If teacher has only 1 assignment, open editor directly
@@ -592,9 +628,35 @@ const GradesModule = (function () {
   // TEACHER — GRADE EDITOR con rubros
   // ═══════════════════════════════════════════════════════════════
 
+  // Clave en sessionStorage para que un refresh devuelva al maestro al
+  // editor exacto donde estaba (no a la cascada). Se limpia solo cuando
+  // el usuario explícitamente sale con "Salir sin guardar" / Volver.
+  const _EDITOR_STATE_KEY = 'epo67_editorState';
+  function _saveEditorState(assignmentId, groupId, subjectId) {
+    try {
+      sessionStorage.setItem(_EDITOR_STATE_KEY, JSON.stringify({
+        assignmentId, groupId, subjectId, partial: currentPartial
+      }));
+    } catch (_) { /* sessionStorage puede fallar en private mode; no es crítico */ }
+  }
+  function _readEditorState() {
+    try {
+      const raw = sessionStorage.getItem(_EDITOR_STATE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+  function _clearEditorState() {
+    try { sessionStorage.removeItem(_EDITOR_STATE_KEY); } catch (_) { /* */ }
+  }
+
   async function openGradeEditor(assignmentId, groupId, subjectId) {
     selectedGroup = groupId;
     selectedSubject = subjectId;
+    // Si el caller no pasó assignmentId (ej. switchPartial), resolverlo
+    // desde la lista actual para que sessionStorage guarde el id real.
+    const resolvedAsgId = assignmentId
+      || (assignments.find(a => a.groupId === groupId && a.subjectId === subjectId)?.id);
+    _saveEditorState(resolvedAsgId || null, groupId, subjectId);
 
     try {
       // Para maestros, getStudents() global es rechazado por reglas. Usar query
@@ -654,6 +716,11 @@ const GradesModule = (function () {
   // ─── INPUT MODE STATE ───
   let _inputMode = 'manual'; // 'manual' or 'paste'
   let _pasteTargetField = null;
+
+  // Para deep-link desde el dashboard del maestro: la tarjeta deja aquí
+  // qué asignación abrir, y renderTeacher lo lee y abre el editor directo.
+  let _pendingOpen = null;
+  function setPendingOpen(payload) { _pendingOpen = payload || null; }
 
   // ─── DIRTY STATE (unsaved changes tracking) ───
   let _isDirty = false;
@@ -931,39 +998,51 @@ const GradesModule = (function () {
     students.forEach((s, i) => {
       const key = `${s.docId}_${selectedSubject}_${currentPartial}`;
       const gradeData = grades[key] || {};
+      const isTraslado = !!s.bajaPendiente;
+
+      // Calcular si la regla EPO67 del PE aplica para resaltar el input al renderizar
+      const peIgnoredInitial = !isTraslado && K.isPEIgnored(rubros.reduce((acc, r) => {
+        if (gradeData[r.key] !== undefined) acc[r.key] = gradeData[r.key];
+        return acc;
+      }, {}));
 
       const inputCells = rubros.map(r => {
-        const val = gradeData[r.key] !== undefined ? gradeData[r.key] : '';
+        const val = isTraslado ? '' : (gradeData[r.key] !== undefined ? gradeData[r.key] : '');
+        const peClass = (r.key === 'pe' && peIgnoredInitial) ? ' pe-input-ignored' : '';
         return `<td class="cell-rubro" data-field="${r.key}">
-          <input type="number" min="0" max="${r.max}" step="${r.step}" value="${val}" placeholder="-"
-            class="ge-input grade-rubro" data-student-id="${s.docId}" data-field="${r.key}">
+          <input type="number" min="0" max="${r.max}" step="${r.step}" value="${val}" placeholder="${isTraslado ? '' : '-'}"
+            class="ge-input grade-rubro${peClass}" data-student-id="${s.docId}" data-field="${r.key}"${isTraslado ? ' disabled' : ''}>
         </td>`;
       }).join('');
 
       const suma = _calcRowSuma(gradeData, rubros);
       const storedCal = gradeData.cal !== undefined ? gradeData.cal : (gradeData.value !== undefined ? gradeData.value : null);
-      // Has saved data? (any rubro, cal, or value exists in Firestore)
       const hasStoredData = storedCal !== null || rubros.some(r => gradeData[r.key] !== undefined);
-      const sumaDisplay = hasStoredData ? suma.toFixed(1) : '';
-      const cal = hasStoredData ? (K.calcCal(suma) || storedCal || 5) : '';
+      const peIgnoredBadge = peIgnoredInitial
+        ? ' <span class="pe-ignored-badge" title="Regla EPO67: el Punto Extra no se aplica porque la suma base (sin PE) es menor a 6. Ingresa rubros suficientes para aprobar y el PE comenzara a sumar.">PE no aplica</span>'
+        : '';
+      const sumaDisplay = isTraslado ? '' : (hasStoredData ? suma.toFixed(1) + peIgnoredBadge : '');
+      const cal = isTraslado ? '' : (hasStoredData ? (K.calcCal(suma) || storedCal || 5) : '');
       const calClass = cal !== '' && cal < 6 ? 'cal-fail' : (cal !== '' ? 'cal-pass' : '');
-      const rowClass = cal !== '' && Number(cal) < 6 ? ' row-reprobado' : '';
-      const faltas = gradeData.faltas !== undefined ? gradeData.faltas : '';
+      const rowClass = (cal !== '' && Number(cal) < 6 ? ' row-reprobado' : '') + (isTraslado ? ' row-traslado' : '');
+      const faltas = isTraslado ? '' : (gradeData.faltas !== undefined ? gradeData.faltas : '');
+      const trasladoStyle = isTraslado ? ' style="background:#fff7ed;opacity:0.75;"' : '';
+      const trasladoBadge = isTraslado ? ' <span class="badge" style="background:#f97316;color:#fff;font-size:0.65rem;padding:1px 6px;margin-left:6px;vertical-align:middle;">TRASLADO PENDIENTE</span>' : '';
 
-      rowsHtml += `<tr data-student-id="${s.docId}" class="${rowClass}">
+      rowsHtml += `<tr data-student-id="${s.docId}" data-traslado="${isTraslado ? '1' : '0'}" class="${rowClass}"${trasladoStyle}>
         <td class="cell-num">${i + 1}</td>
-        <td class="cell-name" title="${Utils.sanitize(s.nombreCompleto || '')}">${Utils.sanitize(s.nombreCompleto || '')}</td>
+        <td class="cell-name" title="${Utils.sanitize(s.nombreCompleto || '')}${isTraslado ? ' — Traslado pendiente: no se captura' : ''}">${Utils.sanitize(s.nombreCompleto || '')}${trasladoBadge}</td>
         ${inputCells}
         <td class="cell-suma col-suma">${sumaDisplay}</td>
         <td class="cell-cal ${calClass} col-cal">${cal}</td>
         <td class="cell-faltas">
-          <input type="number" min="0" max="99" step="1" value="${faltas}" placeholder="-"
-            class="ge-input input-faltas grade-faltas" data-student-id="${s.docId}" data-field="faltas">
+          <input type="number" min="0" max="99" step="1" value="${faltas}" placeholder="${isTraslado ? '' : '-'}"
+            class="ge-input input-faltas grade-faltas" data-student-id="${s.docId}" data-field="faltas"${isTraslado ? ' disabled' : ''}>
         </td>
         <td style="text-align:center;padding:2px;">
-          <button class="btn-icon" data-action="report-incident" data-student-id="${s.docId}" data-student-name="${Utils.sanitize(s.nombreCompleto || '')}" title="Reportar incidencia" style="color:var(--warning);background:none;border:none;cursor:pointer;padding:2px;">
+          ${isTraslado ? '' : `<button class="btn-icon" data-action="report-incident" data-student-id="${s.docId}" data-student-name="${Utils.sanitize(s.nombreCompleto || '')}" title="Reportar incidencia" style="color:var(--warning);background:none;border:none;cursor:pointer;padding:2px;">
             <span class="material-icons-round" style="font-size:18px;">flag</span>
-          </button>
+          </button>`}
         </td>
       </tr>`;
     });
@@ -1016,6 +1095,18 @@ const GradesModule = (function () {
               <span class="material-icons-round" style="font-size:14px;vertical-align:middle;">edit_note</span> Sin guardar
             </span>
             <button class="btn btn-outline" data-action="back-to-list">\u2190 Volver</button>
+          </div>
+        </div>
+
+        <div style="background:linear-gradient(135deg,#d1fae5 0%,#a7f3d0 100%);border:2px solid #10b981;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:14px;">
+          <span class="material-icons-round" style="font-size:36px;color:#047857;flex-shrink:0;">verified</span>
+          <div style="flex:1;">
+            <div style="font-size:15px;font-weight:700;color:#064e3b;margin-bottom:2px;">
+              Guardar NO es definitivo
+            </div>
+            <div style="font-size:13px;color:#065f46;line-height:1.4;">
+              Puedes regresar a esta pantalla las veces que necesites y modificar cualquier calificaci\u00f3n, falta o punto extra <strong>mientras el parcial est\u00e9 abierto</strong>. Da clic en "Guardar Calificaciones" cuantas veces quieras \u2014 no bloquea la edici\u00f3n ni borra trabajo anterior.
+            </div>
           </div>
         </div>
 
@@ -1104,7 +1195,7 @@ const GradesModule = (function () {
           <button class="btn btn-outline" data-action="print-grades">
             <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>Imprimir
           </button>
-          <button class="btn btn-outline" data-action="back-to-list">Cancelar</button>
+          <button class="btn btn-outline" data-action="back-to-list">Salir sin guardar</button>
         </div>
       </div>`;
 
@@ -1329,6 +1420,8 @@ const GradesModule = (function () {
   // Si pegó un bloque (varias columnas): llena el bloque a partir de la celda.
   // Celdas vacías en el clipboard NO sobrescriben los valores existentes.
   // Valores fuera de rango se marcan en rojo y NO se aplican.
+  // Si el primer renglón es un encabezado (texto no-numérico), se salta
+  // sin desplazar la asignación de filas.
   function _bindInputModes(container) {
     const tableContainer = container.querySelector('.grade-editor-table');
     if (!tableContainer) return;
@@ -1345,13 +1438,24 @@ const GradesModule = (function () {
 
     // Parsear: filas separadas por \n, columnas por \t
     let rows = clipboardText.split(/\r?\n/);
-    // Quitar filas vacías SOLO al inicio y al final (preservar vacías en medio)
-    while (rows.length > 0 && rows[0].trim() === '') rows.shift();
+    // Solo quitar vacías trailing (suelen venir del clipboard como newline final).
+    // NO trimear leading: una celda vacía al inicio puede ser intencional —
+    // representa al primer alumno sin valor (caso reportado: el sistema
+    // "subía" todos los valores cuando el primer alumno tenía cero).
     while (rows.length > 0 && rows[rows.length - 1].trim() === '') rows.pop();
     if (rows.length === 0) return;
 
     // Si es UN solo valor sin tabs, dejar el paste nativo del input
     if (rows.length === 1 && !rows[0].includes('\t')) return;
+
+    // Detectar encabezado: si el primer renglón tiene texto no-numérico
+    // (ej. "FALTAS", "Punto Extra", "Cal"), se asume que es header y se
+    // salta. Así no consume el lugar del primer alumno.
+    const firstCellRaw = (rows[0] || '').split('\t')[0].trim();
+    const firstCleaned = firstCellRaw.replace(',', '.').replace(/[^0-9.\-]/g, '');
+    const isHeader = firstCellRaw !== '' && (firstCleaned === '' || isNaN(parseFloat(firstCleaned)));
+    const dataStart = isHeader ? 1 : 0;
+    let headerSkipped = isHeader;
 
     // Multi-valor: tomamos control del paste y distribuimos
     e.preventDefault();
@@ -1369,7 +1473,8 @@ const GradesModule = (function () {
     if (startFieldIdx === -1) return;
 
     // Snapshot para Deshacer
-    _pushUndo('Pegar (' + rows.length + ' fila' + (rows.length === 1 ? '' : 's') + ')');
+    const dataRowCount = rows.length - dataStart;
+    _pushUndo('Pegar (' + dataRowCount + ' fila' + (dataRowCount === 1 ? '' : 's') + ')');
 
     let appliedCount = 0;
     let invalidCount = 0;
@@ -1377,10 +1482,11 @@ const GradesModule = (function () {
     const changedInputs = [];
     const invalidInputs = [];
 
-    for (let i = 0; i < rows.length; i++) {
-      const targetRowIdx = startRowIdx + i;
+    for (let i = dataStart; i < rows.length; i++) {
+      const targetRowIdx = startRowIdx + (i - dataStart);
       if (targetRowIdx >= allRows.length) break;
       const targetRow = allRows[targetRowIdx];
+      if (targetRow.dataset.traslado === '1') { emptyCount++; continue; }
 
       // Una fila del clipboard puede tener múltiples columnas separadas por \t
       const cells = rows[i].split('\t');
@@ -1432,6 +1538,7 @@ const GradesModule = (function () {
 
     // Toast informativo
     let msg = `✅ ${appliedCount} valor${appliedCount === 1 ? '' : 'es'} aplicado${appliedCount === 1 ? '' : 's'}`;
+    if (headerSkipped) msg += ` · 1 encabezado omitido`;
     if (emptyCount > 0) msg += ` · ${emptyCount} sin cambio`;
     if (invalidCount > 0) msg += ` · ${invalidCount} en rojo (fuera de rango)`;
     Toast.show(msg, invalidCount > 0 ? 'warning' : 'success');
@@ -1488,6 +1595,7 @@ const GradesModule = (function () {
     const failing = [];
 
     document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+      if (row.dataset.traslado === '1') return;
       const studentId = row.dataset.studentId;
       const key = `${studentId}_${selectedSubject}_${currentPartial}`;
       const stored = grades[key] || {};
@@ -1815,14 +1923,25 @@ const GradesModule = (function () {
     // Always show suma/cal — vacío = 0, si todo es 0 la cal es 5
     const suma = K.calcSuma(data);
     const cal = K.calcCal(suma);
+    const peIgnored = K.isPEIgnored(data); // Regla EPO67: el PE no rescata reprobados
 
     const sumaCell = row.querySelector('.col-suma');
     const calCell = row.querySelector('.col-cal');
-    if (sumaCell) sumaCell.textContent = suma.toFixed(1);
+    if (sumaCell) {
+      // Limpia y vuelve a poner el numero + (si aplica) el badge "PE no aplica"
+      const badge = peIgnored
+        ? ' <span class="pe-ignored-badge" title="Regla EPO67: el Punto Extra no se aplica porque la suma base (sin PE) es menor a 6. Ingresa rubros suficientes para aprobar y el PE comenzara a sumar.">PE no aplica</span>'
+        : '';
+      sumaCell.innerHTML = suma.toFixed(1) + badge;
+    }
     if (calCell) {
       calCell.textContent = cal;
       calCell.className = 'cell-cal ' + (cal !== '' && cal < 6 ? 'cal-fail' : (cal !== '' ? 'cal-pass' : '')) + ' col-cal';
     }
+
+    // Resalta visualmente el input PE cuando esta siendo ignorado
+    const peInput = row.querySelector('input[data-field="pe"]');
+    if (peInput) peInput.classList.toggle('pe-input-ignored', peIgnored);
 
     row.classList.toggle('row-reprobado', cal !== '' && cal < 6);
 
@@ -2096,6 +2215,7 @@ const GradesModule = (function () {
     let validationErrors = 0;
 
     document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+      if (row.dataset.traslado === '1') return;
       rubros.forEach(r => {
         const input = row.querySelector(`input[data-field="${r.key}"]`);
         if (input && input.value.trim() !== '') {
@@ -2165,6 +2285,9 @@ const GradesModule = (function () {
     let incidentCount = 0;
 
     document.querySelectorAll('tbody tr[data-student-id]').forEach(row => {
+      // Alumnos con traslado pendiente: no se captura nada, se ignoran en save.
+      if (row.dataset.traslado === '1') return;
+
       const studentId = row.dataset.studentId;
       const key = `${studentId}_${selectedSubject}_${currentPartial}`;
       const stored = grades[key] || {};
@@ -2454,13 +2577,14 @@ const GradesModule = (function () {
 
     studentsList.forEach((s, idx) => {
       const g = gradeData[s.docId || s.id] || {};
-      const ec = g.ec !== undefined && g.ec !== null ? g.ec : '';
-      const tr = g.tr !== undefined && g.tr !== null ? g.tr : '';
-      const ep = g.ex !== undefined && g.ex !== null ? g.ex : '';
-      const pe = g.pe !== undefined && g.pe !== null ? g.pe : '';
-      const sm = g.suma !== undefined && g.suma !== null ? g.suma : '';
-      const fa = g.faltas !== undefined && g.faltas !== null ? Math.round(g.faltas) : '';
-      const cd = g.cal !== undefined && g.cal !== null ? g.cal : (g.value !== undefined && g.value !== null ? Math.min(Number(g.value), 10) : '');
+      const isTraslado = !!s.bajaPendiente;
+      const ec = isTraslado ? '' : (g.ec !== undefined && g.ec !== null ? g.ec : 0);
+      const tr = isTraslado ? '' : (g.tr !== undefined && g.tr !== null ? g.tr : 0);
+      const ep = isTraslado ? '' : (g.ex !== undefined && g.ex !== null ? g.ex : 0);
+      const pe = isTraslado ? '' : (g.pe !== undefined && g.pe !== null ? g.pe : 0);
+      const sm = isTraslado ? '' : (g.suma !== undefined && g.suma !== null ? g.suma : 0);
+      const fa = isTraslado ? '' : (g.faltas !== undefined && g.faltas !== null ? Math.round(g.faltas) : 0);
+      const cd = isTraslado ? '' : (g.cal !== undefined && g.cal !== null ? g.cal : (g.value !== undefined && g.value !== null ? Math.min(Number(g.value), 10) : ''));
 
       if (cd !== '') {
         const nv = parseFloat(cd);
@@ -2488,15 +2612,15 @@ const GradesModule = (function () {
         '<td class="c">' + pe + '</td>' +
         '<td class="c">' + sm + '</td>' +
         '<td class="c">' + fa + '</td>' +
-        '<td class="c" style="font-weight:bold;">' + cd + '</td>' +
+        '<td class="c" style="font-weight:bold;">' + (cd === '' ? (isTraslado ? '' : 0) : cd) + '</td>' +
         '<td></td>' +
         '</tr>';
     });
 
     const existencia = studentsList.length;
     const inscritos = existencia;
-    const promedio = gradedCount > 0 ? (totalCalif / gradedCount).toFixed(2) : '';
-    const pctAprob = gradedCount > 0 ? ((aprobados / gradedCount) * 100).toFixed(1) + '%' : '';
+    const promedio = gradedCount > 0 ? (totalCalif / gradedCount).toFixed(2) : 0;
+    const pctAprob = gradedCount > 0 ? ((aprobados / gradedCount) * 100).toFixed(1) + '%' : '0%';
 
     const logoHeader = typeof LOGO_HEADER_SRC !== 'undefined' ? LOGO_HEADER_SRC : '';
     const logoFooter = typeof LOGO_FOOTER_SRC !== 'undefined' ? LOGO_FOOTER_SRC : '';
@@ -3387,7 +3511,7 @@ html, body { margin:0; padding:0; }
   const api = {
     renderTeacher, renderAdmin, openGradeEditor,
     switchPartial, saveGrades, exportGrades,
-    printGrades, printAdminGrades
+    printGrades, printAdminGrades, setPendingOpen
   };
   return api;
 })();

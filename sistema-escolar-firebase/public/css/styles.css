@@ -1075,11 +1075,28 @@ textarea {
   font-weight: 700;
   padding: 8px 18px;
   font-size: 13px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  cursor: pointer;
+}
+.ge-nav-prev:not(:disabled):hover, .ge-nav-next:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(49,130,206,0.35);
+}
+.ge-nav-prev:not(:disabled):active, .ge-nav-next:not(:disabled):active {
+  transform: translateY(0);
 }
 .ge-nav-prev:disabled, .ge-nav-next:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Pulso suave la primera vez que aparecen los botones de navegación
+   para que el maestro note que son interactivos. */
+@keyframes ge-nav-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); }
+  50%      { box-shadow: 0 0 0 6px rgba(245,158,11,0.18); }
+}
+.ge-nav-pulse { animation: ge-nav-pulse 1.6s ease-in-out 2; }
 
 .btn-danger-soft {
   border-color: #feb2b2 !important;
@@ -1215,6 +1232,41 @@ textarea {
 .grade-editor-table tbody td.cell-cal.cal-fail {
   color: #c53030;
   background: #fff5f5;
+}
+
+/* ─── Regla EPO67: el Punto Extra no rescata reprobados ─────────────────────
+   Badge "PE no aplica" en la celda SUMA y resaltado del input PE cuando
+   sumaBase < 6 y el alumno tiene PE > 0 ingresado. Sirve solo de feedback
+   visual para el maestro; el calculo ya excluye el PE en este caso. */
+.pe-ignored-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fbbf24;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+  cursor: help;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.grade-editor-table input.pe-input-ignored {
+  background: #fef3c7;
+  border: 1px solid #fbbf24 !important;
+  color: #92400e;
+  font-weight: 600;
+  text-decoration: line-through;
+  text-decoration-color: #b45309;
+  text-decoration-thickness: 1.5px;
+}
+.grade-editor-table input.pe-input-ignored:focus {
+  background: #fef9e7;
+  outline: 2px solid #f59e0b;
 }
 
 /* ─── Highlight de fila activa ─────────────────────────────────────────────
