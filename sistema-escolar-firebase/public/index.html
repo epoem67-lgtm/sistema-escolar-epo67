@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sistema Escolar</title>
-  <link rel="stylesheet" href="/css/styles.css?v=6.12">
+  <link rel="stylesheet" href="/css/styles.css?v=6.29">
 
   <!-- Preconnect a dominios externos para acelerar el handshake TLS/DNS -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -17,11 +17,11 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round&display=swap" rel="stylesheet">
 
   <!-- Preload de assets criticos (anticipa descarga de los core scripts del body) -->
-  <link rel="preload" href="/js/firebase-config.js?v=6.12" as="script">
-  <link rel="preload" href="/js/constants.js?v=6.12" as="script">
-  <link rel="preload" href="/js/data-store.js?v=6.12" as="script">
-  <link rel="preload" href="/js/app.js?v=6.12" as="script">
-  <link rel="preload" href="/js/components.js?v=6.12" as="script">
+  <link rel="preload" href="/js/firebase-config.js?v=6.29" as="script">
+  <link rel="preload" href="/js/constants.js?v=6.30" as="script">
+  <link rel="preload" href="/js/data-store.js?v=6.29" as="script">
+  <link rel="preload" href="/js/app.js?v=6.29" as="script">
+  <link rel="preload" href="/js/components.js?v=6.29" as="script">
 
   <!-- Firebase SDKs -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
@@ -53,7 +53,10 @@
         <div class="form-group">
           <label for="loginEmail">Correo electrónico</label>
           <input type="email" id="loginEmail" placeholder="tu@correo.com" required autocomplete="email">
-          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748b;margin-top:4px;cursor:pointer;font-weight:400;">
+          <small style="display:block;font-size:11px;color:#64748b;margin-top:4px;line-height:1.35;">
+            Si ya configuraste tu cuenta, puedes entrar con tu correo personal (gmail, hotmail…). Si es tu primera vez, usa el correo <code style="background:#f1f5f9;padding:1px 4px;border-radius:3px;">apellido.nombre@epo67.local</code> que te dio el administrador.
+          </small>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748b;margin-top:6px;cursor:pointer;font-weight:400;">
             <input type="checkbox" id="rememberEmail" style="margin:0;width:auto;" checked>
             Recordar mi correo en este dispositivo
           </label>
@@ -328,48 +331,48 @@
 
   <!-- ═══════ SCRIPTS ═══════ -->
   <!-- Core -->
-  <script src="/js/firebase-config.js?v=6.12"></script>
-  <script src="/js/constants.js?v=6.12"></script>
-  <script src="/js/data-store.js?v=6.12"></script>
-  <script src="/js/app.js?v=6.12"></script>
-  <script src="/js/components.js?v=6.12"></script>
-  <script src="/js/lib-loader.js?v=6.12"></script>
-  <script src="/js/logos.js?v=6.12"></script>
-  <script src="/js/modules/student-profile.js?v=6.12" defer></script>
+  <script src="/js/firebase-config.js?v=6.29"></script>
+  <script src="/js/constants.js?v=6.30"></script>
+  <script src="/js/data-store.js?v=6.29"></script>
+  <script src="/js/app.js?v=6.29"></script>
+  <script src="/js/components.js?v=6.29"></script>
+  <script src="/js/lib-loader.js?v=6.29"></script>
+  <script src="/js/logos.js?v=6.29"></script>
+  <script src="/js/modules/student-profile.js?v=6.29" defer></script>
 
   <!-- Módulos (defer: se descargan en paralelo y ejecutan tras parseo, en orden) -->
-  <script src="/js/modules/help-center.js?v=6.12" defer></script>
-  <script src="/js/modules/dashboard.js?v=6.12" defer></script>
-  <script src="/js/modules/school-config.js?v=6.12" defer></script>
-  <script src="/js/modules/teachers.js?v=6.12" defer></script>
-  <script src="/js/modules/students.js?v=6.12" defer></script>
-  <script src="/js/modules/grades.js?v=6.12" defer></script>
-  <script src="/js/modules/partial-close.js?v=6.12" defer></script>
-  <script src="/js/modules/at-risk.js?v=6.12" defer></script>
-  <script src="/js/modules/users-mgmt.js?v=6.12" defer></script>
-  <script src="/js/modules/my-lists.js?v=6.12" defer></script>
-  <script src="/js/modules/my-f1.js?v=6.12" defer></script>
-  <script src="/js/modules/enrollment.js?v=6.12" defer></script>
-  <script src="/js/modules/honor-roll.js?v=6.12" defer></script>
+  <script src="/js/modules/help-center.js?v=6.29" defer></script>
+  <script src="/js/modules/dashboard.js?v=6.29" defer></script>
+  <script src="/js/modules/school-config.js?v=6.29" defer></script>
+  <script src="/js/modules/teachers.js?v=6.29" defer></script>
+  <script src="/js/modules/students.js?v=6.29" defer></script>
+  <script src="/js/modules/grades.js?v=6.29" defer></script>
+  <script src="/js/modules/partial-close.js?v=6.29" defer></script>
+  <script src="/js/modules/at-risk.js?v=6.29" defer></script>
+  <script src="/js/modules/users-mgmt.js?v=6.29" defer></script>
+  <script src="/js/modules/my-lists.js?v=6.29" defer></script>
+  <script src="/js/modules/my-f1.js?v=6.29" defer></script>
+  <script src="/js/modules/enrollment.js?v=6.29" defer></script>
+  <script src="/js/modules/honor-roll.js?v=6.29" defer></script>
 
   <!-- Nuevos módulos v3.1 -->
-  <script src="/js/modules/import-grades.js?v=6.12" defer></script>
-  <script src="/js/modules/import-students.js?v=6.12" defer></script>
-  <script src="/js/modules/boletas.js?v=6.12" defer></script>
-  <script src="/js/modules/indicadores.js?v=6.12" defer></script>
-  <script src="/js/modules/concentrado.js?v=6.12" defer></script>
-  <script src="/js/modules/attendance.js?v=6.12" defer></script>
-  <script src="/js/modules/reports-comparative.js?v=6.12" defer></script>
-  <script src="/js/modules/bitacora.js?v=6.12" defer></script>
-  <script src="/js/modules/captura-progress.js?v=6.12" defer></script>
-  <script src="/js/modules/grade-corrections.js?v=6.12" defer></script>
-  <script src="/js/global-search.js?v=6.12" defer></script>
-  <script src="/js/onboarding-tour.js?v=6.12" defer></script>
-  <script src="/js/offline-helper.js?v=6.12" defer></script>
-  <script src="/js/help-tips.js?v=6.12" defer></script>
-  <script src="/js/modules/correction-request.js?v=6.12" defer></script>
-  <script src="/js/modules/grades-query.js?v=6.12" defer></script>
-  <script src="/js/modules/boleta-oficial.js?v=6.12" defer></script>
+  <script src="/js/modules/import-grades.js?v=6.29" defer></script>
+  <script src="/js/modules/import-students.js?v=6.29" defer></script>
+  <script src="/js/modules/boletas.js?v=6.29" defer></script>
+  <script src="/js/modules/indicadores.js?v=6.29" defer></script>
+  <script src="/js/modules/concentrado.js?v=6.29" defer></script>
+  <script src="/js/modules/attendance.js?v=6.29" defer></script>
+  <script src="/js/modules/reports-comparative.js?v=6.29" defer></script>
+  <script src="/js/modules/bitacora.js?v=6.29" defer></script>
+  <script src="/js/modules/captura-progress.js?v=6.29" defer></script>
+  <script src="/js/modules/grade-corrections.js?v=6.29" defer></script>
+  <script src="/js/global-search.js?v=6.29" defer></script>
+  <script src="/js/onboarding-tour.js?v=6.29" defer></script>
+  <script src="/js/offline-helper.js?v=6.29" defer></script>
+  <script src="/js/help-tips.js?v=6.29" defer></script>
+  <script src="/js/modules/correction-request.js?v=6.29" defer></script>
+  <script src="/js/modules/grades-query.js?v=6.29" defer></script>
+  <script src="/js/modules/boleta-oficial.js?v=6.29" defer></script>
 
   <!-- ═══════ INDICADOR OFFLINE (aparece cuando se pierde la conexión) ═══════ -->
   <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#dc2626;color:#fff;text-align:center;padding:8px 16px;font-size:13px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.2);">

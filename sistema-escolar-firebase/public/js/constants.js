@@ -245,11 +245,31 @@ const K = Object.freeze({
     return turno === 'VESPERTINO' ? this.RUBROS_VESPERTINO : this.RUBROS_MATUTINO;
   },
 
-  /** Calcula SUMA: sum de rubros, cap a 10 */
+  /** Calcula SUMA con regla EPO67 del Punto Extra:
+   *  - Matutino:   sumaBase = EC + TR
+   *  - Vespertino: sumaBase = EC + EX + TR
+   *  - Si sumaBase < 6 (alumno reprobado en rubros principales) el PUNTO EXTRA
+   *    NO se suma. El PE es premio para alumnos aprobados, no rescate.
+   *  - Si sumaBase >= 6, suma final = sumaBase + PE (cap 10, 1 decimal).
+   *
+   *  El campo PE se identifica por la clave 'pe' del objeto rubros
+   *  (definida en RUBROS_MATUTINO / RUBROS_VESPERTINO). Cualquier otra
+   *  clave se considera parte de la sumaBase.
+   */
   calcSuma(rubros) {
-    const vals = Object.values(rubros).filter(v => v !== null && v !== undefined && v !== '');
-    const suma = vals.reduce((a, b) => a + Number(b), 0);
-    return Math.min(Math.round(suma * 10) / 10, 10); // 1 decimal, cap 10
+    const PASS = 6;
+    let sumaBase = 0;
+    let pe = 0;
+    for (const [key, val] of Object.entries(rubros || {})) {
+      if (val === null || val === undefined || val === '') continue;
+      const n = Number(val);
+      if (isNaN(n)) continue;
+      if (key === 'pe') pe = n;
+      else sumaBase += n;
+    }
+    // Regla: PE solo cuenta si la base ya es aprobatoria
+    const total = sumaBase < PASS ? sumaBase : sumaBase + pe;
+    return Math.min(Math.round(total * 10) / 10, 10); // 1 decimal, cap 10
   },
 
   /** Calcula CAL (calificación final): redondeo especial EPO67
