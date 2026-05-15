@@ -20,7 +20,7 @@
   <link rel="preload" href="/js/firebase-config.js?v=6.29" as="script">
   <link rel="preload" href="/js/constants.js?v=6.31" as="script">
   <link rel="preload" href="/js/data-store.js?v=6.29" as="script">
-  <link rel="preload" href="/js/app.js?v=6.29" as="script">
+  <link rel="preload" href="/js/app.js?v=6.33" as="script">
   <link rel="preload" href="/js/components.js?v=6.29" as="script">
 
   <!-- Firebase SDKs -->
@@ -300,6 +300,9 @@
             <span id="userRole" class="user-role"></span>
           </div>
         </div>
+        <button class="btn-icon" onclick="Auth.openChangePasswordModal()" title="Cambiar mi contraseña" style="margin-right:4px;">
+          <span class="material-icons-round">lock</span>
+        </button>
         <button class="btn-icon" onclick="Auth.logout()" title="Cerrar sesión">
           <span class="material-icons-round">logout</span>
         </button>
@@ -334,7 +337,7 @@
   <script src="/js/firebase-config.js?v=6.29"></script>
   <script src="/js/constants.js?v=6.31"></script>
   <script src="/js/data-store.js?v=6.29"></script>
-  <script src="/js/app.js?v=6.29"></script>
+  <script src="/js/app.js?v=6.33"></script>
   <script src="/js/components.js?v=6.29"></script>
   <script src="/js/lib-loader.js?v=6.29"></script>
   <script src="/js/logos.js?v=6.29"></script>
