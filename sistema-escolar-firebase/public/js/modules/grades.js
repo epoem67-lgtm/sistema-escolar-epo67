@@ -2463,7 +2463,24 @@ const GradesModule = (function () {
           Toast.show(`Reintentando guardar... (${attempt}/${maxRetries})`, 'warning');
           await new Promise(r => setTimeout(r, 1500 * attempt));
         } else {
-          Toast.show('Error al guardar calificaciones. Tus datos están seguros en el editor. Verifica tu conexión e intenta de nuevo.', 'error');
+          // Mensaje especifico segun el codigo de error de Firebase, asi el
+          // maestro y el admin saben EXACTAMENTE que pasa.
+          let msg;
+          const code = error && error.code;
+          if (code === 'permission-denied' || (error && (error.message||'').toLowerCase().includes('insufficient permissions'))) {
+            msg = '⛔ No tienes permiso para guardar en este grupo/materia/parcial. ' +
+                  'Causas posibles: (1) el parcial fue cerrado, (2) tu asignación a este grupo/materia no esta registrada. ' +
+                  'Avisa al admin con este mensaje y un screenshot para que lo revise.';
+          } else if (code === 'unauthenticated' || (error && (error.message||'').toLowerCase().includes('unauthenticated'))) {
+            msg = '🔒 Tu sesión expiró. Cierra sesión, vuelve a entrar e intenta de nuevo.';
+          } else if (code === 'unavailable' || (error && (error.message||'').toLowerCase().includes('unavailable'))) {
+            msg = '📡 Servicio no disponible momentaneamente. Espera 1 minuto e intenta de nuevo.';
+          } else if (error && (error.message||'').toLowerCase().includes('timeout')) {
+            msg = '⏱ El guardado tardó demasiado. Verifica tu conexión a internet e intenta de nuevo.';
+          } else {
+            msg = 'Error al guardar calificaciones. Tus datos están seguros en el editor. Verifica tu conexión e intenta de nuevo. (Detalle: ' + (code || (error && error.message) || 'error desconocido') + ')';
+          }
+          Toast.show(msg, 'error');
           _isSaving = false;
           if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
           // Save draft so data isn't lost
