@@ -29,9 +29,6 @@ const IndicadoresModule = (() => {
     if (!container) return;
     _destroyCharts();
 
-    // Carga Chart.js bajo demanda (la primera vez tarda ~200ms en red rapida)
-    await Lib.chart();
-
     const turnoOpts = K.TURNOS.map(t => `<option value="${t}">${t}</option>`).join('');
     const gradoOpts = K.GRADOS.map(g => `<option value="${g}">${g}\u00ba</option>`).join('');
     const parcialOpts = K.PARCIALES.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('');
@@ -41,27 +38,141 @@ const IndicadoresModule = (() => {
         <div class="module-header">
           <div class="module-header-text">
             <h1 class="module-title">Indicadores Institucionales</h1>
-            <p class="module-subtitle">Analisis de datos academicos</p>
-          </div>
-          <div class="module-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-primary" data-action="presentation"><span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">slideshow</span>Presentacion PDF</button>
-            <button class="btn btn-success" data-action="export">Exportar Excel</button>
+            <p class="module-subtitle">Elige el turno y la acción que necesitas. Eso es todo.</p>
           </div>
         </div>
 
-        <div class="card filter-bar">
-          <div class="filter-bar-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));">
-            <div class="form-group"><label>Turno</label><select id="ind-turno"><option value="">Todos</option>${turnoOpts}</select></div>
-            <div class="form-group"><label>Grado</label><select id="ind-grado"><option value="">Todos</option>${gradoOpts}</select></div>
-            <div class="form-group"><label>Grupo</label><select id="ind-grupo"><option value="">Todos</option></select></div>
-            <div class="form-group"><label>Parcial</label><select id="ind-parcial"><option value="">Todos</option>${parcialOpts}</select></div>
+        <!-- SELECTOR DE PARCIAL (chico, default P2) -->
+        <div class="chip-filter-bar" id="ind-chip-filters" style="padding:12px 16px;margin-bottom:18px;">
+          <div class="chip-filter-row" style="margin-bottom:0;">
+            <span class="chip-filter-label">¿Qué parcial?</span>
+            <div class="chip-group">
+              ${K.PARCIALES.map(p => `<button class="chip chip-parcial ${p.id === 'P2' ? 'active' : ''}" data-filter="parcial" data-value="${p.id}">${p.nombre}</button>`).join('')}
+              <button class="chip chip-parcial" data-filter="parcial" data-value="ACUM" title="Promedio acumulado de los 3 parciales">📊 Acumulado</button>
+            </div>
           </div>
-          <div class="filter-bar-actions">
-            <button class="btn btn-primary" data-action="calculate">Calcular</button>
+          <!-- Filtros ocultos para compatibilidad con código viejo -->
+          <span style="display:none;">
+            <button class="chip active" data-filter="turno" data-value=""></button>
+            <button class="chip active" data-filter="grado" data-value=""></button>
+            <button class="chip active" data-filter="grupo" data-value=""></button>
+          </span>
+        </div>
+
+        <!-- 2 TARJETAS POR TURNO con 2 acciones ÚTILES cada una -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:18px;margin-bottom:18px;">
+
+          <!-- TARJETA MATUTINO -->
+          <div style="background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(220,38,38,0.25);">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+              <span style="font-size:42px;">☀</span>
+              <div>
+                <div style="font-size:11px;font-weight:700;letter-spacing:1px;opacity:0.85;">TURNO</div>
+                <div style="font-size:26px;font-weight:900;line-height:1;">MATUTINO</div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <button class="btn-turno-action" data-action="download-excel" data-turno="MATUTINO" style="background:#fff;color:#b91c1c;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">grid_on</span>
+                <div style="flex:1;">
+                  <div>Excel de indicadores</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">5 hojas: PRIMERO, SEGUNDO, TERCERO, GENERAL, CASOS ESPECIALES</div>
+                </div>
+              </button>
+              <button class="btn-turno-action" data-action="download-analisis" data-turno="MATUTINO" data-formato="pdf" style="background:#fff;color:#b91c1c;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">picture_as_pdf</span>
+                <div style="flex:1;">
+                  <div>📄 Análisis en PDF</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">Para imprimir o leer. Abre listo para Cmd+P / Ctrl+P → Guardar como PDF</div>
+                </div>
+              </button>
+              <button class="btn-turno-action" data-action="download-analisis" data-turno="MATUTINO" data-formato="present" style="background:#fff;color:#b91c1c;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">slideshow</span>
+                <div style="flex:1;">
+                  <div>🎬 Presentación interactiva</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">Slideshow listo para proyectar. Navega con ← → o espacio.</div>
+                </div>
+              </button>
+              <button class="btn-turno-action" data-action="download-analisis" data-turno="MATUTINO" data-formato="json" style="background:#fff;color:#b91c1c;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">smart_toy</span>
+                <div style="flex:1;">
+                  <div>🤖 Análisis en JSON (para IA)</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">Pégalo en ChatGPT/Claude/Gemini para generar tu presentación profesional</div>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <!-- TARJETA VESPERTINO -->
+          <div style="background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(124,58,237,0.25);">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+              <span style="font-size:42px;">🌙</span>
+              <div>
+                <div style="font-size:11px;font-weight:700;letter-spacing:1px;opacity:0.85;">TURNO</div>
+                <div style="font-size:26px;font-weight:900;line-height:1;">VESPERTINO</div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <button class="btn-turno-action" data-action="download-excel" data-turno="VESPERTINO" style="background:#fff;color:#5b21b6;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">grid_on</span>
+                <div style="flex:1;">
+                  <div>Excel de indicadores</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">5 hojas: PRIMERO, SEGUNDO, TERCERO, GENERAL, CASOS ESPECIALES</div>
+                </div>
+              </button>
+              <button class="btn-turno-action" data-action="download-analisis" data-turno="VESPERTINO" data-formato="pdf" style="background:#fff;color:#5b21b6;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">picture_as_pdf</span>
+                <div style="flex:1;">
+                  <div>📄 Análisis en PDF</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">Para imprimir o leer. Abre listo para Cmd+P / Ctrl+P → Guardar como PDF</div>
+                </div>
+              </button>
+              <button class="btn-turno-action" data-action="download-analisis" data-turno="VESPERTINO" data-formato="present" style="background:#fff;color:#5b21b6;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">slideshow</span>
+                <div style="flex:1;">
+                  <div>🎬 Presentación interactiva</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">Slideshow listo para proyectar. Navega con ← → o espacio.</div>
+                </div>
+              </button>
+              <button class="btn-turno-action" data-action="download-analisis" data-turno="VESPERTINO" data-formato="json" style="background:#fff;color:#5b21b6;border:none;border-radius:10px;padding:14px 16px;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;text-align:left;box-shadow:0 3px 6px rgba(0,0,0,0.15);">
+                <span class="material-icons-round" style="font-size:24px;">smart_toy</span>
+                <div style="flex:1;">
+                  <div>🤖 Análisis en JSON (para IA)</div>
+                  <div style="font-size:11px;font-weight:500;opacity:0.7;">Pégalo en ChatGPT/Claude/Gemini para generar tu presentación profesional</div>
+                </div>
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- BANNER EXPLICATIVO -->
+        <div style="background:#eff6ff;border:2px solid #3182ce;border-radius:12px;padding:16px 20px;font-size:14px;color:#1e40af;line-height:1.6;">
+          <div style="font-size:16px;font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+            <span class="material-icons-round" style="font-size:22px;">tips_and_updates</span>
+            ¿Para qué sirve cada cosa?
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:4px solid #16a34a;">
+              <strong style="color:#15803d;">📊 Excel de indicadores</strong><br>
+              <span style="font-size:12px;color:#374151;">Las 5 hojas reglamentarias (PRIMERO, SEGUNDO, TERCERO, GENERAL, CASOS ESPECIALES).</span>
+            </div>
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:4px solid #2563eb;">
+              <strong style="color:#1d4ed8;">📄 Análisis en PDF</strong><br>
+              <span style="font-size:12px;color:#374151;">Reporte formateado para imprimir o leer. Cmd+P / Ctrl+P para guardar.</span>
+            </div>
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:4px solid #b91c1c;">
+              <strong style="color:#991b1b;">🎬 Presentación interactiva</strong><br>
+              <span style="font-size:12px;color:#374151;">Slideshow listo para junta o consejo técnico. Navega con flechas ← →. <strong>Generada por el sistema, no necesitas IA.</strong></span>
+            </div>
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:4px solid #d97706;">
+              <strong style="color:#b45309;">🤖 Análisis en JSON (para IA)</strong><br>
+              <span style="font-size:12px;color:#374151;">Pégalo en <strong>ChatGPT/Claude/Gemini</strong>. Trae el prompt incluido — la IA genera su propia presentación. ⚡</span>
+            </div>
           </div>
         </div>
 
-        <!-- TABS -->
+        <!-- TABS de visualización (se muestran solo cuando hay datos calculados) -->
         <div id="ind-tabs" style="display:none;">
           <div class="card" style="padding:0;margin-bottom:0;">
             <div style="display:flex;border-bottom:2px solid #e2e8f0;overflow-x:auto;">
@@ -74,16 +185,30 @@ const IndicadoresModule = (() => {
           <div id="ind-tab-content" style="margin-top:16px;"></div>
         </div>
 
-        <div id="ind-results">
-          <div class="empty-state">
-            <span class="material-icons-round empty-state-icon">analytics</span>
-            <p class="empty-state-text">Selecciona los filtros y haz clic en Calcular</p>
-          </div>
-        </div>
+        <div id="ind-results"></div>
       </div>`;
 
-    await loadData();
+    // Bind events ANTES de cargar datos — los botones son clickeables inmediatamente.
+    // La carga de datos corre en paralelo; los handlers esperan si todavía no terminó.
     bindEvents(container);
+    loadData(); // sin await — corre en background
+  }
+
+  // ─── HELPERS DE CHIP FILTERS ───
+  // Lee el filtro activo de un grupo de chips. Si nada está activo, retorna ''.
+  function _chipValue(filter) {
+    const bar = document.getElementById('ind-chip-filters');
+    if (!bar) return '';
+    const active = bar.querySelector(`.chip[data-filter="${filter}"].active`);
+    return active ? (active.dataset.value || '') : '';
+  }
+  // Cambia el chip activo en un grupo (toggle de la opción seleccionada)
+  function _setActiveChip(filter, value) {
+    const bar = document.getElementById('ind-chip-filters');
+    if (!bar) return;
+    bar.querySelectorAll(`.chip[data-filter="${filter}"]`).forEach(c => {
+      c.classList.toggle('active', (c.dataset.value || '') === (value || ''));
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -91,14 +216,41 @@ const IndicadoresModule = (() => {
   // ═══════════════════════════════════════════════════════════════
   async function loadData() {
     try {
-      const [students, subjects, groups] = await Promise.all([
-        Store.getStudents(), Store.getSubjects(), Store.getGroups()
+      const [students, subjects, groups, oriGroups] = await Promise.all([
+        Store.getStudents(), Store.getSubjects(), Store.getGroups(), Store.getOrientadorGroups()
       ]);
-      allStudents = students.filter(s => s.estatus === 'ACTIVO');
-      const groupIds = groups.map(g => g.id);
-      allGrades = await Store.getGradesByGroups(groupIds, true);
+
+      // ═══════════════════════════════════════════════════════════
+      // FILTRADO POR ROL para Indicadores:
+      // - Admin / Subdirector / Directivo: ven TODO (oriGroups === null)
+      // - Orientador / Orientador-docente: ven TODO el TURNO donde son orientadores
+      //   (no solo sus grupos específicos — necesitan reportar del turno completo)
+      // ═══════════════════════════════════════════════════════════
+      let filteredGroups;
+      if (oriGroups === null) {
+        // Admin: sin filtro
+        filteredGroups = groups;
+      } else if (oriGroups.length === 0) {
+        // Orientador sin grupos asignados: nada
+        filteredGroups = [];
+      } else {
+        // Detectar el/los turno(s) donde es orientador
+        const oriGroupSet = new Set(oriGroups);
+        const turnosDelOrientador = new Set(
+          groups.filter(g => oriGroupSet.has(g.id)).map(g => g.turno).filter(Boolean)
+        );
+        // Mostrar todos los grupos de esos turnos (no solo los específicos)
+        filteredGroups = groups.filter(g => turnosDelOrientador.has(g.turno));
+      }
+
+      const allowedIds = new Set(filteredGroups.map(g => g.id));
+      allStudents = students.filter(s =>
+        s.estatus === 'ACTIVO' && (oriGroups === null || allowedIds.has(s.groupId))
+      );
+      const groupIds = filteredGroups.map(g => g.id);
+      allGrades = groupIds.length > 0 ? await Store.getGradesByGroups(groupIds) : [];
       allSubjects = subjects;
-      allGroups = groups;
+      allGroups = filteredGroups;
       updateGroupOptions();
     } catch (e) {
       console.error('Error:', e);
@@ -107,15 +259,21 @@ const IndicadoresModule = (() => {
   }
 
   function updateGroupOptions() {
-    const turno = document.getElementById('ind-turno')?.value;
-    const grado = document.getElementById('ind-grado')?.value;
-    const sel = document.getElementById('ind-grupo');
-    if (!sel) return;
+    const chips = document.getElementById('ind-grupo-chips');
+    if (!chips) return;
+    const turno = _chipValue('turno');
+    const grado = _chipValue('grado');
     let filtered = [...allGroups];
     if (turno) filtered = filtered.filter(g => g.turno === turno);
     if (grado) filtered = filtered.filter(g => String(g.grado) === String(grado));
     const nombres = [...new Set(filtered.map(g => g.nombre || g.grupo))].filter(Boolean).sort();
-    sel.innerHTML = '<option value="">Todos</option>' + nombres.map(n => `<option value="${n}">${n}</option>`).join('');
+    const currentSelected = _chipValue('grupo');
+    // Si el grupo seleccionado ya no está en la lista filtrada, volver a "Todos"
+    const stillAvailable = nombres.includes(currentSelected);
+    chips.innerHTML = `
+      <button class="chip ${!currentSelected || !stillAvailable ? 'active' : ''}" data-filter="grupo" data-value="">Todos</button>
+      ${nombres.map(n => `<button class="chip ${currentSelected === n && stillAvailable ? 'active' : ''}" data-filter="grupo" data-value="${n}">${n}</button>`).join('')}
+    `;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -229,10 +387,10 @@ const IndicadoresModule = (() => {
 
   function calculate() {
     _destroyCharts();
-    const turno = document.getElementById('ind-turno')?.value;
-    const grado = document.getElementById('ind-grado')?.value;
-    const grupo = document.getElementById('ind-grupo')?.value;
-    const parcial = document.getElementById('ind-parcial')?.value;
+    const turno = _chipValue("turno");
+    const grado = _chipValue("grado");
+    const grupo = _chipValue("grupo");
+    const parcial = _chipValue("parcial");
 
     const data = _compute(turno, grado, grupo, parcial);
     if (data.totalEval === 0) {
@@ -288,7 +446,7 @@ const IndicadoresModule = (() => {
           <div class="stat-label">Meta: ${d.metaP}</div>
         </div></div>
         <div class="stat-card stat-card--bordered"><div class="stat-content">
-          <div class="stat-label">Reprobacion</div>
+          <div class="stat-label">Reprobación</div>
           <div class="stat-number" style="color:var(--color-${repColor})">${d.repPct}%</div>
           <div class="stat-label">Meta: &le;${d.metaR}%</div>
         </div></div>
@@ -373,7 +531,7 @@ const IndicadoresModule = (() => {
     el.innerHTML = `
       ${alertHtml}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-        <div class="card"><h3 class="section-title">Promedio vs Reprobacion</h3>
+        <div class="card"><h3 class="section-title">Promedio vs Reprobación</h3>
           <canvas id="chart-comp-bars" height="280"></canvas>
         </div>
         <div class="card"><h3 class="section-title">Perfil Comparativo (Radar)</h3>
@@ -402,7 +560,7 @@ const IndicadoresModule = (() => {
           labels: groups.map(g => g.name),
           datasets: [
             { label: 'Promedio', data: groups.map(g => g.avg), backgroundColor: '#3182ce' },
-            { label: '% Reprobacion', data: groups.map(g => g.repPct), backgroundColor: '#e53e3e', yAxisID: 'y1' }
+            { label: '% Reprobación', data: groups.map(g => g.repPct), backgroundColor: '#e53e3e', yAxisID: 'y1' }
           ]
         },
         options: {
@@ -424,7 +582,7 @@ const IndicadoresModule = (() => {
       _charts.push(new Chart(radarCtx, {
         type: 'radar',
         data: {
-          labels: ['Promedio (x10)', '% Aprobacion', 'Cobertura', 'Asistencia'],
+          labels: ['Promedio (x10)', '% Aprobación', 'Cobertura', 'Asistencia'],
           datasets: groups.slice(0, 6).map((g, i) => {
             const pctAprob = g.vals.length ? Math.round(g.p / g.vals.length * 100) : 0;
             const avgFaltas = g.students.flatMap(sa => sa.grades).reduce((s, gr) => s + (gr.faltas || 0), 0) / Math.max(g.students.flatMap(sa => sa.grades).length, 1);
@@ -480,10 +638,10 @@ const IndicadoresModule = (() => {
 
     el.innerHTML = `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-        <div class="card"><h3 class="section-title">Reprobacion por Materia</h3>
+        <div class="card"><h3 class="section-title">Reprobación por Materia</h3>
           <canvas id="chart-mat-reprob" height="300"></canvas>
         </div>
-        <div class="card"><h3 class="section-title">Faltas vs Calificacion</h3>
+        <div class="card"><h3 class="section-title">Faltas vs Calificación</h3>
           ${corrData.length > 5 ? '<canvas id="chart-corr" height="300"></canvas>' : '<div class="empty-state" style="padding:40px;"><span class="material-icons-round empty-state-icon">scatter_plot</span><p class="empty-state-text">Se necesitan datos de faltas para este analisis</p></div>'}
         </div>
       </div>
@@ -521,7 +679,7 @@ const IndicadoresModule = (() => {
         type: 'bar',
         data: {
           labels: sorted.map(s => s.name.length > 20 ? s.name.substring(0, 18) + '...' : s.name),
-          datasets: [{ label: '% Reprobacion', data: sorted.map(s => s.repPct), backgroundColor: sorted.map(s => s.repPct > d.metaR ? '#e53e3e' : '#38a169') }]
+          datasets: [{ label: '% Reprobación', data: sorted.map(s => s.repPct), backgroundColor: sorted.map(s => s.repPct > d.metaR ? '#e53e3e' : '#38a169') }]
         },
         options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
       }));
@@ -549,9 +707,9 @@ const IndicadoresModule = (() => {
   // TAB 4: TENDENCIAS POR PARCIAL
   // ═══════════════════════════════════════════════════════════════
   function _renderTendencias(el) {
-    const turno = document.getElementById('ind-turno')?.value;
-    const grado = document.getElementById('ind-grado')?.value;
-    const grupo = document.getElementById('ind-grupo')?.value;
+    const turno = _chipValue("turno");
+    const grado = _chipValue("grado");
+    const grupo = _chipValue("grupo");
 
     // Compute per partial
     const partials = K.PARCIALES.map(p => p.id);
@@ -668,9 +826,1164 @@ const IndicadoresModule = (() => {
         'Promedio': sa.avg,
         'Estatus': sa.avg >= d.pass ? 'Aprobado' : 'Reprobado'
       })).sort((a, b) => (a.Grupo || '').localeCompare(b.Grupo || '') || (a.Alumno || '').localeCompare(b.Alumno || ''));
-      Utils.exportToExcel(exportData, `Indicadores_${new Date().toISOString().split('T')[0]}.xlsx`);
+      Utils.exportToExcel(exportData, Utils.fileName({
+        tipo: 'INDICADORES',
+        turno: _chipValue("turno"),
+        grado: _chipValue("grado"),
+        parcial: _chipValue("parcial"),
+        ext: 'xlsx'
+      }));
     } catch (e) {
       Toast.show('Error al exportar: ' + e.message, 'error');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // REPORTE INDICADORES POR TURNO (formato INDICADORES 2 BIM.xlsx)
+  // 5 hojas: PRIMERO, SEGUNDO, TERCERO, CONCENTRADO GENERAL, CASOS ESPECIALES
+  // ═══════════════════════════════════════════════════════════════
+  async function generateIndicadoresByTurnoExcel(turno, btn) {
+    const partial = _chipValue("parcial") || 'P2';
+    const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
+
+    if (!confirm(
+      `¿Generar Indicadores del turno ${turno}?\n\n` +
+      `Parcial: ${partialLabel}\n\n` +
+      `Se descargará UN Excel con 5 hojas:\n` +
+      `  • PRIMERO — Indicadores de los 3 grupos de 1° grado\n` +
+      `  • SEGUNDO — Indicadores de los 3 grupos de 2° grado\n` +
+      `  • TERCERO — Indicadores de los 3 grupos de 3° grado\n` +
+      `  • CONCENTRADO GENERAL — Resumen por grado y total del turno\n` +
+      `  • CASOS ESPECIALES — Alumnos reprobados por grupo con columnas vacías (P.CONDUC, PSICOLOGICO, ECONOMICO, SALUD) para anotaciones a mano`
+    )) return;
+
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:16px;vertical-align:middle;margin-right:4px;">autorenew</span>Generando…';
+    try {
+      if (typeof ConcentradoModule === 'undefined' || !ConcentradoModule.generateIndicadoresReportByTurno) {
+        Toast.show('Módulo Concentrado no disponible. Recarga la página (Ctrl+Shift+R).', 'error');
+        return;
+      }
+      await ConcentradoModule.generateIndicadoresReportByTurno(turno, partial);
+    } catch (e) {
+      console.error('Error generando indicadores:', e);
+      Toast.show('Error: ' + (e.message || ''), 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ANÁLISIS DETALLADO DESCARGABLE (PDF y JSON)
+  // ═══════════════════════════════════════════════════════════════
+
+  // ─── Calcula el análisis y retorna un objeto estructurado ───
+  // Esta es la fuente única de la verdad. Las funciones de export (PDF/JSON)
+  // toman este objeto y solo lo formatean.
+  function _computeAnalisis(turno, partial) {
+    // Soporte 'ACUM' (acumulado: todos los parciales)
+    const isAcum = partial === 'ACUM';
+    const partialLabel = isAcum
+      ? 'Acumulado · Todos los parciales'
+      : (K.PARCIALES.find(p => p.id === partial)?.nombre || partial);
+    const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
+    const META_PROM = 8.3, META_REPROB_MAX = 14;
+    const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
+
+    const turnoGroups = allGroups.filter(g => g.turno === turno).sort((a, b) =>
+      (Number(a.grado) || 0) - (Number(b.grado) || 0) || (a.nombre || '').localeCompare(b.nombre || '')
+    );
+    if (turnoGroups.length === 0) return null;
+
+    const groupIds = new Set(turnoGroups.map(g => g.id));
+    const turnoStudents = allStudents.filter(s => groupIds.has(s.groupId));
+    // En modo ACUM, incluir grades de TODOS los parciales (agregado)
+    const turnoGrades = isAcum
+      ? allGrades.filter(g => groupIds.has(g.groupId))
+      : allGrades.filter(g => g.partial === partial && groupIds.has(g.groupId));
+
+    const subjectById = new Map();
+    allSubjects.forEach(s => subjectById.set(s.id, s));
+
+    // Por alumno
+    const studentMetrics = turnoStudents.map(stu => {
+      const gs = turnoGrades.filter(g => g.studentId === stu.id);
+      const cals = gs.map(g => Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN))).filter(c => !isNaN(c));
+      const faltas = gs.reduce((acc, g) => acc + (Number(g.faltas) || 0), 0);
+      const prom = cals.length > 0 ? cals.reduce((a, b) => a + b, 0) / cals.length : null;
+      const reprob = cals.filter(c => c < passGrade).length;
+      return { stu, prom, reprob, totalMaterias: cals.length, faltas };
+    }).filter(m => m.totalMaterias > 0);
+
+    // Por grupo
+    const groupMetrics = turnoGroups.map(grp => {
+      const members = studentMetrics.filter(m => m.stu.groupId === grp.id);
+      const proms = members.map(m => m.prom).filter(p => p != null);
+      const prom = proms.length > 0 ? proms.reduce((a, b) => a + b, 0) / proms.length : null;
+      const aprob = members.filter(m => m.reprob === 0 && m.totalMaterias > 0).length;
+      const reprob = members.filter(m => m.reprob > 0).length;
+      const total = aprob + reprob;
+      const totalIncidencias = members.reduce((a, m) => a + m.reprob, 0);
+      const avgFaltas = members.length > 0 ? members.reduce((a, m) => a + m.faltas, 0) / members.length : 0;
+      return {
+        grupo: grp.nombre, grupoId: grp.id, grado: Number(grp.grado),
+        promedio: prom != null ? +prom.toFixed(2) : null,
+        aprobados: aprob, reprobados: reprob, totalAlumnos: total,
+        incidenciasReprobacion: totalIncidencias,
+        promedioFaltas: +avgFaltas.toFixed(2),
+        pctAprobacion: total > 0 ? +(aprob * 100 / total).toFixed(1) : 0,
+        pctReprobacion: total > 0 ? +(reprob * 100 / total).toFixed(1) : 0,
+      };
+    });
+
+    // Por materia×grupo
+    const materiaGrupoStats = [];
+    for (const grp of turnoGroups) {
+      const subjGrades = {};
+      const gradesForGroup = turnoGrades.filter(g => g.groupId === grp.id);
+      for (const g of gradesForGroup) {
+        if (!subjGrades[g.subjectId]) subjGrades[g.subjectId] = [];
+        const cal = Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN));
+        if (!isNaN(cal)) subjGrades[g.subjectId].push(cal);
+      }
+      for (const [subjectId, cals] of Object.entries(subjGrades)) {
+        const subj = subjectById.get(subjectId);
+        if (!subj) continue;
+        const aprob = cals.filter(c => c >= passGrade).length;
+        const reprob = cals.length - aprob;
+        const prom = cals.length > 0 ? cals.reduce((a, b) => a + b, 0) / cals.length : null;
+        materiaGrupoStats.push({
+          grupo: grp.nombre, grado: Number(grp.grado),
+          materia: K.getUACNombre ? K.getUACNombre(subj.nombre || subj.id) : (subj.nombre || subj.id),
+          promedio: prom != null ? +prom.toFixed(2) : null,
+          aprobados: aprob, reprobados: reprob, totalAlumnos: cals.length,
+          pctAprobacion: cals.length > 0 ? +(aprob * 100 / cals.length).toFixed(1) : 0,
+          pctReprobacion: cals.length > 0 ? +(reprob * 100 / cals.length).toFixed(1) : 0,
+        });
+      }
+    }
+
+    // Globales
+    const totalAlumnos = studentMetrics.length;
+    const promGlobal = totalAlumnos > 0 ? studentMetrics.reduce((a, m) => a + (m.prom || 0), 0) / totalAlumnos : 0;
+    const totalAprobGlobal = studentMetrics.filter(m => m.reprob === 0).length;
+    const totalReprobGlobal = studentMetrics.filter(m => m.reprob > 0).length;
+    const pctAprobGlobal = totalAlumnos > 0 ? (totalAprobGlobal * 100 / totalAlumnos) : 0;
+    const pctReprobGlobal = totalAlumnos > 0 ? (totalReprobGlobal * 100 / totalAlumnos) : 0;
+    const totalIncidenciasGlobal = studentMetrics.reduce((a, m) => a + m.reprob, 0);
+    const promFaltasGlobal = totalAlumnos > 0 ? studentMetrics.reduce((a, m) => a + m.faltas, 0) / totalAlumnos : 0;
+
+    // Pearson
+    function pearson(arr) {
+      const n = arr.length;
+      if (n < 3) return null;
+      const mX = arr.reduce((a, b) => a + b[0], 0) / n;
+      const mY = arr.reduce((a, b) => a + b[1], 0) / n;
+      let num = 0, dX2 = 0, dY2 = 0;
+      for (const [x, y] of arr) {
+        num += (x - mX) * (y - mY);
+        dX2 += (x - mX) ** 2;
+        dY2 += (y - mY) ** 2;
+      }
+      const den = Math.sqrt(dX2 * dY2);
+      return den === 0 ? null : +(num / den).toFixed(3);
+    }
+    const corrFaltasProm = pearson(studentMetrics.filter(m => m.prom != null).map(m => [m.faltas, m.prom]));
+    const corrFaltasAprob = pearson(groupMetrics.map(gm => [gm.promedioFaltas, gm.pctAprobacion]));
+
+    // Por grado
+    const porGrado = [1, 2, 3].map(grado => {
+      const gms = groupMetrics.filter(gm => gm.grado === grado);
+      const proms = gms.filter(g => g.promedio != null).map(g => g.promedio);
+      const promGrado = proms.length > 0 ? +(proms.reduce((a, b) => a + b, 0) / proms.length).toFixed(2) : null;
+      const incidencias = gms.reduce((a, g) => a + g.incidenciasReprobacion, 0);
+      // Top 5 materias del grado
+      const mgs = materiaGrupoStats.filter(m => m.grado === grado && m.totalAlumnos > 0);
+      const byMateria = {};
+      for (const m of mgs) {
+        if (!byMateria[m.materia]) byMateria[m.materia] = { reprob: 0, total: 0, sumProm: 0, cnt: 0 };
+        byMateria[m.materia].reprob += m.reprobados;
+        byMateria[m.materia].total += m.totalAlumnos;
+        if (m.promedio != null) { byMateria[m.materia].sumProm += m.promedio; byMateria[m.materia].cnt++; }
+      }
+      const top5 = Object.entries(byMateria)
+        .map(([mat, s]) => ({
+          materia: mat,
+          reprobados: s.reprob,
+          totalAlumnos: s.total,
+          promedio: s.cnt > 0 ? +(s.sumProm / s.cnt).toFixed(2) : null,
+          pctReprobacion: s.total > 0 ? +(s.reprob * 100 / s.total).toFixed(1) : 0,
+        }))
+        .sort((a, b) => b.reprobados - a.reprobados).slice(0, 5);
+      return { grado, promedio: promGrado, incidencias, grupos: gms, top5Vulnerables: top5 };
+    }).filter(g => g.grupos.length > 0);
+
+    // Alumnos en riesgo
+    const enRiesgoAlto = studentMetrics.filter(m => m.reprob >= 4)
+      .sort((a, b) => b.reprob - a.reprob)
+      .map(m => ({
+        nombre: `${m.stu.apellido1 || ''} ${m.stu.apellido2 || ''} ${m.stu.nombres || ''}`.trim(),
+        grupo: turnoGroups.find(g => g.id === m.stu.groupId)?.nombre || '?',
+        materiasReprobadas: m.reprob,
+        promedio: m.prom != null ? +m.prom.toFixed(2) : null,
+        faltas: m.faltas,
+      }));
+    const enRiesgoMedio = studentMetrics.filter(m => m.reprob >= 1 && m.reprob <= 3).length;
+
+    // Top 10 peores materia×grupo
+    const peorMatGrupo = materiaGrupoStats
+      .filter(m => m.totalAlumnos >= 5 && m.promedio != null)
+      .sort((a, b) => a.promedio - b.promedio).slice(0, 10);
+
+    // Hallazgos clave
+    const proms = groupMetrics.filter(g => g.promedio != null);
+    const mejorGrupo = proms.length > 0 ? [...proms].sort((a, b) => b.promedio - a.promedio)[0] : null;
+    const peorGrupo = proms.length > 0 ? [...proms].sort((a, b) => a.promedio - b.promedio)[0] : null;
+    const brecha = (mejorGrupo && peorGrupo) ? +(mejorGrupo.promedio - peorGrupo.promedio).toFixed(2) : null;
+
+    // Materias persistentes (en top 5 de >= 2 grados)
+    const materiasContador = {};
+    for (const g of porGrado) {
+      g.top5Vulnerables.forEach(t => {
+        materiasContador[t.materia] = (materiasContador[t.materia] || 0) + 1;
+      });
+    }
+    const materiasPersistentes = Object.entries(materiasContador)
+      .filter(([_, n]) => n >= 2)
+      .map(([m, n]) => ({ materia: m, presenteEnGrados: n }));
+
+    // Recomendaciones (auto-generadas)
+    const recomendaciones = [];
+    if (pctReprobGlobal > META_REPROB_MAX) {
+      recomendaciones.push({ prioridad: 'CRÍTICA', accion: `Convocatoria urgente al consejo técnico para diseñar plan de remediación: la reprobación (${pctReprobGlobal.toFixed(1)}%) excede la meta institucional del ${META_REPROB_MAX}%.` });
+    }
+    if (promGlobal < META_PROM) {
+      recomendaciones.push({ prioridad: 'ALTA', accion: `Revisar prácticas evaluativas y considerar talleres de estrategias de aprendizaje: el promedio (${promGlobal.toFixed(2)}) está por debajo de la meta (${META_PROM}).` });
+    }
+    if (peorGrupo && peorGrupo.pctReprobacion > 25) {
+      recomendaciones.push({ prioridad: 'ALTA', accion: `Intervención focalizada en grupo ${peorGrupo.grupo} (${peorGrupo.pctReprobacion.toFixed(1)}% reprobación): asignar tutor académico, monitoreo semanal, contacto con padres.` });
+    }
+    if (peorMatGrupo[0] && peorMatGrupo[0].pctReprobacion > 30) {
+      const p = peorMatGrupo[0];
+      recomendaciones.push({ prioridad: 'ALTA', accion: `Refuerzo académico en ${p.materia} para ${p.grupo}: sesiones extra-clase, asesorías entre pares, materiales adicionales.` });
+    }
+    if (enRiesgoAlto.length > 0) {
+      recomendaciones.push({ prioridad: 'ALTA', accion: `Reunión con padres de los ${enRiesgoAlto.length} alumnos en riesgo alto (≥4 materias reprobadas) antes del cierre del siguiente parcial.` });
+    }
+    if (corrFaltasProm != null && corrFaltasProm < -0.4) {
+      recomendaciones.push({ prioridad: 'MEDIA', accion: `Programa de asistencia activa: la correlación r=${corrFaltasProm} entre faltas y promedio confirma que mejorar asistencia mejora calificaciones. Implementar incentivos y seguimiento de inasistencias > 15%.` });
+    }
+    if (materiasPersistentes.length > 0) {
+      recomendaciones.push({ prioridad: 'INSTITUCIONAL', accion: `Análisis institucional de materias persistentemente vulnerables: ${materiasPersistentes.map(m => m.materia).slice(0, 3).join(', ')}. Revisar evaluación, metodología o adecuación curricular.` });
+    }
+
+    return {
+      escuela: 'EPO 67 — Escuela Preparatoria Oficial Número 67',
+      turno,
+      parcial: partial,
+      parcialLabel: partialLabel,
+      cicloEscolar,
+      fechaGeneracion: new Date().toISOString(),
+      metas: {
+        promedioMin: META_PROM,
+        reprobacionMaxPct: META_REPROB_MAX,
+        asistenciaMinPct: 80,
+      },
+      resumenEjecutivo: {
+        totalAlumnos,
+        totalGrupos: turnoGroups.length,
+        gruposNombres: turnoGroups.map(g => g.nombre),
+        promedioGlobal: +promGlobal.toFixed(2),
+        aprobados: totalAprobGlobal,
+        reprobados: totalReprobGlobal,
+        pctAprobacion: +pctAprobGlobal.toFixed(1),
+        pctReprobacion: +pctReprobGlobal.toFixed(1),
+        totalIncidenciasReprobacion: totalIncidenciasGlobal,
+        promedioFaltasPorAlumno: +promFaltasGlobal.toFixed(2),
+      },
+      cumplimientoMetas: {
+        promedio: { meta: META_PROM, valor: +promGlobal.toFixed(2), cumple: promGlobal >= META_PROM },
+        reprobacion: { meta: META_REPROB_MAX, valor: +pctReprobGlobal.toFixed(1), cumple: pctReprobGlobal <= META_REPROB_MAX },
+      },
+      porGrado,
+      peoresMateriaGrupo: peorMatGrupo,
+      correlaciones: {
+        faltasVsPromedioIndividual: {
+          r: corrFaltasProm,
+          interpretacion: _interpretCorr(corrFaltasProm, 'faltas individuales del alumno', 'su promedio'),
+        },
+        faltasGrupalesVsAprobacionGrupal: {
+          r: corrFaltasAprob,
+          interpretacion: _interpretCorr(corrFaltasAprob, 'promedio de faltas del grupo', 'tasa de aprobación del grupo'),
+        },
+      },
+      alumnosEnRiesgo: {
+        alto: enRiesgoAlto,
+        cantidadMedio: enRiesgoMedio,
+      },
+      hallazgosClave: {
+        mejorGrupo: mejorGrupo ? { grupo: mejorGrupo.grupo, promedio: mejorGrupo.promedio } : null,
+        peorGrupo: peorGrupo ? { grupo: peorGrupo.grupo, promedio: peorGrupo.promedio } : null,
+        brechaPromedioEntreGrupos: brecha,
+        materiasPersistentes,
+      },
+      recomendaciones,
+    };
+  }
+
+  function _interpretCorr(r, varX, varY) {
+    if (r == null) return 'sin datos suficientes para calcular correlación';
+    const abs = Math.abs(r);
+    const fuerza = abs >= 0.7 ? 'FUERTE' : abs >= 0.4 ? 'MODERADA' : abs >= 0.2 ? 'DÉBIL' : 'INEXISTENTE';
+    const signo = r < 0 ? 'NEGATIVA' : 'POSITIVA';
+    let insight = '';
+    if (abs >= 0.4 && r < 0) insight = ` A mayor ${varX}, menor ${varY}.`;
+    else if (abs >= 0.4 && r > 0) insight = ` A mayor ${varX}, mayor ${varY}.`;
+    return `r = ${r} (${fuerza} ${signo}).${insight}`;
+  }
+
+  // ─── PDF / HTML imprimible ───
+  function _analisisToHTML(a) {
+    const css = `
+      <style>
+        @page { size: A4; margin: 18mm 14mm; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1f2937; line-height: 1.45; font-size: 11.5px; }
+        h1 { font-size: 24px; color: #1e3a8a; margin: 0 0 6px; font-weight: 900; }
+        h2 { font-size: 16px; color: #1e3a8a; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #1e3a8a; font-weight: 800; }
+        h3 { font-size: 13px; color: #1f2937; margin: 14px 0 6px; font-weight: 700; }
+        .meta { color: #6b7280; font-size: 11px; margin-bottom: 18px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; margin: 8px 0; }
+        .kpi { background: #f8fafc; border-left: 4px solid #1e3a8a; padding: 8px 12px; border-radius: 6px; }
+        .kpi .label { font-size: 9px; text-transform: uppercase; color: #6b7280; font-weight: 700; letter-spacing: 0.5px; }
+        .kpi .value { font-size: 22px; font-weight: 900; color: #1f2937; line-height: 1.1; }
+        .kpi .sub { font-size: 10px; color: #6b7280; }
+        .ok { color: #15803d; font-weight: 700; }
+        .bad { color: #b91c1c; font-weight: 700; }
+        .warn { color: #b45309; font-weight: 700; }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 6px 0; }
+        th { background: #1e3a8a; color: #fff; padding: 6px 8px; text-align: left; font-weight: 700; }
+        td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; }
+        tr:nth-child(even) td { background: #f9fafb; }
+        .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
+        .pill-ok { background: #dcfce7; color: #15803d; }
+        .pill-warn { background: #fef3c7; color: #b45309; }
+        .pill-bad { background: #fee2e2; color: #b91c1c; }
+        .reco { background: #fffbeb; border-left: 4px solid #d97706; padding: 8px 12px; margin: 6px 0; border-radius: 4px; font-size: 11px; }
+        .reco strong { color: #b45309; }
+        .hero { background: linear-gradient(135deg, #1e3a8a 0%, #3730a3 100%); color: #fff; padding: 18px 22px; border-radius: 10px; margin-bottom: 18px; }
+        .hero h1 { color: #fff; }
+        .hero .sub { color: rgba(255,255,255,0.85); font-size: 13px; }
+      </style>
+    `;
+    const meta = a.cumplimientoMetas;
+    const re = a.resumenEjecutivo;
+    const html = [];
+    html.push(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Análisis EPO 67 ${a.turno} ${a.parcial}</title>${css}</head><body>`);
+    html.push(`<div class="hero">
+      <h1>📊 Análisis Detallado — Turno ${a.turno}</h1>
+      <div class="sub">${a.parcialLabel} · Ciclo ${a.cicloEscolar} · ${a.escuela}</div>
+    </div>`);
+
+    // RESUMEN
+    html.push(`<h2>1. Resumen ejecutivo</h2>`);
+    html.push(`<div class="grid">
+      <div class="kpi"><div class="label">Alumnos</div><div class="value">${re.totalAlumnos}</div><div class="sub">${re.totalGrupos} grupos: ${re.gruposNombres.join(', ')}</div></div>
+      <div class="kpi"><div class="label">Promedio global</div><div class="value ${meta.promedio.cumple ? 'ok' : 'bad'}">${re.promedioGlobal}</div><div class="sub">Meta: ≥${meta.promedio.meta} ${meta.promedio.cumple ? '✅ CUMPLE' : '❌ NO CUMPLE'}</div></div>
+      <div class="kpi"><div class="label">% Aprobación</div><div class="value">${re.pctAprobacion}%</div><div class="sub">${re.aprobados} alumnos sin materias reprobadas</div></div>
+      <div class="kpi"><div class="label">% Reprobación</div><div class="value ${meta.reprobacion.cumple ? 'ok' : 'bad'}">${re.pctReprobacion}%</div><div class="sub">Meta: ≤${meta.reprobacion.meta}% ${meta.reprobacion.cumple ? '✅' : '❌'} · ${re.totalIncidenciasReprobacion} incidencias totales</div></div>
+    </div>`);
+
+    // METAS
+    html.push(`<h2>2. Cumplimiento de metas institucionales</h2>`);
+    html.push(`<table><thead><tr><th>Indicador</th><th>Meta</th><th>Resultado</th><th>Estatus</th></tr></thead><tbody>
+      <tr><td>Promedio mínimo</td><td>≥ ${meta.promedio.meta}</td><td><strong>${meta.promedio.valor}</strong></td><td><span class="pill ${meta.promedio.cumple ? 'pill-ok' : 'pill-bad'}">${meta.promedio.cumple ? 'CUMPLE' : 'NO CUMPLE'}</span></td></tr>
+      <tr><td>Reprobación máxima</td><td>≤ ${meta.reprobacion.meta}%</td><td><strong>${meta.reprobacion.valor}%</strong></td><td><span class="pill ${meta.reprobacion.cumple ? 'pill-ok' : 'pill-bad'}">${meta.reprobacion.cumple ? 'CUMPLE' : 'EXCEDE'}</span></td></tr>
+      <tr><td>Faltas promedio/alumno</td><td>—</td><td><strong>${re.promedioFaltasPorAlumno}</strong></td><td><span class="pill pill-warn">referencia</span></td></tr>
+    </tbody></table>`);
+
+    // POR GRADO
+    html.push(`<h2>3. Radiografía por grado</h2>`);
+    for (const g of a.porGrado) {
+      html.push(`<h3>${g.grado}° Grado — Promedio: ${g.promedio || '—'} · ${g.incidencias} incidencias</h3>`);
+      html.push(`<table><thead><tr><th>Grupo</th><th>Prom</th><th>Aprob</th><th>Reprob</th><th>% Reprob</th><th>Faltas avg</th><th>Estatus</th></tr></thead><tbody>`);
+      for (const gm of g.grupos) {
+        const tag = gm.promedio == null ? '—' :
+          gm.promedio >= 9 ? '<span class="pill pill-ok">🏆 Excelente</span>' :
+          gm.promedio >= 8.3 ? '<span class="pill pill-ok">✅ Supera meta</span>' :
+          gm.promedio >= 7 ? '<span class="pill pill-warn">⚠ Bajo meta</span>' :
+          '<span class="pill pill-bad">🚨 Foco rojo</span>';
+        html.push(`<tr><td><strong>${gm.grupo}</strong></td><td>${gm.promedio || '—'}</td><td>${gm.aprobados}/${gm.totalAlumnos}</td><td>${gm.reprobados}</td><td>${gm.pctReprobacion}%</td><td>${gm.promedioFaltas}</td><td>${tag}</td></tr>`);
+      }
+      html.push(`</tbody></table>`);
+    }
+
+    // TOP 5 POR GRADO
+    html.push(`<h2>4. Top 5 materias más vulnerables por grado</h2>`);
+    for (const g of a.porGrado) {
+      html.push(`<h3>${g.grado}° Grado</h3>`);
+      if (g.top5Vulnerables.length === 0) {
+        html.push(`<p>Sin datos suficientes.</p>`);
+        continue;
+      }
+      html.push(`<table><thead><tr><th>#</th><th>Materia</th><th>Reprobados</th><th>% Reprob</th><th>Prom</th><th>Nivel</th></tr></thead><tbody>`);
+      g.top5Vulnerables.forEach((t, i) => {
+        const lvl = t.pctReprobacion > 30 ? '<span class="pill pill-bad">🚨 MÁXIMA</span>' : t.pctReprobacion > 15 ? '<span class="pill pill-warn">⚠ Alerta</span>' : '<span class="pill pill-warn">🟡 Atención</span>';
+        html.push(`<tr><td>${i + 1}</td><td>${t.materia}</td><td>${t.reprobados}/${t.totalAlumnos}</td><td>${t.pctReprobacion}%</td><td>${t.promedio || '—'}</td><td>${lvl}</td></tr>`);
+      });
+      html.push(`</tbody></table>`);
+    }
+
+    // TOP 10 PEORES
+    html.push(`<h2>5. Top 10 materia×grupo más críticas del turno</h2>`);
+    if (a.peoresMateriaGrupo.length > 0) {
+      html.push(`<table><thead><tr><th>#</th><th>Grupo</th><th>Materia</th><th>Promedio</th><th>Reprob</th><th>% Reprob</th></tr></thead><tbody>`);
+      a.peoresMateriaGrupo.forEach((p, i) => {
+        html.push(`<tr><td>${i + 1}</td><td><strong>${p.grupo}</strong></td><td>${p.materia}</td><td>${p.promedio || '—'}</td><td>${p.reprobados}/${p.totalAlumnos}</td><td>${p.pctReprobacion}%</td></tr>`);
+      });
+      html.push(`</tbody></table>`);
+    }
+
+    // CORRELACIONES
+    html.push(`<h2>6. Correlaciones (ciencia de datos)</h2>`);
+    const c = a.correlaciones;
+    html.push(`<div class="grid">
+      <div class="kpi"><div class="label">Faltas vs Promedio (alumno)</div><div class="value">${c.faltasVsPromedioIndividual.r ?? '—'}</div><div class="sub">${c.faltasVsPromedioIndividual.interpretacion}</div></div>
+      <div class="kpi"><div class="label">Faltas vs Aprobación (grupo)</div><div class="value">${c.faltasGrupalesVsAprobacionGrupal.r ?? '—'}</div><div class="sub">${c.faltasGrupalesVsAprobacionGrupal.interpretacion}</div></div>
+    </div>`);
+
+    // ALUMNOS RIESGO
+    html.push(`<h2>7. Alumnos en riesgo</h2>`);
+    html.push(`<p><strong>Riesgo ALTO</strong> (≥4 materias reprobadas — posible extraordinario múltiple): <strong>${a.alumnosEnRiesgo.alto.length} alumnos</strong></p>`);
+    if (a.alumnosEnRiesgo.alto.length > 0) {
+      html.push(`<table><thead><tr><th>#</th><th>Grupo</th><th>Alumno</th><th>Mat. Reprob.</th><th>Prom</th><th>Faltas</th></tr></thead><tbody>`);
+      a.alumnosEnRiesgo.alto.slice(0, 15).forEach((al, i) => {
+        html.push(`<tr><td>${i + 1}</td><td>${al.grupo}</td><td>${al.nombre}</td><td><strong>${al.materiasReprobadas}</strong></td><td>${al.promedio || '—'}</td><td>${al.faltas}</td></tr>`);
+      });
+      if (a.alumnosEnRiesgo.alto.length > 15) html.push(`<tr><td colspan="6"><em>… y ${a.alumnosEnRiesgo.alto.length - 15} más</em></td></tr>`);
+      html.push(`</tbody></table>`);
+    }
+    html.push(`<p><strong>Riesgo MEDIO</strong> (1-3 materias reprobadas): <strong>${a.alumnosEnRiesgo.cantidadMedio} alumnos</strong></p>`);
+
+    // HALLAZGOS
+    html.push(`<h2>8. Hallazgos clave</h2>`);
+    const h = a.hallazgosClave;
+    if (h.mejorGrupo && h.peorGrupo) {
+      html.push(`<div class="reco"><strong>📊 Brecha entre grupos:</strong> Mejor (${h.mejorGrupo.grupo}: ${h.mejorGrupo.promedio}) vs Peor (${h.peorGrupo.grupo}: ${h.peorGrupo.promedio}) = ${h.brechaPromedioEntreGrupos} pts. ${h.brechaPromedioEntreGrupos >= 2 ? '<strong class="bad">POLARIZACIÓN ALTA</strong> — requiere intervención focalizada.' : h.brechaPromedioEntreGrupos >= 1 ? '<strong class="warn">Brecha moderada.</strong>' : 'Homogeneidad razonable.'}</div>`);
+    }
+    if (a.peoresMateriaGrupo[0]) {
+      const p = a.peoresMateriaGrupo[0];
+      html.push(`<div class="reco"><strong>🎯 Materia más crítica del turno:</strong> ${p.grupo} · ${p.materia} (prom ${p.promedio}). Considerar refuerzo focalizado.</div>`);
+    }
+    if (h.materiasPersistentes.length > 0) {
+      html.push(`<div class="reco"><strong>🏫 Materias persistentemente vulnerables</strong> (en TOP 5 de ≥2 grados): ${h.materiasPersistentes.map(m => `${m.materia} (${m.presenteEnGrados} grados)`).join(', ')}. Señal de desalineación pedagógica institucional.</div>`);
+    }
+
+    // RECOMENDACIONES
+    html.push(`<h2>9. Recomendaciones basadas en datos</h2>`);
+    if (a.recomendaciones.length === 0) {
+      html.push(`<p>No hay recomendaciones críticas — el turno cumple las metas institucionales.</p>`);
+    } else {
+      a.recomendaciones.forEach(r => {
+        const pillClass = r.prioridad === 'CRÍTICA' ? 'pill-bad' : r.prioridad === 'ALTA' ? 'pill-warn' : 'pill-ok';
+        html.push(`<div class="reco"><span class="pill ${pillClass}">${r.prioridad}</span> ${r.accion}</div>`);
+      });
+    }
+
+    html.push(`<div style="margin-top:30px;padding-top:14px;border-top:1px solid #e5e7eb;font-size:10px;color:#9ca3af;">EPO 67 · Sistema Escolar · Generado: ${new Date(a.fechaGeneracion).toLocaleString('es-MX')}</div>`);
+
+    // Auto-print
+    html.push(`<script>setTimeout(() => window.print(), 400);</script>`);
+    html.push(`</body></html>`);
+    return html.join('\n');
+  }
+
+  // ─── JSON estructurado + prompt para IA ───
+  function _analisisToJSON(a) {
+    const promptIA = `Eres un diseñador de presentaciones institucionales. Toma este análisis estadístico (campo "datos" más abajo) de la Escuela Preparatoria Oficial Número 67 (EPO 67), turno ${a.turno}, ${a.parcialLabel}, y genera una presentación de 10-12 slides, profesional, con:
+
+- Carátula con metas institucionales (Promedio ≥${a.metas.promedioMin} / Reprobación ≤${a.metas.reprobacionMaxPct}% / Asistencia ≥${a.metas.asistenciaMinPct}%)
+- Slide de resumen ejecutivo (los KPIs principales con colores: verde si cumple meta, rojo si no)
+- Radiografía por grado (1°, 2°, 3°): promedios por grupo, focos rojos, observaciones cualitativas
+- Top 5 materias más vulnerables por grado
+- Top 10 combinaciones materia×grupo críticas (incluye datos para gráfica de barras)
+- Análisis de correlaciones de "ciencia de datos" (faltas vs promedio, etc.) con interpretación
+- Alumnos en riesgo (cuántos y por qué)
+- Hallazgos clave (brechas, polarización, materias persistentes)
+- Recomendaciones priorizadas (CRÍTICA/ALTA/MEDIA/INSTITUCIONAL)
+- Slide final con call-to-action / próximos pasos
+
+Usa íconos coherentes (🚨 alerta, ✅ logro, 📈 dato, 🎯 acción), colores temáticos (verde aciertos, rojo alertas, naranja atención), tono institucional pero claro, letras grandes legibles, y al menos 2-3 gráficas (barras para grupos, dona para aprobación/reprobación, líneas si aplica). La escuela es la EPO 67.
+
+Cuando esté lista, dame la presentación en el formato que pueda descargar directamente (PPTX preferentemente).`;
+
+    return JSON.stringify({
+      meta: {
+        version: '1.0',
+        formato: 'EPO67 Análisis de Indicadores',
+        generadoPor: 'Sistema Escolar EPO 67',
+        generadoEn: a.fechaGeneracion,
+        comoUsar: 'Copia el campo "promptParaIA" + el campo "datos" y pégalo en ChatGPT, Claude o Gemini. La IA generará tu presentación.',
+      },
+      promptParaIA: promptIA,
+      datos: a,
+    }, null, 2);
+  }
+
+  // ─── PRESENTACIÓN — slideshow profesional con auto-scale 1920×1080 ───
+  // Diseño optimizado para proyector débil + audiencia a 5 metros.
+  // Cada slide vive en un canvas de 1920×1080 y se escala automáticamente al viewport
+  // → las fuentes nunca cambian de tamaño relativo, todo es legible siempre.
+  function _analisisToPresentation(a) {
+    const meta = a.cumplimientoMetas;
+    const re = a.resumenEjecutivo;
+    const h = a.hallazgosClave;
+    const c = a.correlaciones;
+
+    const dot = (level) => {
+      const map = { 'crit': '#e63946', 'med': '#f59e3a', 'bajo': '#f5c842', 'ok': '#4eb869' };
+      return `<span class="dot" style="background:${map[level] || '#94a3b8'};"></span>`;
+    };
+    const ord = (n) => ({ 1: '1er', 2: '2do', 3: '3er' }[n] || `${n}°`);
+
+    const slides = [];
+
+    // ═══ SLIDE 1: Portada (single column profesional, sin decoraciones IA) ═══
+    slides.push(`<section class="slide cover-clean">
+      <div class="cover-header">
+        <div class="cover-brand">EPO 67 · ESCUELA PREPARATORIA OFICIAL Nº 67</div>
+        <span class="pill">TURNO ${a.turno} · ${a.parcialLabel}</span>
+      </div>
+      <h1 class="title-big">Tablero de Control<br>y <span class="accent">Metas Institucionales</span></h1>
+      <p class="lead">Diagnóstico estadístico del turno ${a.turno.toLowerCase()}: del comportamiento individual por grupo hacia la radiografía institucional completa. Ciclo escolar ${a.cicloEscolar}.</p>
+      <div class="kpi-row">
+        <div class="kpi-pill ${meta.promedio.cumple ? 'ok' : 'bad'}">
+          <div class="kpi-label">APROVECHAMIENTO</div>
+          <div class="kpi-val">${meta.promedio.valor}</div>
+          <div class="kpi-foot">Promedio · meta ≥ ${meta.promedio.meta}</div>
+        </div>
+        <div class="kpi-pill ${meta.reprobacion.cumple ? 'ok' : 'bad'}">
+          <div class="kpi-label">EFICIENCIA TERMINAL</div>
+          <div class="kpi-val">${meta.reprobacion.valor}%</div>
+          <div class="kpi-foot">Reprobación · meta ≤ ${meta.reprobacion.meta}%</div>
+        </div>
+        <div class="kpi-pill neutral">
+          <div class="kpi-label">PERMANENCIA</div>
+          <div class="kpi-val">80%</div>
+          <div class="kpi-foot">Asistencia mínima requerida</div>
+        </div>
+      </div>
+    </section>`);
+
+    // ═══ SLIDE 2: Resumen ejecutivo ═══
+    slides.push(`<section class="slide">
+      <span class="pill">RESUMEN EJECUTIVO</span>
+      <h1 class="title-big">Panorama del Turno <span class="accent">${a.turno}</span></h1>
+      <p class="lead">Visión consolidada del rendimiento académico: <strong>${re.totalAlumnos} alumnos</strong> evaluados en <strong>${re.totalGrupos} grupos</strong> del turno ${a.turno.toLowerCase()}.</p>
+      <div class="stat-grid-6">
+        <div class="stat-card"><div class="stat-num">${re.totalAlumnos}</div><div class="stat-label">Alumnos evaluados</div></div>
+        <div class="stat-card"><div class="stat-num">${re.totalGrupos}</div><div class="stat-label">Grupos del turno</div></div>
+        <div class="stat-card ok"><div class="stat-num">${re.aprobados}</div><div class="stat-label">Aprobados · ${re.pctAprobacion}%</div></div>
+        <div class="stat-card bad"><div class="stat-num">${re.reprobados}</div><div class="stat-label">Reprobados · ${re.pctReprobacion}%</div></div>
+        <div class="stat-card warn"><div class="stat-num">${re.totalIncidenciasReprobacion}</div><div class="stat-label">Incidencias totales</div></div>
+        <div class="stat-card ${meta.promedio.cumple ? 'ok' : 'bad'}"><div class="stat-num">${re.promedioGlobal}</div><div class="stat-label">Promedio global</div></div>
+      </div>
+    </section>`);
+
+    // ═══ SLIDES: Radiografía por grado ═══
+    for (const g of a.porGrado) {
+      const grupos = [...g.grupos].sort((x, y) => (y.promedio ?? 0) - (x.promedio ?? 0));
+      const cards = grupos.map(gm => {
+        const emoji = gm.promedio == null ? '🔘'
+          : gm.promedio >= 9 ? '🏆'
+          : gm.promedio >= 8.3 ? '✅'
+          : gm.promedio >= 7 ? '⚠️'
+          : '🚨';
+        let nota = '';
+        if (gm.promedio == null) nota = 'Sin datos suficientes para evaluar este grupo.';
+        else if (gm.promedio >= 9) nota = `Mejor grupo del ${ord(g.grado).toLowerCase()} grado. Roza el ${gm.pctAprobacion}% de aprobación.`;
+        else if (gm.promedio >= 8.3) nota = `Supera la meta institucional. Reprobación de ${gm.pctReprobacion}% y buena asistencia.`;
+        else if (gm.promedio >= 7) nota = `Roza el límite del aprovechamiento. ${gm.reprobados} alumnos con materias reprobadas.`;
+        else nota = `<strong>FOCO ROJO:</strong> no cumple metas. ${gm.incidenciasReprobacion} incidencias de reprobación.`;
+        return `<div class="grupo-card${gm.promedio != null && gm.promedio < 7 ? ' bad' : ''}">
+          <div class="grupo-head">${emoji} <strong>Grupo ${gm.grupo}</strong></div>
+          <div class="grupo-prom">Promedio: <strong>${gm.promedio ?? '—'}</strong></div>
+          <div class="grupo-body">${nota}</div>
+        </div>`;
+      }).join('');
+      const lead = g.grado === 1 ? 'Heterogeneidad propia del ingreso: conviven grupos de excelencia y de adaptación.'
+                : g.grado === 2 ? 'Año bisagra del bachillerato — donde se concentran los principales retos académicos.'
+                : 'Consolidación académica: madurez evidente de los grupos próximos a egresar.';
+      const cols = Math.min(Math.max(grupos.length, 2), 4);
+      slides.push(`<section class="slide">
+        <span class="pill">${ord(g.grado).toUpperCase()} GRADO</span>
+        <h1 class="title-big">Radiografía Clínica: <span class="accent">${ord(g.grado)} Grado</span></h1>
+        <p class="lead">${lead}</p>
+        <div class="grupo-grid cols-${cols}">${cards}</div>
+      </section>`);
+    }
+
+    // ═══ SLIDES: Top 5 vulnerables por grado ═══
+    for (const g of a.porGrado) {
+      if (g.top5Vulnerables.length === 0) continue;
+      const cards = g.top5Vulnerables.map(t => {
+        const sev = t.pctReprobacion >= 30 ? 'crit' : t.pctReprobacion >= 15 ? 'med' : 'bajo';
+        const promTxt = t.promedio == null ? '—' : Number(t.promedio).toFixed(2);
+        const alerta = t.pctReprobacion >= 30 ? '<div class="mini-tag bad">MÁXIMA ALERTA</div>' : '';
+        return `<div class="mat-card">
+          <div class="mat-head">${dot(sev)}<strong>${t.materia}</strong></div>
+          <div class="mat-body"><strong>${t.reprobados} reprobados</strong></div>
+          <div class="mat-body small">Prom: ${promTxt} · ${t.pctReprobacion}% reprobación</div>
+          ${alerta}
+        </div>`;
+      }).join('');
+      slides.push(`<section class="slide">
+        <span class="pill">${ord(g.grado).toUpperCase()} GRADO · FOCOS ROJOS</span>
+        <h1 class="title-big">Top 5 Materias Vulnerables — <span class="accent">${ord(g.grado)} Grado</span></h1>
+        <p class="lead">Materias con la mayor cantidad de alumnos reprobados en ${ord(g.grado).toLowerCase()} grado.</p>
+        <div class="mat-grid">${cards}</div>
+      </section>`);
+    }
+
+    // ═══ SLIDE: Evolución por grado ═══
+    if (a.porGrado.length > 0) {
+      const incidencias = a.porGrado.map(g => g.incidencias);
+      const maxInc = Math.max(...incidencias, 1);
+      const headers = a.porGrado.map(g => `<div class="evo-step">
+        <div class="evo-num">${ord(g.grado)} Grado</div>
+        <div class="evo-text"><strong>${g.grado === 1 ? 'Polarización' : g.grado === 2 ? 'Filtro Académico' : 'Consolidación'}</strong> — ${g.incidencias} incidencias totales</div>
+      </div>`).join('');
+      const colors = ['#7a1d12', '#c83a17', '#f47235'];
+      const bars = a.porGrado.map((g, i) => {
+        const pct = (g.incidencias / maxInc) * 100;
+        return `<div class="bar-col">
+          <div class="bar-rect" style="height:${pct}%;background:${colors[g.grado - 1] || colors[i]};">
+            <div class="bar-val">${g.incidencias}</div>
+          </div>
+          <div class="bar-label">${ord(g.grado)} Grado</div>
+        </div>`;
+      }).join('');
+      slides.push(`<section class="slide">
+        <span class="pill">ANÁLISIS COMPARATIVO</span>
+        <h1 class="title-big">Evolución por <span class="accent">Grado Académico</span></h1>
+        <p class="lead">Comparativa de incidencias de reprobación entre grados — patrón típico de tres etapas.</p>
+        <div class="evo-steps">${headers}</div>
+        <div class="bar-chart">
+          <div class="bar-y-axis">
+            <div>${maxInc}</div>
+            <div>${Math.round(maxInc * 0.75)}</div>
+            <div>${Math.round(maxInc * 0.5)}</div>
+            <div>${Math.round(maxInc * 0.25)}</div>
+            <div>0</div>
+          </div>
+          <div class="bar-area">${bars}</div>
+          <div class="bar-title">Incidencias de Reprobación</div>
+        </div>
+      </section>`);
+    }
+
+    // ═══ SLIDE: Top general por promedios más bajos ═══
+    if (a.peoresMateriaGrupo.length > 0) {
+      const top5 = a.peoresMateriaGrupo.slice(0, 5);
+      const cards = top5.map(p => {
+        const sev = p.promedio < 6 ? 'crit' : p.promedio < 7 ? 'med' : 'bajo';
+        const nota = p.promedio < 6 ? 'La calificación más baja del turno.' : p.promedio < 7 ? 'Refuerzo académico urgente.' : 'Atención focalizada recomendada.';
+        return `<div class="mat-card">
+          <div class="mat-head">${dot(sev)}<strong>Grupo ${p.grupo}</strong></div>
+          <div class="mat-sub">${p.materia}</div>
+          <div class="mat-body"><strong>Promedio: ${p.promedio}</strong></div>
+          <div class="mat-body small">${nota}</div>
+        </div>`;
+      }).join('');
+      slides.push(`<section class="slide">
+        <span class="pill">ANÁLISIS GENERAL</span>
+        <h1 class="title-big">Top 5 General de Vulnerabilidad por <span class="accent">Promedios más Bajos</span></h1>
+        <p class="lead">Materias donde el rendimiento académico es más crítico en términos de calificación promedio en todo el turno.</p>
+        <div class="mat-grid">${cards}</div>
+      </section>`);
+    }
+
+    // ═══ SLIDE: Top general por reprobados ═══
+    if (a.peoresMateriaGrupo.length > 0) {
+      const topRep = [...a.peoresMateriaGrupo].sort((x, y) => y.reprobados - x.reprobados).slice(0, 5);
+      const cards = topRep.map(p => {
+        const sev = p.pctReprobacion >= 30 ? 'crit' : p.pctReprobacion >= 15 ? 'med' : 'bajo';
+        const pctAprob = (100 - p.pctReprobacion).toFixed(1);
+        const alerta = p.pctReprobacion >= 50 ? '<div class="mini-tag bad">MÁXIMA ALERTA</div>' : '';
+        return `<div class="mat-card">
+          <div class="mat-head">${dot(sev)}<strong>Grupo ${p.grupo}</strong></div>
+          <div class="mat-sub">${p.materia}</div>
+          <div class="mat-body"><strong>${p.reprobados} reprobados</strong></div>
+          <div class="mat-body small">Solo ${pctAprob}% aprobó</div>
+          ${alerta}
+        </div>`;
+      }).join('');
+      slides.push(`<section class="slide">
+        <span class="pill">ANÁLISIS GENERAL</span>
+        <h1 class="title-big">Top 5 General por <span class="accent">Alumnos Reprobados</span></h1>
+        <p class="lead">Materias con la mayor cantidad de incidencias negativas (alumnos que no acreditaron) en todo el turno ${a.turno.toLowerCase()}.</p>
+        <div class="mat-grid">${cards}</div>
+      </section>`);
+    }
+
+    // ═══ SLIDE: Patrones persistentes (split) ═══
+    const observations = [];
+    if (h.materiasPersistentes.length > 0) {
+      observations.push({
+        icon: '🚦',
+        title: 'El Cuello de Botella: ' + h.materiasPersistentes[0].materia,
+        text: `Castiga promedios en múltiples semestres. Aparece en TOP 5 de <strong>${h.materiasPersistentes[0].presenteEnGrados} grados</strong>.`,
+      });
+    }
+    if (h.materiasPersistentes.length > 1) {
+      observations.push({
+        icon: '📣',
+        title: `La Constante: ${h.materiasPersistentes[1].materia}`,
+        text: `Aparece en TOP 5 de <strong>${h.materiasPersistentes[1].presenteEnGrados} grados</strong>. Señal de desalineación pedagógica institucional.`,
+      });
+    }
+    if (c.faltasVsPromedioIndividual.r != null) {
+      observations.push({
+        icon: '📉',
+        title: 'Correlación Asistencia ↔ Aprobación',
+        text: c.faltasVsPromedioIndividual.interpretacion + (Math.abs(c.faltasVsPromedioIndividual.r) >= 0.4 ? ' <strong>Si no asiste, reprobar está estadísticamente cantado.</strong>' : ''),
+      });
+    }
+    if (h.mejorGrupo && h.peorGrupo) {
+      observations.push({
+        icon: '⚖️',
+        title: 'Brecha entre grupos',
+        text: `Mejor: <strong>${h.mejorGrupo.grupo}</strong> (${h.mejorGrupo.promedio}) · Peor: <strong>${h.peorGrupo.grupo}</strong> (${h.peorGrupo.promedio}) = <strong>${h.brechaPromedioEntreGrupos} pts</strong>.${h.brechaPromedioEntreGrupos >= 2 ? ' Polarización alta.' : ''}`,
+      });
+    }
+
+    if (observations.length > 0) {
+      slides.push(`<section class="slide">
+        <span class="pill">CIENCIA DE DATOS</span>
+        <h1 class="title-big">Patrones Persistentes del Turno <span class="accent">${a.turno}</span></h1>
+        <p class="lead">Hallazgos estadísticos relevantes detectados al cruzar los datos del parcial.</p>
+        <div class="observ-grid">
+          ${observations.slice(0, 4).map(o => `<div class="observ">
+            <div class="observ-title">${o.icon} <strong>${o.title}</strong></div>
+            <div class="observ-text">${o.text}</div>
+          </div>`).join('')}
+        </div>
+      </section>`);
+    }
+
+    // ═══ SLIDES: Alumnos en riesgo (DIVIDIDA EN 2 — números + tabla) ═══
+    if (a.alumnosEnRiesgo.alto.length > 0 || a.alumnosEnRiesgo.cantidadMedio > 0) {
+      // Slide A: panorama numérico
+      slides.push(`<section class="slide">
+        <span class="pill">PRIORIDAD URGENTE</span>
+        <h1 class="title-big">Alumnos en <span class="accent">Riesgo Académico</span></h1>
+        <p class="lead">Casos que requieren intervención inmediata previo al cierre del siguiente parcial. Dos niveles de severidad detectados.</p>
+        <div class="risk-row">
+          <div class="risk-block bad">
+            <div class="risk-num">${a.alumnosEnRiesgo.alto.length}</div>
+            <div class="risk-label">RIESGO ALTO</div>
+            <div class="risk-sub">≥ 4 materias reprobadas · extraordinario múltiple probable</div>
+          </div>
+          <div class="risk-block warn">
+            <div class="risk-num">${a.alumnosEnRiesgo.cantidadMedio}</div>
+            <div class="risk-label">RIESGO MEDIO</div>
+            <div class="risk-sub">1 a 3 materias reprobadas · intervención preventiva</div>
+          </div>
+        </div>
+      </section>`);
+
+      // Slide B: tabla de casos prioritarios (separada para que no se corte)
+      const top = a.alumnosEnRiesgo.alto.slice(0, 8);
+      if (top.length > 0) {
+        slides.push(`<section class="slide">
+          <span class="pill">CASOS PRIORITARIOS · RIESGO ALTO</span>
+          <h1 class="title-big">Top ${top.length} <span class="accent">Casos Críticos</span></h1>
+          <p class="lead">Alumnos con mayor número de materias reprobadas. Citar a padres antes del cierre.</p>
+          <div class="risk-table-wrap">
+            <table class="risk-table">
+              <thead><tr><th>Grupo</th><th>Alumno</th><th>Reprob.</th><th>Prom.</th></tr></thead>
+              <tbody>${top.map(al => `<tr>
+                <td><strong>${al.grupo}</strong></td>
+                <td>${al.nombre}</td>
+                <td class="cell-bad"><strong>${al.materiasReprobadas}</strong></td>
+                <td>${al.promedio ?? '—'}</td>
+              </tr>`).join('')}</tbody>
+            </table>
+          </div>
+        </section>`);
+      }
+    }
+
+    // ═══ SLIDE: Conclusiones y líneas de acción ═══
+    if (a.recomendaciones.length > 0) {
+      const recoCards = a.recomendaciones.slice(0, 4).map(r => {
+        const titulo = r.prioridad === 'CRÍTICA' ? 'Intervención Inmediata'
+                     : r.prioridad === 'ALTA' ? 'Acción Prioritaria'
+                     : r.prioridad === 'MEDIA' ? 'Seguimiento Activo'
+                     : 'Revisión Institucional';
+        return `<div class="action-card ${r.prioridad === 'CRÍTICA' ? 'crit' : r.prioridad === 'ALTA' ? 'alta' : ''}">
+          <div class="action-title">${titulo}</div>
+          <div class="action-text">${r.accion}</div>
+        </div>`;
+      }).join('');
+      slides.push(`<section class="slide">
+        <span class="pill">PLAN INSTITUCIONAL</span>
+        <h1 class="title-big">Conclusiones y <span class="accent">Líneas de Acción</span></h1>
+        <p class="lead">Plan de trabajo basado en evidencia para el siguiente parcial.</p>
+        <div class="actions-grid">${recoCards}</div>
+      </section>`);
+    }
+
+    // ═══════════════════════════════════════════
+    // CSS — Sistema 1920×1080 con auto-scale al viewport.
+    // Fuentes en píxeles absolutos del slide → SIEMPRE proporcionales.
+    // ═══════════════════════════════════════════
+    const css = `
+      @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap');
+      *,*::before,*::after{box-sizing:border-box;
+        /* FORZAR colores y fondos en impresión (Chrome por defecto los omite) */
+        -webkit-print-color-adjust:exact !important;
+        print-color-adjust:exact !important;
+        color-adjust:exact !important;
+      }
+      html,body{margin:0;padding:0;height:100%;background:#2d2624;font-family:'Outfit',-apple-system,sans-serif;color:#2d2624;overflow:hidden;}
+
+      .deck{position:relative;width:100vw;height:100vh;overflow:hidden;}
+      .slide{
+        position:absolute;top:50%;left:50%;
+        width:1920px;height:1080px;
+        /* --scale = ajuste al viewport · --fit = ajuste por overflow */
+        transform:translate(-50%,-50%) scale(calc(var(--scale,1) * var(--fit,1)));
+        transform-origin:center center;
+        display:none;flex-direction:column;justify-content:center;
+        background:#fefbf7;padding:70px 110px;overflow:hidden;
+        animation:fadeIn .55s cubic-bezier(.2,.7,.3,1);
+      }
+      .slide.active{display:flex;}
+      .slide.measuring{display:flex !important;visibility:hidden !important;}
+      @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+
+      /* PILLS / ETIQUETAS — visibles desde lejos */
+      .pill{display:inline-block;background:#fde2cf;color:#a14a2c;padding:18px 38px;border-radius:14px;font-size:32px;font-weight:800;letter-spacing:2.2px;margin-bottom:28px;align-self:flex-start;}
+      .pill-sub{display:inline-block;background:#f5e3d3;color:#7a5b48;padding:16px 32px;border-radius:14px;font-size:30px;font-weight:700;letter-spacing:1.4px;margin-top:14px;margin-bottom:30px;align-self:flex-start;}
+
+      /* TÍTULOS — proporcionados a 1920×1080 */
+      .title-big{font-weight:900;font-size:88px;line-height:1.05;color:#2d2624;margin:0 0 22px;letter-spacing:-2px;}
+      .title-med{font-weight:800;font-size:72px;line-height:1.1;color:#2d2624;margin:0 0 22px;letter-spacing:-1.5px;}
+      .accent{color:#e8825b;font-weight:900;}
+
+      /* TEXTO EXPLICATIVO — grande para leer desde 5m en proyector débil */
+      .lead{font-size:52px;line-height:1.32;color:#5a4d46;max-width:1620px;margin:0 0 40px;font-weight:500;}
+
+      /* DOT INDICADORES */
+      .dot{display:inline-block;width:22px;height:22px;border-radius:50%;vertical-align:middle;margin-right:14px;flex-shrink:0;}
+
+      /* PORTADA — single column profesional, sin gráficos IA */
+      .cover-clean{padding:70px 110px;justify-content:center;}
+      .cover-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:36px;flex-wrap:wrap;gap:16px;}
+      .cover-brand{font-size:26px;font-weight:700;letter-spacing:2px;color:#7a5b48;text-transform:uppercase;}
+      .kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:36px;}
+      .kpi-pill{background:#fff;border:2px solid #f3ddc7;border-left:10px solid #f0976a;padding:30px 34px;border-radius:16px;box-shadow:0 6px 18px rgba(214,135,90,0.1);display:flex;flex-direction:column;gap:8px;}
+      .kpi-pill.ok{border-left-color:#4eb869;}
+      .kpi-pill.bad{border-left-color:#e63946;}
+      .kpi-pill.neutral{border-left-color:#f59e3a;}
+      .kpi-label{font-size:26px;font-weight:800;letter-spacing:1.5px;color:#a14a2c;}
+      .kpi-val{font-size:84px;font-weight:900;line-height:1;color:#2d2624;margin:6px 0;}
+      .kpi-foot{font-size:26px;color:#7a5b48;font-weight:600;line-height:1.25;}
+
+      /* 6 STAT KPIs — apretado para que quepa el grid 3×2 */
+      .stat-grid-6{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+      .stat-card{background:#fff;border:2px solid #f3ddc7;border-left:8px solid #f0976a;padding:28px 32px;border-radius:16px;box-shadow:0 4px 14px rgba(214,135,90,0.1);}
+      .stat-card.ok{border-left-color:#4eb869;}
+      .stat-card.bad{border-left-color:#e63946;}
+      .stat-card.warn{border-left-color:#f59e3a;}
+      .stat-num{font-size:92px;font-weight:900;line-height:1;color:#2d2624;}
+      .stat-label{font-size:28px;color:#7a5b48;margin-top:12px;font-weight:600;line-height:1.25;}
+
+      /* GRUPO CARDS */
+      .grupo-grid{display:grid;gap:24px;}
+      .grupo-grid.cols-2{grid-template-columns:1fr 1fr;}
+      .grupo-grid.cols-3{grid-template-columns:repeat(3,1fr);}
+      .grupo-grid.cols-4{grid-template-columns:repeat(4,1fr);}
+      .grupo-card{background:#fde2cf;padding:32px 38px;border-radius:18px;border-left:10px solid #f0976a;display:flex;flex-direction:column;gap:14px;}
+      .grupo-card.bad{border-left-color:#e63946;background:#fbd6d0;}
+      .grupo-head{font-size:48px;font-weight:800;color:#2d2624;}
+      .grupo-prom{font-size:36px;color:#2d2624;font-weight:600;}
+      .grupo-body{font-size:32px;color:#5a4d46;line-height:1.35;font-weight:500;}
+
+      /* MATERIA CARDS — 5 cols con texto bien legible */
+      .mat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:18px;}
+      .mat-card{background:#fff;border:2px solid #f3ddc7;border-left:8px solid #f0976a;padding:26px 28px;border-radius:16px;display:flex;flex-direction:column;gap:10px;}
+      .mat-head{font-size:32px;font-weight:800;color:#2d2624;line-height:1.2;display:flex;align-items:flex-start;}
+      .mat-sub{font-size:27px;color:#5a4d46;font-weight:600;line-height:1.3;}
+      .mat-body{font-size:30px;color:#2d2624;line-height:1.3;font-weight:500;}
+      .mat-body.small{font-size:26px;color:#7a5b48;}
+      .mini-tag{display:inline-block;padding:10px 18px;border-radius:10px;font-size:20px;font-weight:800;letter-spacing:1.5px;margin-top:8px;align-self:flex-start;}
+      .mini-tag.bad{background:#fac9bd;color:#a02510;}
+      .mini-tag.inline{margin-top:0;display:inline;margin-left:10px;}
+
+      /* EVOLUCIÓN */
+      .evo-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 28px;}
+      .evo-step{background:#fde2cf;padding:24px 38px 24px 42px;clip-path:polygon(0 0, calc(100% - 30px) 0, 100% 50%, calc(100% - 30px) 100%, 0 100%, 20px 50%);}
+      .evo-step:first-child{clip-path:polygon(0 0, calc(100% - 30px) 0, 100% 50%, calc(100% - 30px) 100%, 0 100%);}
+      .evo-num{font-size:36px;font-weight:800;color:#2d2624;}
+      .evo-text{font-size:26px;color:#5a4d46;margin-top:8px;line-height:1.35;font-weight:500;}
+      .bar-chart{position:relative;background:#fff;border:3px dashed #e2c3a8;border-radius:18px;padding:48px 48px 96px 144px;height:500px;}
+      .bar-title{position:absolute;top:24px;right:36px;font-size:28px;color:#7a5b48;font-weight:700;}
+      .bar-y-axis{position:absolute;left:36px;top:50px;bottom:114px;display:flex;flex-direction:column;justify-content:space-between;font-size:30px;color:#9c8478;font-weight:700;}
+      .bar-area{display:flex;align-items:flex-end;justify-content:space-around;height:100%;gap:30px;padding-bottom:42px;}
+      .bar-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;position:relative;}
+      .bar-rect{width:78%;max-width:280px;border-radius:18px 18px 0 0;display:flex;align-items:flex-start;justify-content:center;padding-top:16px;min-height:60px;border:2px solid rgba(0,0,0,0.06);box-shadow:0 -4px 12px rgba(0,0,0,0.08);}
+      /* Sin animaciones — las barras se renderizan al 100% siempre.
+         Esto garantiza que se vean tanto en pantalla como en el PDF. */
+      .bar-val{color:#fff;font-weight:800;font-size:40px;background:rgba(45,38,36,0.45);padding:12px 24px;border-radius:14px;text-shadow:0 1px 3px rgba(0,0,0,0.4);}
+      .bar-label{position:absolute;bottom:-52px;font-size:32px;color:#5a4d46;font-weight:700;}
+
+      /* OBSERVACIONES (Patrones persistentes) — grid 2×2 con texto grande */
+      .observ-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:24px;margin-top:10px;}
+      .observ{background:#fff;border:2px solid #f3ddc7;border-left:10px solid #f0976a;padding:32px 38px;border-radius:16px;box-shadow:0 4px 10px rgba(214,135,90,0.08);}
+      .observ-title{font-size:38px;color:#2d2624;margin-bottom:14px;font-weight:800;line-height:1.2;}
+      .observ-text{font-size:32px;color:#5a4d46;line-height:1.4;font-weight:500;}
+
+      /* ACCIONES (Conclusiones) — grid 2×2 con texto grande */
+      .actions-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:24px;margin-top:10px;}
+      .action-card{background:#fde2cf;border:2px solid #f5cfb0;border-left:10px solid #f0976a;padding:32px 38px;border-radius:16px;}
+      .action-card.crit{border-left-color:#e63946;background:#fbd6d0;border-color:#f6c0b9;}
+      .action-card.alta{border-left-color:#f59e3a;background:#fde5cd;border-color:#f5d2a8;}
+      .action-title{font-size:38px;font-weight:800;color:#2d2624;margin-bottom:12px;line-height:1.2;}
+      .action-text{font-size:32px;color:#5a4d46;line-height:1.4;font-weight:500;}
+
+      /* ALUMNOS RIESGO — slide A (números grandes, solo 2 bloques) */
+      .risk-row{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:0;}
+      .risk-block{background:#fff;border:2px solid #f3ddc7;border-left:12px solid #e63946;padding:60px 64px;border-radius:22px;}
+      .risk-block.warn{border-left-color:#f59e3a;}
+      .risk-num{font-size:180px;font-weight:900;line-height:1;color:#2d2624;}
+      .risk-label{font-size:40px;font-weight:800;letter-spacing:1.8px;color:#a14a2c;margin:20px 0 14px;}
+      .risk-sub{font-size:28px;color:#7a5b48;font-weight:500;line-height:1.4;}
+      /* ALUMNOS RIESGO — slide B (tabla con texto grande) */
+      .risk-table-wrap{background:#fff;border:2px solid #f3ddc7;border-radius:18px;padding:20px 40px;}
+      .risk-table{width:100%;border-collapse:collapse;font-size:34px;}
+      .risk-table th{text-align:left;padding:24px 26px;color:#7a5b48;font-weight:800;font-size:26px;letter-spacing:1.4px;text-transform:uppercase;border-bottom:3px solid #f3ddc7;}
+      .risk-table td{padding:22px 26px;border-bottom:2px solid #faecdf;color:#5a4d46;font-weight:500;}
+      .risk-table tr:last-child td{border-bottom:none;}
+      .cell-bad{color:#e63946;font-weight:800;}
+
+      /* NAVEGACIÓN (fija en viewport, NO escalada) */
+      .nav-bar{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:14px;align-items:center;background:rgba(45,38,36,0.92);padding:14px 26px;border-radius:42px;backdrop-filter:blur(8px);z-index:50;box-shadow:0 10px 26px rgba(45,38,36,0.22);}
+      .nav-btn{background:transparent;border:none;color:#fff;padding:12px 22px;cursor:pointer;font-weight:700;font-size:22px;border-radius:28px;transition:background .2s;font-family:'Outfit',sans-serif;}
+      .nav-btn:hover{background:rgba(255,255,255,0.15);}
+      .nav-counter{color:#fde2cf;font-size:20px;font-weight:700;padding:0 12px;}
+      .progress{position:fixed;top:0;left:0;right:0;height:6px;background:rgba(232,130,91,0.1);z-index:50;}
+      .progress-fill{height:100%;background:linear-gradient(90deg,#f0976a,#e8825b);transition:width .4s ease;}
+      .hint{position:fixed;top:18px;right:24px;font-size:14px;color:#fde2cf;letter-spacing:1px;z-index:40;font-weight:700;background:rgba(45,38,36,0.6);padding:8px 16px;border-radius:8px;font-family:'Outfit',sans-serif;}
+
+      /* BOTÓN GIGANTE DESCARGAR PDF — visible siempre */
+      .pdf-btn{position:fixed;top:20px;left:20px;display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#e8825b 0%,#d4724b 100%);color:#fff;border:none;padding:18px 30px;border-radius:50px;font-size:20px;font-weight:800;cursor:pointer;box-shadow:0 8px 22px rgba(232,130,91,0.45);font-family:'Outfit',sans-serif;z-index:60;letter-spacing:0.5px;transition:transform .2s,box-shadow .2s;}
+      .pdf-btn:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(232,130,91,0.55);}
+      .pdf-btn .pdf-icon{font-size:28px;}
+      .pdf-btn .pdf-sub{font-size:13px;font-weight:600;opacity:0.92;display:block;letter-spacing:0.8px;}
+      @media print{.pdf-btn{display:none !important;}}
+
+      @media print{
+        /* Cada slide imprime como 1 página de 1920×1080 (16:9 nativo) */
+        @page{size:1920px 1080px;margin:0;}
+        html,body{overflow:visible;background:#fff;width:1920px;height:auto;margin:0;padding:0;}
+        .deck{position:static !important;width:1920px !important;height:auto !important;}
+        .slide{
+          display:flex !important;
+          position:relative !important;
+          top:auto !important;left:auto !important;
+          /* En print: NO translate (no centering en viewport), pero SÍ --fit
+             para que si el contenido excede, se reduce automáticamente */
+          transform:scale(var(--fit,1)) !important;
+          transform-origin:top left !important;
+          width:1920px !important;height:1080px !important;
+          page-break-after:always !important;
+          page-break-inside:avoid !important;
+          animation:none !important;
+          overflow:hidden !important;
+        }
+        .nav-bar,.progress,.hint{display:none !important;}
+      }
+    `;
+
+    return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Presentación EPO 67 · ${a.turno} · ${a.parcialLabel}</title><style>${css}</style></head>
+<body>
+  <div class="progress"><div class="progress-fill" id="progFill" style="width:${(100 / slides.length).toFixed(2)}%;"></div></div>
+  <div class="hint">← →  ESPACIO  PARA NAVEGAR</div>
+  <button class="pdf-btn" id="pdfBtn" title="Descargar como PDF (no necesita impresora)">
+    <span class="pdf-icon">📥</span>
+    <span><strong>Descargar PDF</strong><span class="pdf-sub">No necesitas imprimir</span></span>
+  </button>
+  <div class="deck" id="deck">${slides.map((s, i) => s.replace('<section class="slide', `<section class="slide${i === 0 ? ' active' : ''}" data-i="${i}"`)).join('')}</div>
+  <div class="nav-bar">
+    <button class="nav-btn" id="prev">←</button>
+    <span class="nav-counter"><span id="curr">1</span> / ${slides.length}</span>
+    <button class="nav-btn" id="next">→</button>
+  </div>
+  <script>
+    (function(){
+      const slides=document.querySelectorAll('.slide');
+      let i=0;const total=slides.length;
+      const fill=document.getElementById('progFill');
+      const curr=document.getElementById('curr');
+
+      // ─── REGLA 1: Auto-scale al viewport (responsive a tamaño de pantalla) ───
+      function updateScale(){
+        const sx=window.innerWidth/1920;
+        const sy=window.innerHeight/1080;
+        const s=Math.min(sx,sy);
+        document.documentElement.style.setProperty('--scale',s);
+      }
+      window.addEventListener('resize',updateScale);
+      updateScale();
+
+      // ─── REGLA 2: Auto-fit por overflow ───
+      // Medir el contenido REAL del slide sumando alturas de hijos directos
+      // (más confiable que scrollHeight cuando hay justify-content:center + overflow:hidden).
+      function measureSlideContentHeight(slide){
+        const cs=getComputedStyle(slide);
+        let h=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom);
+        Array.from(slide.children).forEach(c=>{
+          if(c.offsetHeight===undefined)return;
+          const ccs=getComputedStyle(c);
+          if(ccs.display==='none')return;
+          h+=c.offsetHeight+parseFloat(ccs.marginTop||0)+parseFloat(ccs.marginBottom||0);
+        });
+        return h;
+      }
+      function fitSlide(slide){
+        slide.style.removeProperty('--fit');
+        slide.classList.add('measuring');
+        void slide.offsetHeight; // forzar layout
+        const ch=measureSlideContentHeight(slide);
+        const sh=1080;
+        // Margen de seguridad: 96% del slide debe contener el contenido
+        if(ch>sh*0.96){
+          const ratio=(sh*0.96)/ch;
+          slide.style.setProperty('--fit',ratio.toFixed(3));
+        }
+        slide.classList.remove('measuring');
+      }
+      function fitAllSlides(){slides.forEach(fitSlide);}
+      // Ejecuta después de cargar fuentes web
+      if(document.fonts&&document.fonts.ready){
+        document.fonts.ready.then(()=>{setTimeout(fitAllSlides,80);setTimeout(fitAllSlides,400);});
+      }else{
+        setTimeout(fitAllSlides,300);
+        setTimeout(fitAllSlides,800);
+      }
+      window.addEventListener('resize',fitAllSlides);
+      window.addEventListener('beforeprint',fitAllSlides);
+
+      function show(n){
+        i=Math.max(0,Math.min(total-1,n));
+        slides.forEach((s,idx)=>s.classList.toggle('active',idx===i));
+        fill.style.width=((i+1)/total*100)+'%';
+        curr.textContent=(i+1);
+      }
+      document.getElementById('prev').addEventListener('click',()=>show(i-1));
+      document.getElementById('next').addEventListener('click',()=>show(i+1));
+      document.getElementById('pdfBtn').addEventListener('click',()=>{
+        // Forzar re-fit antes de imprimir para asegurar que todo cabe
+        fitAllSlides();
+        setTimeout(()=>window.print(),120);
+      });
+      document.addEventListener('keydown',(e)=>{
+        if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();show(i+1);}
+        else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();show(i-1);}
+        else if(e.key==='Home')show(0);
+        else if(e.key==='End')show(total-1);
+      });
+    })();
+  </script>
+</body></html>`;
+  }
+
+  async function generateAnalisisDetalladoByTurno(turno, btn, formato) {
+    formato = formato || 'pdf';  // 'pdf' | 'json' | 'present' | 'md'
+    const partial = _chipValue('parcial') || 'P2';
+
+    // IMPORTANTE: abrir la ventana AQUÍ, SÍNCRONO, durante el gesto del click.
+    // Si se abre después de un await, Chrome bloquea la ventana emergente.
+    let popupWin = null;
+    if (formato === 'pdf' || formato === 'present') {
+      popupWin = window.open('', '_blank');
+      if (!popupWin) {
+        Toast.show('Permite ventanas emergentes en tu navegador para ver el análisis.', 'warning', 6000);
+        return;
+      }
+      // Mostrar loader en la ventana mientras se computa
+      popupWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Generando…</title>
+        <style>
+          body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#fefbf7;font-family:-apple-system,sans-serif;color:#2d2624;}
+          .loader{text-align:center;}
+          .spin{width:48px;height:48px;border:4px solid #fde2cf;border-top-color:#e8825b;border-radius:50%;animation:s 1s linear infinite;margin:0 auto 18px;}
+          @keyframes s{to{transform:rotate(360deg);}}
+          h1{font-size:22px;margin:0 0 8px;font-weight:700;}
+          p{font-size:14px;color:#7a5b48;margin:0;}
+        </style></head><body><div class="loader"><div class="spin"></div><h1>Generando análisis…</h1><p>Turno ${turno} · ${partial}</p></div></body></html>`);
+      popupWin.document.close();
+    }
+
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:24px;">autorenew</span><div style="flex:1;"><div>Generando análisis…</div></div>';
+
+    try {
+      if (!allGroups.length) await loadData();
+      const analysis = _computeAnalisis(turno, partial);
+      if (!analysis) {
+        Toast.show(`No hay grupos en turno ${turno}`, 'warning');
+        if (popupWin) popupWin.close();
+        return;
+      }
+
+      const dateTag = new Date().toISOString().slice(0, 10);
+      if (formato === 'pdf') {
+        const html = _analisisToHTML(analysis);
+        popupWin.document.open();
+        popupWin.document.write(html);
+        popupWin.document.close();
+        Toast.show(`✓ PDF abierto. Usa Cmd+P / Ctrl+P para guardar como PDF.`, 'success', 6000);
+      } else if (formato === 'present') {
+        const html = _analisisToPresentation(analysis);
+        popupWin.document.open();
+        popupWin.document.write(html);
+        popupWin.document.close();
+        Toast.show(`✓ Presentación abierta. Usa las flechas ← → para navegar.`, 'success', 6000);
+      } else if (formato === 'json') {
+        const json = _analisisToJSON(analysis);
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Analisis_EPO67_${turno}_${partial}_${dateTag}.json`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+        Toast.show(`✓ JSON descargado. Pégalo en ChatGPT/Claude para generar tu presentación.`, 'success', 8000);
+      } else {
+        const md = `# Análisis EPO 67 ${turno}\n\n\`\`\`json\n${JSON.stringify(analysis, null, 2)}\n\`\`\``;
+        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Analisis_EPO67_${turno}_${partial}_${dateTag}.md`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+      }
+    } catch (e) {
+      console.error('Error generando análisis:', e);
+      Toast.show('Error: ' + (e.message || ''), 'error');
+      if (popupWin) popupWin.close();
+    } finally {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.innerHTML = orig;
     }
   }
 
@@ -681,9 +1994,25 @@ const IndicadoresModule = (() => {
     container.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
-      if (btn.dataset.action === 'calculate') calculate();
-      else if (btn.dataset.action === 'export') exportIndicadores();
-      else if (btn.dataset.action === 'presentation') generatePresentation();
+      const action = btn.dataset.action;
+      // ─── NUEVAS ACCIONES POR TURNO ───
+      if (action === 'download-excel' || action === 'download-analisis') {
+        const turno = btn.dataset.turno;
+        _setActiveChip('turno', turno);
+        _setActiveChip('grado', '');
+        _setActiveChip('grupo', '');
+        if (action === 'download-excel') generateIndicadoresByTurnoExcel(turno, btn);
+        else if (action === 'download-analisis') {
+          const formato = btn.dataset.formato || 'pdf';
+          generateAnalisisDetalladoByTurno(turno, btn, formato);
+        }
+        return;
+      }
+      // Acciones viejas (compatibilidad)
+      if (action === 'calculate') calculate();
+      else if (action === 'export') exportIndicadores();
+      else if (action === 'indicadores-mat') generateIndicadoresByTurnoExcel('MATUTINO', btn);
+      else if (action === 'indicadores-vesp') generateIndicadoresByTurnoExcel('VESPERTINO', btn);
     });
 
     // Tab switching
@@ -694,351 +2023,21 @@ const IndicadoresModule = (() => {
       _renderTab();
     });
 
-    const turnoEl = document.getElementById('ind-turno');
-    const gradoEl = document.getElementById('ind-grado');
-    if (turnoEl) turnoEl.addEventListener('change', updateGroupOptions);
-    if (gradoEl) gradoEl.addEventListener('change', updateGroupOptions);
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // GENERADOR DE PRESENTACIÓN PDF
-  // (Preservado de v1 — no modificar)
-  // ═══════════════════════════════════════════════════════════════
-
-  async function generatePresentation() {
-    const turno = document.getElementById('ind-turno')?.value;
-    const parcial = document.getElementById('ind-parcial')?.value;
-
-    if (!turno) { Toast.show('Selecciona un turno', 'warning'); return; }
-    if (!parcial) { Toast.show('Selecciona un parcial', 'warning'); return; }
-
-    Toast.show('Generando presentacion...', 'info');
-
-    try {
-      const [students, subjects, groups, assignments] = await Promise.all([
-        Store.getStudents(), Store.getSubjects(), Store.getGroups(), Store.getAssignments()
-      ]);
-
-      const activeStudents = students.filter(s => s.estatus === 'ACTIVO' && s.turno === turno);
-      const turnoGroups = groups.filter(g => g.turno === turno);
-      const groupIds = turnoGroups.map(g => g.id);
-      const grades = (await Store.getGradesByGroups(groupIds, true)).filter(g => g.partial === parcial);
-
-      const subjectMap = {}; subjects.forEach(s => { subjectMap[s.id] = s; });
-      const groupMap = {}; turnoGroups.forEach(g => { groupMap[g.id] = g; });
-
-      const passGrade = K.THRESHOLDS.PASS_GRADE;
-      const metas = App.schoolConfig?.metas || {};
-      const metaP = metas.promedio_minimo || metas.promedio || 8.3;
-      const metaR = metas.reprobacion_maxima || metas.reprobacion || 14;
-      const metaA = metas.asistencia_minima || metas.asistencia || 80;
-      const parcialObj = K.PARCIALES.find(p => p.id === parcial);
-      const parcialName = parcialObj?.nombre || parcial;
-      const parcNum = parcialObj?.numero || 1;
-      const S = Utils.sanitize;
-
-      const gsm = {};
-      grades.forEach(g => {
-        const cal = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : null);
-        if (cal === null || cal === '' || isNaN(cal)) return;
-        const key = `${g.groupId}_${g.subjectId}`;
-        if (!gsm[key]) gsm[key] = {
-          groupId: g.groupId, subjectId: g.subjectId,
-          groupName: groupMap[g.groupId]?.nombre || g.groupId,
-          subjectName: K.getUACNombre(g.subjectName || subjectMap[g.subjectId]?.nombre || g.subjectId),
-          grado: groupMap[g.groupId]?.grado || 0,
-          vals: [], passed: 0, failed: 0, faltas: 0, fc: 0
-        };
-        const m = gsm[key]; m.vals.push(cal);
-        if (cal >= passGrade) m.passed++; else m.failed++;
-        if (g.faltas != null) { m.faltas += Number(g.faltas); m.fc++; }
+    // CHIP FILTERS: clic en cualquier chip → marcar como activo y re-render grupos si aplica
+    const chipBar = document.getElementById('ind-chip-filters');
+    if (chipBar) {
+      chipBar.addEventListener('click', (e) => {
+        const chip = e.target.closest('.chip');
+        if (!chip) return;
+        const filter = chip.dataset.filter;
+        const value = chip.dataset.value || '';
+        _setActiveChip(filter, value);
+        // Si cambió turno o grado, re-generar chips de grupo (filtrado dinámico)
+        if (filter === 'turno' || filter === 'grado') updateGroupOptions();
       });
-      Object.values(gsm).forEach(m => {
-        m.avg = m.vals.length ? +(m.vals.reduce((a,b)=>a+b,0)/m.vals.length).toFixed(2) : 0;
-        m.repPct = m.vals.length ? Math.round(m.failed/m.vals.length*100) : 0;
-        m.avgF = m.fc ? +(m.faltas/m.fc).toFixed(1) : 0;
-      });
-
-      const gm = {};
-      Object.values(gsm).forEach(m => {
-        if (!gm[m.groupId]) gm[m.groupId] = { id: m.groupId, name: m.groupName, grado: m.grado, vals: [], p: 0, f: 0, subs: [], tF: 0, fc: 0 };
-        const g = gm[m.groupId]; g.vals.push(...m.vals); g.p += m.passed; g.f += m.failed; g.subs.push(m); g.tF += m.faltas; g.fc += m.fc;
-      });
-      Object.values(gm).forEach(g => {
-        g.avg = g.vals.length ? +(g.vals.reduce((a,b)=>a+b,0)/g.vals.length).toFixed(2) : 0;
-        g.repPct = g.vals.length ? Math.round(g.f/g.vals.length*100) : 0;
-        g.avgF = g.fc ? +(g.tF/g.fc).toFixed(1) : 0;
-        g.subs.sort((a,b) => a.avg - b.avg);
-      });
-
-      const grm = {};
-      Object.values(gm).forEach(g => {
-        if (!grm[g.grado]) grm[g.grado] = { grado: g.grado, groups: [], vals: [], p: 0, f: 0 };
-        grm[g.grado].groups.push(g); grm[g.grado].vals.push(...g.vals); grm[g.grado].p += g.p; grm[g.grado].f += g.f;
-      });
-      Object.values(grm).forEach(gr => {
-        gr.avg = gr.vals.length ? +(gr.vals.reduce((a,b)=>a+b,0)/gr.vals.length).toFixed(2) : 0;
-        gr.repPct = gr.vals.length ? Math.round(gr.f/gr.vals.length*100) : 0;
-        gr.groups.sort((a,b) => b.avg - a.avg);
-      });
-
-      const allGS = Object.values(gsm);
-      const rkAvg = [...allGS].sort((a,b)=>a.avg-b.avg).slice(0,5);
-      const rkRep = [...allGS].sort((a,b)=>b.failed-a.failed).slice(0,5);
-      const rkFal = [...allGS].filter(m=>m.avgF>0).sort((a,b)=>b.avgF-a.avgF).slice(0,5);
-
-      const allVals = Object.values(gm).flatMap(g => g.vals);
-      const tAvg = allVals.length ? +(allVals.reduce((a,b)=>a+b,0)/allVals.length).toFixed(2) : 0;
-      const tFail = allVals.filter(v=>v<passGrade).length;
-      const tRepPct = allVals.length ? Math.round(tFail/allVals.length*100) : 0;
-
-      const sorted = Object.values(gm).sort((a,b)=>b.avg-a.avg);
-      const best = sorted[0]; const worst = sorted[sorted.length-1];
-
-      const crisisCount = {};
-      rkRep.forEach(m => { crisisCount[m.groupName] = (crisisCount[m.groupName]||0)+1; });
-      const crisisGroup = Object.entries(crisisCount).sort((a,b)=>b[1]-a[1])[0];
-      const crisisGM = crisisGroup ? Object.values(gm).find(g => g.name === crisisGroup[0]) : worst;
-
-      const css = `
-@page{size:1280px 720px;margin:0}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{font-family:'Segoe UI',system-ui,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.S{width:1280px;height:720px;position:relative;overflow:hidden;page-break-after:always;display:flex;flex-direction:column}
-.S:last-child{page-break-after:auto}
-
-/* ── FRANJA NARANJA SUTIL ── */
-.S::before{content:'';position:absolute;top:0;left:0;width:100%;height:5px;background:#d4782a;z-index:10}
-
-/* ── DARK SLIDE (portada, cierre) ── */
-.S--dark{background:#0f2744;color:#fff;justify-content:center;align-items:center;text-align:center}
-
-/* ── WHITE SLIDE (contenido) ── */
-.S--white{background:#fff;color:#1a202c;padding:60px 70px 40px}
-
-/* ── HEADER BAR (slides blancos) ── */
-.hbar{background:#1b3a5c;color:#fff;padding:18px 70px;position:absolute;top:5px;left:0;width:100%;display:flex;align-items:center;justify-content:space-between}
-.hbar-title{font-size:24pt;font-weight:700;letter-spacing:0.5px}
-.hbar-sub{font-size:18pt;opacity:.6;font-weight:300}
-.S--white .content{margin-top:60px;width:100%;flex:1;display:flex;flex-direction:column;justify-content:center}
-
-/* ── FOOTER ── */
-.fbar{position:absolute;bottom:0;left:0;width:100%;padding:10px 70px;display:flex;justify-content:space-between;font-size:14pt;opacity:.3}
-.S--dark .fbar{color:#fff} .S--white .fbar{color:#1a202c}
-
-/* ── PORTADA ── */
-.cv-pre{font-size:20pt;text-transform:uppercase;letter-spacing:8px;opacity:.4;font-weight:300}
-.cv-title{font-size:54pt;font-weight:700;margin:20px 0 16px;line-height:1.1}
-.cv-info{font-size:22pt;opacity:.6;font-weight:300}
-.cv-mets{display:flex;gap:30px;justify-content:center;margin-top:50px}
-.cv-m{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:24px 36px;min-width:180px;text-align:center}
-.cv-ml{font-size:18pt;opacity:.4;margin-bottom:6px;font-weight:300;text-transform:uppercase;letter-spacing:2px}
-.cv-mv{font-size:42pt;font-weight:700;color:#d4782a}
-
-/* ── INNER CONTAINER ── */
-.inner{width:100%;max-width:1100px;margin:0 auto;text-align:center}
-
-/* ── KPI CARDS (infografia) ── */
-.kpi-row{display:flex;gap:28px;justify-content:center;margin:24px 0}
-.kpi-card{background:#f7f9fb;border:2px solid #e8ecf1;border-radius:16px;padding:32px 40px;min-width:240px;text-align:center;flex:1;max-width:350px}
-.kpi-card--ok{border-color:#d4782a;border-left:6px solid #d4782a}
-.kpi-card--bad{border-color:#c0392b;border-left:6px solid #c0392b}
-.kpi-v{font-size:52pt;font-weight:800;line-height:1;color:#1a202c}
-.kpi-card--ok .kpi-v{color:#d4782a} .kpi-card--bad .kpi-v{color:#c0392b}
-.kpi-l{font-size:20pt;margin-top:8px;color:#64748b;font-weight:400}
-.kpi-meta{font-size:18pt;color:#94a3b8;margin-top:4px}
-
-/* ── GROUP CARDS (infografia) ── */
-.grp-row{display:flex;gap:20px;justify-content:center;flex-wrap:wrap}
-.grp-card{border-radius:16px;padding:28px 20px;min-width:200px;flex:1;max-width:320px;text-align:center;border:2px solid #e8ecf1;background:#f7f9fb}
-.grp-card--ok{border-color:#d4782a;background:#fdf6ef}
-.grp-card--warn{border-color:#e8c547;background:#fefdf0}
-.grp-card--bad{border-color:#c0392b;background:#fdf0ef}
-.grp-tag{font-size:18pt;text-transform:uppercase;letter-spacing:3px;font-weight:700;margin-bottom:6px}
-.grp-card--ok .grp-tag{color:#d4782a} .grp-card--warn .grp-tag{color:#b7950b} .grp-card--bad .grp-tag{color:#c0392b}
-.grp-name{font-size:24pt;font-weight:700;color:#1a202c;margin-bottom:4px}
-.grp-val{font-size:44pt;font-weight:800;line-height:1}
-.grp-card--ok .grp-val{color:#d4782a} .grp-card--warn .grp-val{color:#b7950b} .grp-card--bad .grp-val{color:#c0392b}
-.grp-desc{font-size:18pt;color:#64748b;margin-top:6px}
-
-/* ── HIGHLIGHT BAR ── */
-.hl-row{display:flex;gap:20px;justify-content:center;margin-top:20px}
-.hl-card{padding:18px 28px;border-radius:12px;font-size:20pt;font-weight:500;flex:1;max-width:500px;text-align:center}
-.hl-card--ok{background:#fdf6ef;border:2px solid #d4782a;color:#b5651d}
-.hl-card--bad{background:#fdf0ef;border:2px solid #c0392b;color:#922b21}
-
-/* ── PROGRESS BARS (infografia) ── */
-.prog-list{width:100%;max-width:900px;margin:0 auto}
-.prog-item{display:flex;align-items:center;margin-bottom:14px;gap:16px}
-.prog-rank{font-size:22pt;font-weight:800;color:#d4782a;min-width:36px;text-align:center}
-.prog-info{flex:1}
-.prog-name{font-size:20pt;font-weight:600;color:#1a202c;margin-bottom:4px}
-.prog-sub{font-size:18pt;color:#64748b}
-.prog-bar{width:200px;height:18px;background:#e8ecf1;border-radius:9px;overflow:hidden}
-.prog-fill{height:100%;border-radius:9px}
-.prog-fill--bad{background:linear-gradient(90deg,#c0392b,#e74c3c)} .prog-fill--ok{background:linear-gradient(90deg,#d4782a,#e8a87c)}
-.prog-val{font-size:22pt;font-weight:700;min-width:80px;text-align:right}
-.prog-val--bad{color:#c0392b} .prog-val--ok{color:#d4782a}
-
-/* ── TABLE (comparativo) ── */
-.tb{width:100%;max-width:1000px;margin:0 auto;border-collapse:separate;border-spacing:0;border-radius:12px;overflow:hidden;border:1px solid #e8ecf1}
-.tb th{padding:14px 20px;font-size:18pt;text-align:left;font-weight:700;background:#1b3a5c;color:#fff}
-.tb td{padding:14px 20px;font-size:20pt;border-top:1px solid #e8ecf1}
-.tb tr:nth-child(even){background:#f7f9fb}
-.rv{font-weight:700;font-size:22pt}
-.vd{color:#c0392b;font-weight:700} .vw{color:#d4782a;font-weight:700} .vo{color:#27763a;font-weight:700}
-
-/* ── CLOSE METRICS ── */
-.cl-row{display:flex;gap:30px;justify-content:center;margin:30px 0}
-.cl-card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:32px 28px;min-width:200px;text-align:center;flex:1;max-width:300px}
-.cl-v{font-size:44pt;font-weight:700;color:#d4782a;line-height:1}
-.cl-l{font-size:18pt;opacity:.5;margin-top:8px;font-weight:300;text-transform:uppercase;letter-spacing:2px}
-@media screen{
-  body{background:#1e293b;display:flex;flex-direction:column;align-items:center;min-height:100vh}
-  .S{margin:0;transform-origin:top center;box-shadow:0 8px 40px rgba(0,0,0,.3)}
-}
-@media print{.S{margin:0}body{background:#fff}}`;
-
-      // Scale slides to fill viewport
-      const scaleScript = `
-<script>
-function scaleSlides(){
-  var slides=document.querySelectorAll('.S');
-  var vw=window.innerWidth,vh=window.innerHeight;
-  var sw=1280,sh=720;
-  var scale=Math.min(vw/sw,vh/sh);
-  slides.forEach(function(s){
-    s.style.transform='scale('+scale+')';
-    s.style.transformOrigin='top center';
-    s.style.marginBottom=((sh*scale)-sh)+'px';
-  });
-}
-window.addEventListener('resize',scaleSlides);
-scaleSlides();
-<\/script>`;
-
-      const sl = [];
-      const foot = `<div class="fbar"><span>EPO 67</span><span>${turno} &middot; ${parcialName}</span></div>`;
-
-      // ── 1. PORTADA (oscura) ──
-      sl.push(`<div class="S S--dark">
-        <div class="inner">
-          <div class="cv-pre">EPO 67 &middot; ${turno.toUpperCase()}</div>
-          <div class="cv-title">Indicadores Acad&eacute;micos</div>
-          <div class="cv-info">${parcialName} &middot; ${new Date().getFullYear()}</div>
-          <div class="cv-mets">
-            <div class="cv-m"><div class="cv-ml">Meta</div><div class="cv-mv">${metaP}</div></div>
-            <div class="cv-m"><div class="cv-ml">Reprob.</div><div class="cv-mv">&le;${metaR}%</div></div>
-            <div class="cv-m"><div class="cv-ml">Alumnos</div><div class="cv-mv">${activeStudents.length}</div></div>
-          </div>
-        </div>${foot}</div>`);
-
-      // ── 2. RESUMEN (blanco) ──
-      sl.push(`<div class="S S--white">
-        <div class="hbar"><span class="hbar-title">Resumen del Turno ${turno}</span><span class="hbar-sub">${parcialName}</span></div>
-        <div class="content"><div class="inner">
-          <div class="kpi-row">
-            <div class="kpi-card ${tAvg>=metaP?'kpi-card--ok':'kpi-card--bad'}"><div class="kpi-v">${tAvg.toFixed(2)}</div><div class="kpi-l">Promedio General</div><div class="kpi-meta">Meta: ${metaP}</div></div>
-            <div class="kpi-card ${tRepPct<=metaR?'kpi-card--ok':'kpi-card--bad'}"><div class="kpi-v">${tRepPct}%</div><div class="kpi-l">Reprobaci&oacute;n</div><div class="kpi-meta">Meta: &le;${metaR}%</div></div>
-          </div>
-          <div class="hl-row">
-            <div class="hl-card hl-card--ok">&#9650; Mejor: <strong>${S(best?.name||'-')}</strong> &mdash; ${best?.avg?.toFixed(2)||'-'}</div>
-            <div class="hl-card hl-card--bad">&#9660; Cr&iacute;tico: <strong>${S(worst?.name||'-')}</strong> &mdash; ${worst?.avg?.toFixed(2)||'-'}</div>
-          </div>
-        </div></div>${foot}</div>`);
-
-      // ── 3-5. GRADOS (blancos) ──
-      [1,2,3].forEach(grado => {
-        const gr = grm[grado]; if (!gr || gr.groups.length === 0) return;
-        const cap = {1:'Primer',2:'Segundo',3:'Tercer'}[grado];
-        const tagFor = g => g.avg >= metaP ? 'ok' : g.avg >= 7 ? 'warn' : 'bad';
-        const labFor = g => g.avg >= metaP ? 'L&Iacute;DER' : g.avg >= 7 ? 'ATENCI&Oacute;N' : 'CR&Iacute;TICO';
-        const cards = gr.groups.map(g => `<div class="grp-card grp-card--${tagFor(g)}">
-          <div class="grp-tag">${labFor(g)}</div>
-          <div class="grp-name">${S(g.name)}</div>
-          <div class="grp-val">${g.avg.toFixed(2)}</div>
-          <div class="grp-desc">${g.repPct}% reprob.</div>
-        </div>`).join('');
-        sl.push(`<div class="S S--white">
-          <div class="hbar"><span class="hbar-title">${cap} Grado</span><span class="hbar-sub">Prom: ${gr.avg.toFixed(2)} &middot; Reprob: ${gr.repPct}%</span></div>
-          <div class="content"><div class="inner"><div class="grp-row">${cards}</div></div></div>
-        ${foot}</div>`);
-      });
-
-      // ── 6. TOP 5 PROMEDIOS BAJOS (barras infografia) ──
-      const progAvg = rkAvg.map((m,i) => {
-        const pct = Math.min((m.avg / 10) * 100, 100);
-        return `<div class="prog-item">
-          <div class="prog-rank">${i+1}</div>
-          <div class="prog-info"><div class="prog-name">${S(m.groupName)}</div><div class="prog-sub">${S(m.subjectName)}</div></div>
-          <div class="prog-bar"><div class="prog-fill prog-fill--bad" style="width:${pct}%"></div></div>
-          <div class="prog-val prog-val--bad">${m.avg.toFixed(1)}</div>
-        </div>`;
-      }).join('');
-      sl.push(`<div class="S S--white">
-        <div class="hbar"><span class="hbar-title">Top 5 &mdash; Promedios Bajos</span><span class="hbar-sub">Menor rendimiento</span></div>
-        <div class="content"><div class="inner"><div class="prog-list">${progAvg}</div></div></div>
-      ${foot}</div>`);
-
-      // ── 7. TOP 5 REPROBACIÓN (barras infografia) ──
-      const maxRep = Math.max(...rkRep.map(m => m.failed), 1);
-      const progRep = rkRep.map((m,i) => {
-        const pct = Math.min((m.failed / maxRep) * 100, 100);
-        return `<div class="prog-item">
-          <div class="prog-rank">${i+1}</div>
-          <div class="prog-info"><div class="prog-name">${S(m.groupName)}</div><div class="prog-sub">${S(m.subjectName)}</div></div>
-          <div class="prog-bar"><div class="prog-fill prog-fill--bad" style="width:${pct}%"></div></div>
-          <div class="prog-val prog-val--bad">${m.failed} alum.</div>
-        </div>`;
-      }).join('');
-      sl.push(`<div class="S S--white">
-        <div class="hbar"><span class="hbar-title">Top 5 &mdash; Mayor Reprobaci&oacute;n</span><span class="hbar-sub">M&aacute;s alumnos reprobados</span></div>
-        <div class="content"><div class="inner"><div class="prog-list">${progRep}</div></div></div>
-      ${foot}</div>`);
-
-      // ── 8. COMPARATIVO (tabla) ──
-      const compRows = sorted.map(g => {
-        const ac = g.avg>=metaP?'vo':g.avg>=7?'vw':'vd';
-        const rc = g.repPct<=metaR?'vo':'vd';
-        return `<tr><td style="font-weight:700">${S(g.name)}</td><td class="${ac} rv">${g.avg.toFixed(2)}</td><td>${g.p}</td><td>${g.f}</td><td class="${rc} rv">${g.repPct}%</td></tr>`;
-      }).join('');
-      sl.push(`<div class="S S--white">
-        <div class="hbar"><span class="hbar-title">Comparativo por Grupo</span><span class="hbar-sub">${sorted.length} grupos</span></div>
-        <div class="content"><div class="inner">
-          <table class="tb"><thead><tr><th>Grupo</th><th>Promedio</th><th>Aprob.</th><th>Reprob.</th><th>% Reprob.</th></tr></thead><tbody>${compRows}</tbody></table>
-        </div></div>
-      ${foot}</div>`);
-
-      // ── 9. CIERRE (oscuro) ──
-      sl.push(`<div class="S S--dark">
-        <div class="inner">
-          <div class="cv-pre">RESUMEN EJECUTIVO</div>
-          <div class="cv-title" style="font-size:40pt">Cierre del Turno ${turno}</div>
-          <div class="cl-row">
-            <div class="cl-card"><div class="cl-v">${tAvg.toFixed(2)}</div><div class="cl-l">Promedio</div></div>
-            <div class="cl-card"><div class="cl-v">${tRepPct}%</div><div class="cl-l">Reprobaci&oacute;n</div></div>
-            <div class="cl-card"><div class="cl-v">${S(best?.name||'-')}</div><div class="cl-l">Mejor Grupo</div></div>
-          </div>
-        </div>${foot}</div>`);
-
-      // ── 10. GRACIAS (oscuro) ──
-      sl.push(`<div class="S S--dark">
-        <div class="inner">
-          <div class="cv-title">&iexcl;Gracias!</div>
-          <div class="cv-info" style="margin-top:24px">EPO 67 &middot; ${turno} &middot; ${parcialName} &middot; ${new Date().getFullYear()}</div>
-        </div>${foot}</div>`);
-
-      const doc = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=1280"><title>Indicadores ${turno} - ${parcialName} - EPO 67</title><style>${css}</style></head><body>${sl.join('\n')}${scaleScript}</body></html>`;
-
-      const w = window.open('', '_blank');
-      w.document.write(doc);
-      w.document.close();
-      Toast.show('Presentacion generada', 'success');
-    } catch (e) {
-      console.error('Error generando presentacion:', e);
-      Toast.show('Error: ' + e.message, 'error');
     }
   }
+
 
   return { render };
 })();

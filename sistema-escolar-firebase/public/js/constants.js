@@ -24,6 +24,7 @@ const K = Object.freeze({
     { id: 'secretario_admin',   label: 'Secretaria Administrativa', color: '#7c3aed' },
     { id: 'directivo',          label: 'Directivo',              color: '#f59e0b' },
     { id: 'secretario_escolar', label: 'Secretario Escolar',     color: '#ea580c' },
+    { id: 'presidente_academia',label: 'Presidente de Academia', color: '#0891b2' },
     { id: 'orientador',         label: 'Orientador',             color: '#10b981' },
     { id: 'orientador_docente', label: 'Orientador-Docente',     color: '#0ea5e9' },
     { id: 'maestro',            label: 'Docente',                color: '#3b82f6' },
@@ -35,6 +36,10 @@ const K = Object.freeze({
   // Las reglas de Firestore replican esta semántica.
   ROLE_INHERITS: Object.freeze({
     orientador_docente: ['orientador', 'maestro'],
+    // Presidente de Academia TAMBIÉN es maestro: imparte clases Y coordina
+    // su academia. Ve la sección "Mi Academia" (estadísticas de sus materias)
+    // Y los menús de docente (capturar sus calificaciones, etc.)
+    presidente_academia: ['maestro'],
     // Secretario Escolar (Roberto): mismo nivel de VISTA que directivo
     // (ve todo silenciosamente, sin banner) + escritura extra en students/enrollments.
     secretario_escolar: ['directivo'],

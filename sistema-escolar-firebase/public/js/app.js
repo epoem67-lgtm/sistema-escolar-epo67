@@ -136,27 +136,30 @@ const App = {
    * @param {string} role - Rol del usuario (admin, maestro, orientador)
    */
   applyRoleVisibility(role) {
-    // Ocultar todos los elementos con restricción de rol
-    const roleRestrictedElements = document.querySelectorAll('[data-roles]');
-    roleRestrictedElements.forEach(el => {
-      el.style.display = 'none';
-    });
-
     // Roles efectivos = el rol propio + roles heredados (ver K.ROLE_INHERITS)
     const inherited = (K.ROLE_INHERITS && K.ROLE_INHERITS[role]) || [];
-    const effectiveRoles = [role, ...inherited];
+    const effectiveRoles = new Set([role, ...inherited]);
 
-    for (const r of effectiveRoles) {
-      const visibleElements = document.querySelectorAll(`[data-roles*="${r}"]`);
-      visibleElements.forEach(el => { el.style.display = ''; });
-    }
+    // IMPORTANTE: usar match EXACTO contra cada rol listado en data-roles.
+    // Antes se usaba `[data-roles*="orientador"]` (substring) que coincidía
+    // con `orientador_docente` también — un orientador puro veía menús de
+    // docente porque la cadena contiene "orientador". Ahora parseamos
+    // data-roles por comas y comparamos rol por rol.
+    document.querySelectorAll('[data-roles]').forEach(el => {
+      const allowed = (el.dataset.roles || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      const visible = allowed.some(r => effectiveRoles.has(r));
+      el.style.display = visible ? '' : 'none';
+    });
 
     // Aplicar clase al body para CSS condicional (ej. ocultar botones de write
     // para directivos en módulos donde solo deben leer)
-    document.body.classList.remove('role-admin','role-directivo','role-subdirector','role-secretario_escolar','role-secretario_admin','role-orientador','role-orientador_docente','role-maestro','role-consulta');
+    document.body.classList.remove('role-admin','role-directivo','role-subdirector','role-secretario_escolar','role-secretario_admin','role-orientador','role-orientador_docente','role-maestro','role-consulta','role-presidente_academia');
     document.body.classList.add('role-' + role);
 
-    console.log(`👤 Visibilidad aplicada para rol: ${role} (efectivos: ${effectiveRoles.join(',')})`);
+    console.log(`👤 Visibilidad aplicada para rol: ${role} (efectivos: ${[...effectiveRoles].join(',')})`);
 
     // Cargar contadores de notificaciones (badges en el menu)
     try { App._loadNavBadges?.(); } catch (_) {}
@@ -276,7 +279,8 @@ const App = {
       'honor-roll': 'Cuadros de Honor',
       'grades-admin': 'Consulta Calificaciones',
       'bitacora': 'Bitácora del Sistema',
-      'captura-progress': 'Monitor de Captura'
+      'captura-progress': 'Monitor de Captura',
+      'mi-academia': 'Mi Academia'
     };
     for (const [key, label] of Object.entries(fallbacks)) {
       if (!Router.modules[key]) {
@@ -385,13 +389,50 @@ const Auth = {
       const target = (lastRoute && Router.modules[lastRoute]) ? lastRoute : 'dashboard';
       Router.navigate(target);
 
+      // Login exitoso → resetear contador de reintentos
+      this._loginRetries = 0;
+
     } catch (error) {
       console.error('❌ Error verificando usuario:', error);
-      // No cerrar sesión por error de red/Firestore — reintentar en 3 segundos
-      Toast.show('Error de conexión. Reintentando...', 'warning');
-      setTimeout(() => {
-        if (auth.currentUser) this.handleUserLogin(auth.currentUser);
-      }, 3000);
+
+      // Solo tratamos como "error de conexión" si REALMENTE lo es.
+      // Otros errores (permisos, validación, datos corruptos) tienen su propio
+      // tratamiento — no tiene sentido reintentar infinitamente algo que no
+      // va a cambiar con otro intento.
+      const code = error && (error.code || '');
+      const isConnectionError =
+        !navigator.onLine ||
+        code === 'unavailable' ||
+        code === 'deadline-exceeded' ||
+        code === 'cancelled' ||
+        code === 'aborted' ||
+        code === 'auth/network-request-failed' ||
+        /network|fetch|offline|timeout/i.test(error?.message || '');
+
+      if (isConnectionError) {
+        // Limitar reintentos para evitar loop infinito (máx. 3).
+        this._loginRetries = (this._loginRetries || 0) + 1;
+        if (this._loginRetries <= 3) {
+          Toast.show(`Sin conexión. Reintentando (${this._loginRetries}/3)…`, 'warning');
+          setTimeout(() => {
+            if (auth.currentUser) this.handleUserLogin(auth.currentUser);
+          }, 3000);
+        } else {
+          Toast.show('No se pudo conectar después de 3 intentos. Verifica tu internet y recarga la página.', 'error', 8000);
+          this._loginRetries = 0;
+        }
+        return;
+      }
+
+      // Error NO de conexión — mostrar mensaje preciso y NO reintentar
+      this._loginRetries = 0;
+      if (code === 'permission-denied') {
+        Toast.show('Tu cuenta no tiene permisos. Pide al admin que revise tu rol.', 'error', 10000);
+        await auth.signOut();
+        return;
+      }
+      const msg = (error?.message || 'Error inesperado al cargar tu sesión').slice(0, 200);
+      Toast.show('Error al iniciar: ' + msg, 'error', 10000);
     }
   },
 
@@ -1165,8 +1206,10 @@ const Router = {
     'correction-request': ['admin', 'subdirector', 'maestro', 'orientador_docente'],
     // Consulta de calificaciones (solo lectura, todos los roles que ven datos)
     'grades-query': ['admin', 'subdirector', 'directivo', 'secretario_admin', 'secretario_escolar', 'orientador', 'orientador_docente', 'maestro', 'consulta'],
+    // ─── Academia (Presidente de Academia) ───
+    'mi-academia': ['admin', 'presidente_academia'],
     // ─── Todos ───
-    'dashboard': ['admin', 'orientador', 'maestro', 'directivo', 'subdirector', 'secretario_escolar', 'consulta']
+    'dashboard': ['admin', 'orientador', 'maestro', 'directivo', 'subdirector', 'secretario_escolar', 'consulta', 'presidente_academia']
   },
 
   /**

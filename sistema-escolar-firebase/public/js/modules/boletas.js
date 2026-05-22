@@ -321,6 +321,8 @@ const BoletasModule = (() => {
     const parcialMode = meta.parcialMode;
     const isTodos = parcialMode === 'todos';
     const rubros = K.getRubros(meta.turno);
+    const isTraslado = !!student.bajaPendiente;
+    const blankFill = isTraslado ? '' : 0;
     const gradoNombre = K.GRADO_NOMBRE[meta.grado] || meta.grado;
     const semestre = { 1: 'PRIMERO', 2: 'TERCERO', 3: 'QUINTO' }[meta.grado] || '';
     const headerLines = K.BOLETA_HEADER.map(line =>
@@ -336,7 +338,68 @@ const BoletasModule = (() => {
     let promedio = '-';
     let nivelRiesgo = { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
 
-    if (isTodos) {
+    if (isTodos && meta.sinDesglose) {
+      // ═══ TODOS + SIN DESGLOSE: solo 3 calificaciones + faltas total + promedio ═══
+      tableHeader = `<tr>
+          <th style="width:30px;text-align:center;">N\u00b0</th>
+          <th>UNIDAD DE APRENDIZAJE CURRICULAR</th>
+          <th style="text-align:center;width:55px;">CAL. 1\u00aa</th>
+          <th style="text-align:center;width:55px;">CAL. 2\u00aa</th>
+          <th style="text-align:center;width:55px;">CAL. 3\u00aa</th>
+          <th style="text-align:center;width:70px;">FALTAS TOT.</th>
+          <th style="text-align:center;width:60px;">PROMEDIO</th>
+        </tr>`;
+      const promediosCol = { sum: 0, cnt: 0 };
+      tableRows = subjectsList.map((subj, idx) => {
+        const sg = isTraslado ? {} : (studentGrades[subj.id] || {});
+        let faltasTotal = 0, promSum = 0, promCnt = 0, hasFail = false;
+        const calCells = K.PARCIALES.map(p => {
+          const gd = sg[p.id];
+          const cal = gd ? (gd.cal !== undefined ? gd.cal : (gd.value !== undefined ? gd.value : null)) : null;
+          if (gd && gd.faltas !== undefined && !isNaN(gd.faltas)) faltasTotal += Number(gd.faltas);
+          if (cal !== null && cal !== '' && cal !== undefined) {
+            promSum += Number(cal); promCnt++;
+            const isFail = Number(cal) < K.THRESHOLDS.PASS_GRADE;
+            if (isFail) hasFail = true;
+            return `<td style="text-align:center;font-weight:700;font-size:11px;${isFail ? 'background:#ddd;' : ''}">${cal}</td>`;
+          }
+          return `<td style="text-align:center;font-size:11px;">${blankFill}</td>`;
+        }).join('');
+        const promMat = promCnt > 0 ? (promSum / promCnt).toFixed(1) : blankFill;
+        if (promCnt > 0) { promediosCol.sum += Number(promMat); promediosCol.cnt++; }
+        const promFail = promCnt > 0 && parseFloat(promMat) < K.THRESHOLDS.PASS_GRADE;
+        const bg = hasFail ? 'background:#D9D9D9;-webkit-print-color-adjust:exact;print-color-adjust:exact;' : (idx % 2 === 1 ? 'background:#f5f5f5;' : '');
+        return `<tr style="${bg}">
+          <td style="text-align:center;font-size:10px;">${idx + 1}</td>
+          <td style="font-size:10px;">${Utils.sanitize(K.getUACNombre(subj.nombre || subj.id))}</td>
+          ${calCells}
+          <td style="text-align:center;font-size:10px;">${faltasTotal || blankFill}</td>
+          <td style="text-align:center;font-weight:700;font-size:11px;${promFail ? 'background:#ddd;' : ''}">${promMat}</td>
+        </tr>`;
+      }).join('');
+      const promedioGral = promediosCol.cnt > 0 ? (promediosCol.sum / promediosCol.cnt).toFixed(2) : blankFill;
+      const promedioFail = promediosCol.cnt > 0 && parseFloat(promedioGral) < K.THRESHOLDS.PASS_GRADE;
+      promedioRow = `<tr style="border-top:2px solid #333;">
+        <td colspan="6" style="text-align:right;font-weight:700;font-size:11px;padding:6px 8px;">PROMEDIO GENERAL:</td>
+        <td style="text-align:center;font-weight:700;font-size:12px;${promedioFail ? 'background:#ddd;' : ''}">${promedioGral}</td>
+      </tr>`;
+      // Resumen de riesgo
+      subjectsList.forEach(subj => {
+        const sg = studentGrades[subj.id] || {};
+        let mateReprobada = false;
+        for (const p of K.PARCIALES) {
+          const gd = sg[p.id] || {};
+          const cal = gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null);
+          if (cal !== null && cal < K.THRESHOLDS.PASS_GRADE) { mateReprobada = true; }
+          if (gd.faltas !== undefined && !isNaN(gd.faltas)) parcialFaltasTotal += Number(gd.faltas);
+        }
+        if (mateReprobada) parcialReprobadas++;
+      });
+      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#c62828', bg: '#ffebee', border: '#c62828' }
+        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#e65100', bg: '#fff3e0', border: '#e65100' }
+        : { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
+
+    } else if (isTodos) {
       // ═══ NEW FORMAT: Faltas 1a,2a,3a | Cal 1a,2a,3a | Observaciones ═══
       tableHeader = `
         <tr>
@@ -357,10 +420,10 @@ const BoletasModule = (() => {
       const promedios = { P1: { sum: 0, cnt: 0 }, P2: { sum: 0, cnt: 0 }, P3: { sum: 0, cnt: 0 } };
 
       tableRows = subjectsList.map((subj, idx) => {
-        const sg = studentGrades[subj.id] || {};
+        const sg = isTraslado ? {} : (studentGrades[subj.id] || {});
         const faltasCells = K.PARCIALES.map(p => {
           const gd = sg[p.id];
-          const f = gd && gd.faltas !== undefined ? gd.faltas : '';
+          const f = gd && gd.faltas !== undefined ? gd.faltas : blankFill;
           return `<td style="text-align:center;font-size:9px;">${f}</td>`;
         }).join('');
         const calCells = K.PARCIALES.map(p => {
@@ -373,7 +436,7 @@ const BoletasModule = (() => {
             if (Number(cal) < K.THRESHOLDS.PASS_GRADE) style += 'font-weight:700;';
             return `<td style="${style}">${cal}</td>`;
           }
-          return `<td style="${style}"></td>`;
+          return `<td style="${style}">${blankFill}</td>`;
         }).join('');
         const calValues = K.PARCIALES.map(p => {
           const gd = sg[p.id];
@@ -394,7 +457,7 @@ const BoletasModule = (() => {
 
       const promedioCells = K.PARCIALES.map(p => {
         const s = promedios[p.id];
-        const avg = s.cnt > 0 ? (s.sum / s.cnt).toFixed(1) : '';
+        const avg = s.cnt > 0 ? (s.sum / s.cnt).toFixed(1) : blankFill;
         return `<td style="text-align:center;font-weight:700;">${avg}</td>`;
       }).join('');
       promedioRow = `<tr style="border-top:2px solid #333;background:#eee;">
@@ -411,21 +474,21 @@ const BoletasModule = (() => {
           <th style="text-align:center;width:70px;">CALIFICACI\u00d3N</th>
         </tr>`;
       tableRows = subjectsList.map((subj, idx) => {
-        const sg = studentGrades[subj.id] || {};
+        const sg = isTraslado ? {} : (studentGrades[subj.id] || {});
         const gradeDoc = sg[parcialMode] || {};
-        const faltas = gradeDoc.faltas !== undefined ? gradeDoc.faltas : '-';
-        const cal = gradeDoc.cal !== undefined ? gradeDoc.cal : (gradeDoc.value !== undefined ? gradeDoc.value : '-');
-        if (cal !== '-' && cal !== '' && cal !== null) { grandTotal += Number(cal); grandCount++; }
-        const isFail = cal !== '-' && cal !== '' && cal !== null && Number(cal) < K.THRESHOLDS.PASS_GRADE;
+        const faltas = gradeDoc.faltas !== undefined ? gradeDoc.faltas : blankFill;
+        const cal = gradeDoc.cal !== undefined ? gradeDoc.cal : (gradeDoc.value !== undefined ? gradeDoc.value : '');
+        if (cal !== '' && cal !== null) { grandTotal += Number(cal); grandCount++; }
+        const isFail = cal !== '' && cal !== null && Number(cal) < K.THRESHOLDS.PASS_GRADE;
         const bg = isFail ? 'background:#D9D9D9;-webkit-print-color-adjust:exact;print-color-adjust:exact;' : (idx % 2 === 1 ? 'background:#f5f5f5;' : '');
         return `<tr style="${bg}">
           <td style="text-align:center;font-size:10px;">${idx + 1}</td>
           <td style="font-size:10px;">${Utils.sanitize(K.getUACNombre(subj.nombre || subj.id))}</td>
           <td style="text-align:center;font-size:11px;">${faltas}</td>
-          <td style="text-align:center;font-weight:700;font-size:12px;${isFail ? 'background:#ddd;' : ''}">${cal}</td>
+          <td style="text-align:center;font-weight:700;font-size:12px;${isFail ? 'background:#ddd;' : ''}">${cal === '' ? blankFill : cal}</td>
         </tr>`;
       }).join('');
-      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(2) : '-';
+      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(2) : blankFill;
       const promedioFail = promedio !== '-' && parseFloat(promedio) < K.THRESHOLDS.PASS_GRADE;
       promedioRow = `<tr style="border-top:2px solid #333;">
         <td colspan="3" style="text-align:right;font-weight:700;font-size:11px;padding:6px 8px;">PROMEDIO GENERAL:</td>
@@ -458,17 +521,17 @@ const BoletasModule = (() => {
           <th style="text-align:center;width:40px;">CAL.</th>
         </tr>`;
       tableRows = subjectsList.map((subj, idx) => {
-        const sg = studentGrades[subj.id] || {};
+        const sg = isTraslado ? {} : (studentGrades[subj.id] || {});
         const gradeDoc = sg[parcialMode] || {};
         const rubroCells = rubros.map(r => {
           const v = gradeDoc[r.key];
-          return `<td style="text-align:center;font-size:10px;">${v !== undefined ? v : '-'}</td>`;
+          return `<td style="text-align:center;font-size:10px;">${v !== undefined && v !== null && v !== '' ? v : blankFill}</td>`;
         }).join('');
-        const suma = gradeDoc.suma !== undefined ? Number(gradeDoc.suma).toFixed(1) : '-';
-        const faltas = gradeDoc.faltas !== undefined ? gradeDoc.faltas : '-';
-        const cal = gradeDoc.cal !== undefined ? gradeDoc.cal : (gradeDoc.value !== undefined ? gradeDoc.value : '-');
-        if (cal !== '-' && cal !== '' && cal !== null) { grandTotal += Number(cal); grandCount++; }
-        const isFail = cal !== '-' && Number(cal) < K.THRESHOLDS.PASS_GRADE;
+        const suma = gradeDoc.suma !== undefined ? Number(gradeDoc.suma).toFixed(1) : blankFill;
+        const faltas = gradeDoc.faltas !== undefined ? gradeDoc.faltas : blankFill;
+        const cal = gradeDoc.cal !== undefined ? gradeDoc.cal : (gradeDoc.value !== undefined ? gradeDoc.value : '');
+        if (cal !== '' && cal !== null) { grandTotal += Number(cal); grandCount++; }
+        const isFail = cal !== '' && Number(cal) < K.THRESHOLDS.PASS_GRADE;
         const bg = isFail ? 'background:#D9D9D9;-webkit-print-color-adjust:exact;print-color-adjust:exact;' : (idx % 2 === 1 ? 'background:#f5f5f5;' : '');
         return `<tr style="${bg}">
           <td style="text-align:center;font-size:10px;">${idx + 1}</td>
@@ -476,10 +539,10 @@ const BoletasModule = (() => {
           ${rubroCells}
           <td style="text-align:center;">${suma}</td>
           <td style="text-align:center;">${faltas}</td>
-          <td style="text-align:center;font-weight:700;${isFail ? 'background:#ddd;' : ''}">${cal}</td>
+          <td style="text-align:center;font-weight:700;${isFail ? 'background:#ddd;' : ''}">${cal === '' ? blankFill : cal}</td>
         </tr>`;
       }).join('');
-      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(2) : '-';
+      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(2) : blankFill;
       const promedioFail = promedio !== '-' && parseFloat(promedio) < K.THRESHOLDS.PASS_GRADE;
       const colSpan = rubros.length + 4;
       promedioRow = `<tr style="border-top:2px solid #333;">

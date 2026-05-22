@@ -9,33 +9,103 @@ const Store = (() => {
   const _timestamps = {};
   const _promises = {};
 
-  // TTL en milisegundos por tipo de dato
+  // TTLs aumentados para reducir reads de Firestore.
+  // Datos estables (groups, teachers, subjects) cambian solo cuando el admin
+  // los edita — vale la pena cachear más tiempo. Si el admin cambia algo,
+  // ya se llama a Store.invalidate() explícitamente.
   const _ttl = {
-    students: 10 * 60 * 1000,    // 10 min — datos relativamente estáticos
-    teachers: 10 * 60 * 1000,
-    groups: 10 * 60 * 1000,
-    subjects: 10 * 60 * 1000,
-    assignments: 10 * 60 * 1000,
-    users: 10 * 60 * 1000,
-    partials: 5 * 60 * 1000,     // 5 min — cambian al cerrar parcial
+    students: 20 * 60 * 1000,    // 20 min — solo cambia al inscribir/dar de baja
+    teachers: 30 * 60 * 1000,    // 30 min — casi nunca cambia en producción
+    groups: 30 * 60 * 1000,      // 30 min — fijos durante el ciclo
+    subjects: 60 * 60 * 1000,    // 60 min — fijos durante el ciclo escolar
+    assignments: 20 * 60 * 1000, // 20 min — cambian al reasignar maestros
+    users: 15 * 60 * 1000,
+    partials: 10 * 60 * 1000,    // 10 min — cambian al cerrar parcial
     atRisk: 5 * 60 * 1000,
-    grades_group_: 3 * 60 * 1000, // 3 min — cambian con captura de notas
-    allGrades: 5 * 60 * 1000,     // 5 min — para monitor de captura
-    teacherDocId: 30 * 60 * 1000, // 30 min — casi nunca cambia
-    orientadorGroups: 10 * 60 * 1000
+    grades_group_: 5 * 60 * 1000, // 5 min — cambian con captura
+    allGrades: 10 * 60 * 1000,
+    teacherDocId: 60 * 60 * 1000, // 60 min — nunca cambia para un mismo user
+    orientadorGroups: 20 * 60 * 1000
   };
 
   function getTTL(key) {
     if (_ttl[key]) return _ttl[key];
     if (key.startsWith('grades_group_')) return _ttl['grades_group_'];
-    if (key.startsWith('students_ori_')) return _ttl['students']; // mismo TTL que students
-    return 5 * 60 * 1000; // default 5 min
+    if (key.startsWith('students_ori_')) return _ttl['students'];
+    return 10 * 60 * 1000; // default 10 min
   }
 
   function isExpired(key) {
     if (!_timestamps[key]) return true;
     return (Date.now() - _timestamps[key]) > getTTL(key);
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // CAPA DE PERSISTENCIA EN sessionStorage
+  // El cache en memoria se pierde al navegar entre páginas o refrescar.
+  // sessionStorage persiste durante toda la sesión del navegador y
+  // sigue siendo private/por-tab → ideal para reducir reads de Firestore
+  // sin riesgo de leak entre sesiones de distintos usuarios.
+  // ═══════════════════════════════════════════════════════════════
+  const SS_PREFIX = 'epo67_store_';
+  // Datos a persistir en sessionStorage. Datos muy dinámicos (grades)
+  // mantenemos solo en memoria — la lista de keys que persistimos es
+  // explícita para evitar saturar sessionStorage (5MB max).
+  const PERSISTED_KEYS = new Set([
+    'students', 'teachers', 'groups', 'subjects', 'assignments',
+    'partials', 'orientadorGroups', 'teacherDocId',
+  ]);
+  // Versión del esquema de cache. Bumpear si cambia la forma de los datos.
+  const SS_VERSION = 2;
+  function _ssKey(key) { return SS_PREFIX + key; }
+  function _ssLoad(key) {
+    try {
+      const raw = sessionStorage.getItem(_ssKey(key));
+      if (!raw) return null;
+      const obj = JSON.parse(raw);
+      if (obj.v !== SS_VERSION) return null;
+      if ((Date.now() - obj.t) > getTTL(key)) return null;
+      return { data: obj.d, ts: obj.t };
+    } catch (_) { return null; }
+  }
+  function _ssSave(key, data) {
+    if (!PERSISTED_KEYS.has(key) && !key.startsWith('students_ori_')) return;
+    try {
+      const payload = JSON.stringify({ v: SS_VERSION, t: Date.now(), d: data });
+      // Saltear si el payload es muy grande (>2MB) para no saturar
+      if (payload.length > 2 * 1024 * 1024) return;
+      sessionStorage.setItem(_ssKey(key), payload);
+    } catch (_) {
+      // quota exceeded — limpiar cosas viejas
+      try {
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+          const k = sessionStorage.key(i);
+          if (k && k.startsWith(SS_PREFIX)) sessionStorage.removeItem(k);
+        }
+      } catch (_) {}
+    }
+  }
+  function _ssRemove(key) {
+    try { sessionStorage.removeItem(_ssKey(key)); } catch (_) {}
+  }
+  // Restaurar cache desde sessionStorage al inicializar
+  (function _initFromSession() {
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (!k || !k.startsWith(SS_PREFIX)) continue;
+        const dataKey = k.slice(SS_PREFIX.length);
+        const loaded = _ssLoad(dataKey);
+        if (loaded) {
+          _cache[dataKey] = loaded.data;
+          _timestamps[dataKey] = loaded.ts;
+        } else {
+          // Vencido o inválido — borrar
+          sessionStorage.removeItem(k);
+        }
+      }
+    } catch (_) {}
+  })();
 
   /**
    * Obtiene datos de cache o los fetchea si no existen.
@@ -60,6 +130,7 @@ const Store = (() => {
     _promises[key] = fetchFn().then(data => {
       _cache[key] = data;
       _timestamps[key] = Date.now();
+      _ssSave(key, data); // persistir entre navegaciones/recargas
       delete _promises[key];
       return data;
     }).catch(err => {
@@ -205,6 +276,46 @@ const Store = (() => {
       return results.flat();
     },
 
+    /**
+     * Lee teacherHours de varios grupos en UNA sola query (batched).
+     * Reemplaza N×3 reads individuales (uno por assignment×parcial).
+     * Cache 5 min — cambian solo cuando un docente captura horas.
+     * @param {string[]} groupIds
+     * @param {boolean} [force=false]
+     * @returns {Promise<Map>} Map keyed by docId → {groupId, subjectId, partial, ...mesData, total}
+     */
+    async getTeacherHoursForGroups(groupIds, force) {
+      if (!groupIds || groupIds.length === 0) return new Map();
+      const sorted = [...new Set(groupIds)].sort();
+      const cacheKey = 'teacherHours_g_' + sorted.join('|');
+      return get(cacheKey, async () => {
+        // Firestore where('in') admite hasta 30 valores; chunking si hace falta
+        const chunks = [];
+        for (let i = 0; i < sorted.length; i += 30) chunks.push(sorted.slice(i, i + 30));
+        const all = [];
+        await Promise.all(chunks.map(async chunk => {
+          const snap = await db.collection('teacherHours').where('groupId', 'in', chunk).get();
+          snap.docs.forEach(d => all.push({ id: d.id, ...d.data() }));
+        }));
+        const map = new Map();
+        all.forEach(doc => {
+          const total = ['febrero','marzo','abril','mayo','junio','julio']
+            .reduce((s, m) => s + (parseInt(doc[m]) || 0), 0);
+          map.set(doc.id, { ...doc, total });
+        });
+        return map;
+      }, force);
+    },
+
+    invalidateTeacherHours() {
+      Object.keys(_cache).forEach(k => {
+        if (k.startsWith('teacherHours_g_')) {
+          delete _cache[k];
+          delete _timestamps[k];
+        }
+      });
+    },
+
     getAtRisk(force) {
       return get('atRisk', async () => {
         const snap = await db.collection('atRisk').get();
@@ -235,6 +346,16 @@ const Store = (() => {
      * @returns {Promise<string|null>}
      */
     getTeacherDocId(force) {
+      // FIX impersonacion: cuando admin usa "Ver como", App.currentUser.teacherId
+      // tiene el teacherId del usuario impersonado. Usar ESE en lugar del propio.
+      // Sin esto, todos los maestros impersonados mostraban las asignaciones del
+      // admin (porque auth.currentUser.uid sigue siendo el del admin).
+      const impersonating = App?.currentUser?._impersonating === true;
+      if (impersonating) {
+        const impTid = App?.currentUser?.teacherId;
+        return Promise.resolve(impTid || null);
+      }
+
       return get('teacherDocId', async () => {
         const userId = auth.currentUser?.uid;
         if (!userId) return null;
@@ -360,9 +481,29 @@ const Store = (() => {
         if (!teacherDocId) return [];
 
         const allGroups = await Store.getGroups();
-        return allGroups
+        // Match preferente por orientadorId; fallback por nombre (datos legacy
+        // donde solo guardaron g.orientador como string).
+        const directMatches = allGroups
           .filter(g => g.orientadorId === teacherDocId)
           .map(g => g.id);
+        if (directMatches.length > 0) return directMatches;
+
+        // Fallback: comparar nombres con el teacher actual
+        const teachers = await Store.getTeachers();
+        const me = teachers.find(t => t.id === teacherDocId);
+        if (!me || !me.nombre) return [];
+        const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+        const stripT = s => norm(s).replace(/\bPROFRA?\.?|\bMTRA?\.?|\bDR[A]?\.?|\bLIC\.?|\bMA\.?/g, '').trim();
+        const myWords = stripT(me.nombre).split(/\s+/).filter(w => w.length > 2);
+        if (myWords.length < 2) return [];
+
+        return allGroups.filter(g => {
+          const ori = g.orientador || g.orientadorNombre || '';
+          if (!ori) return false;
+          const oriWords = stripT(ori).split(/\s+/).filter(w => w.length > 2);
+          const overlap = oriWords.filter(w => myWords.includes(w)).length;
+          return overlap >= 2;
+        }).map(g => g.id);
       });
     },
 
@@ -419,6 +560,7 @@ const Store = (() => {
       delete _cache[key];
       delete _timestamps[key];
       delete _promises[key];
+      _ssRemove(key);
 
       // Si se invalida 'grades', limpiar TODOS los caches por grupo
       if (key === 'grades') {
@@ -427,6 +569,7 @@ const Store = (() => {
             delete _cache[k];
             delete _timestamps[k];
             delete _promises[k];
+            _ssRemove(k);
           }
         });
       }
@@ -438,6 +581,7 @@ const Store = (() => {
             delete _cache[k];
             delete _timestamps[k];
             delete _promises[k];
+            _ssRemove(k);
           }
         });
       }
@@ -451,12 +595,12 @@ const Store = (() => {
      */
     invalidateGradesForGroup(groupId) {
       const baseKey = 'grades_group_' + groupId;
-      // Limpiar la entrada base y todas las variantes por parcial
       Object.keys(_cache).forEach(k => {
         if (k === baseKey || k.startsWith(baseKey + '_')) {
           delete _cache[k];
           delete _timestamps[k];
           delete _promises[k];
+          _ssRemove(k);
         }
       });
     },
@@ -468,6 +612,13 @@ const Store = (() => {
       Object.keys(_cache).forEach(key => delete _cache[key]);
       Object.keys(_timestamps).forEach(key => delete _timestamps[key]);
       Object.keys(_promises).forEach(key => delete _promises[key]);
+      // Limpiar sessionStorage también
+      try {
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+          const k = sessionStorage.key(i);
+          if (k && k.startsWith(SS_PREFIX)) sessionStorage.removeItem(k);
+        }
+      } catch (_) {}
     },
 
     /**

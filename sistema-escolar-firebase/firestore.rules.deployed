@@ -36,7 +36,24 @@ service cloud.firestore {
     function isOrientador()        { return isAuthenticated() && getUserData().role == 'orientador'; }
     function isMaestro()           { return isAuthenticated() && getUserData().role == 'maestro'; }
     function isDirectivo()         { return isAuthenticated() && getUserData().role == 'directivo'; }
+    function isSubdirector()       { return isAuthenticated() && getUserData().role == 'subdirector'; }
+    function isSecretarioEscolar() { return isAuthenticated() && getUserData().role == 'secretario_escolar'; }
+    function isSecretarioAdmin()   { return isAuthenticated() && getUserData().role == 'secretario_admin'; }
     function isOrientadorDocente() { return isAuthenticated() && getUserData().role == 'orientador_docente'; }
+
+    // Subdirector = casi-admin. Puede escribir en TODO menos:
+    //   - users (admin-only — proteccion de identidad)
+    //   - grades (solo admin o maestro-con-asignacion — captura es responsabilidad del docente)
+    //   - activityLog (read-only)
+    function isAdminOrSubdirector() { return isAdmin() || isSubdirector(); }
+
+    // Secretario Escolar y Secretaria Administrativa: misma vista que directivo
+    // pero con escrituras puntuales (escolar→inscripciones, admin→datos escuela).
+    function canReadAsDirectivo() { return isDirectivo() || isSecretarioEscolar() || isSecretarioAdmin(); }
+    function canManageEnrollment() { return isAdmin() || isSubdirector() || isSecretarioEscolar(); }
+    // Datos de la escuela: SOLO admin (Olivia) y secretario_admin (Lupita).
+    // Subdirector/directivo/etc NO pueden modificarlos.
+    function canManageSchoolConfig() { return isAdmin() || isSecretarioAdmin(); }
 
     // Helpers efectivos: combinan roles puros con el híbrido orientador_docente,
     // que hereda permisos de orientador y maestro.
@@ -63,9 +80,15 @@ service cloud.firestore {
     }
 
     // ─── CONFIGURACION ──────────────────────
+    // Datos de la escuela y school.staff: SOLO admin (Olivia) + secretario_admin (Lupita).
+    // correctionsWindow y captureWindow: SOLO admin (Olivia).
     match /config/{docId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow write: if (
+        docId == 'correctionsWindow' || docId == 'captureWindow'
+          ? isAdmin()
+          : canManageSchoolConfig()
+      );
     }
 
     // ─── USUARIOS ──────────────────────────
@@ -79,54 +102,64 @@ service cloud.firestore {
         && request.auth.uid == userId
         && !exists(/databases/$(database)/documents/users/$(userId))
         && request.resource.data.role == 'consulta';
+
+      // PRIMER INGRESO: el propio usuario puede actualizar SOLO los campos
+      // de configuración inicial (recoveryEmail, mustChangePassword, passwordChangedAt).
+      // Cualquier otro campo (role, teacherId, status) sigue siendo admin-only.
+      allow update: if isAuthenticated()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['recoveryEmail', 'mustChangePassword', 'passwordChangedAt']);
     }
 
     // ─── DOCENTES ──────────────────────────
     match /teachers/{teacherId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || canOrientador() || isDirectivo() || getTeacherId() == teacherId
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || getTeacherId() == teacherId
       );
-      allow write: if isAdmin();
+      // Subdirector puede editar/crear/eliminar docentes (gestión académica)
+      allow write: if isAdminOrSubdirector();
     }
 
     // ─── GRUPOS / MATERIAS / ASIGNACIONES ──
     match /groups/{groupId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow write: if isAdminOrSubdirector();
     }
 
     match /subjects/{subjectId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow write: if isAdminOrSubdirector();
     }
 
     match /assignments/{assignmentId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || canOrientador() || isDirectivo() ||
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
         resource.data.teacherId == getTeacherId()
       );
-      allow write: if isAdmin();
+      allow write: if isAdminOrSubdirector();
     }
 
     match /assignmentsByGroup/{docId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow write: if isAdminOrSubdirector();
     }
 
     // ─── ALUMNOS ───────────────────────────
+    // Escritura: admin, subdirector y secretario_escolar (jefes de inscripciones)
     match /students/{studentId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || canOrientador() || isDirectivo() ||
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
         (canMaestro() && teacherHasGroup(resource.data.groupId))
       );
-      allow create, update, delete: if isAdmin();
+      allow create, update, delete: if canManageEnrollment();
     }
 
     // ─── CALIFICACIONES ────────────────────
     // C-2 FIX: maestro solo escribe grades si tiene assignment de ese grupo+materia.
     match /grades/{gradeId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || canOrientador() || isDirectivo() || canMaestro()
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || canMaestro()
       );
 
       allow create: if isAuthenticated() && (
@@ -147,32 +180,33 @@ service cloud.firestore {
     }
 
     // ─── PARCIALES ─────────────────────────
+    // Subdirector controla apertura/cierre de parciales (jefe academico)
     match /partials/{partialId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow write: if isAdminOrSubdirector();
     }
 
     // ─── AT RISK ───────────────────────────
     match /atRisk/{docId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || canOrientador() || isDirectivo() ||
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
         (canMaestro() && resource.data.teacherId == getTeacherId())
       );
       allow create: if isAuthenticated() && (
-        isAdmin() || canOrientador() ||
+        isAdmin() || isSubdirector() || canOrientador() ||
         (canMaestro() && request.resource.data.teacherId == getTeacherId())
       );
       allow update: if isAuthenticated() && (
-        isAdmin() || canOrientador() ||
+        isAdmin() || isSubdirector() || canOrientador() ||
         (canMaestro() && resource.data.teacherId == getTeacherId())
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdminOrSubdirector();
     }
 
     // ─── ACTIVITY LOG ──────────────────────
     // M-2 FIX: forzar userId == auth.uid para no suplantar
     match /activityLog/{logId} {
-      allow read: if isAdmin() || isDirectivo();
+      allow read: if isAdmin() || isSubdirector() || canReadAsDirectivo();
       allow create: if isAuthenticated()
         && request.resource.data.userId == request.auth.uid;
       allow update, delete: if false;
@@ -181,21 +215,24 @@ service cloud.firestore {
     // ─── EMAIL ALERTS ──────────────────────
     // A-3 FIX: solo roles de gestión pueden encolar emails
     match /emailAlerts/{alertId} {
-      allow read: if isAdmin();
-      allow create: if isAuthenticated() && (isAdmin() || canOrientador() || isDirectivo());
-      allow update: if isAdmin();
+      allow read: if isAdmin() || isSubdirector();
+      allow create: if isAuthenticated() && (isAdmin() || isSubdirector() || canOrientador() || isDirectivo());
+      allow update: if isAdminOrSubdirector();
       allow delete: if false;
     }
 
     // ─── INSCRIPCIONES ─────────────────────
+    // Escritura: admin, subdirector y secretario_escolar
     match /enrollments/{enrollmentId} {
-      allow read: if isAuthenticated() && (isAdmin() || canOrientador() || isDirectivo());
-      allow write: if isAdmin();
+      allow read: if isAuthenticated() && (
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo()
+      );
+      allow write: if canManageEnrollment();
     }
 
     match /partialOverrides/{overrideId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow write: if isAdminOrSubdirector();
     }
 
     // ─── ASISTENCIA ────────────────────────
@@ -203,48 +240,93 @@ service cloud.firestore {
     match /attendance/{attendanceId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && (
-        isAdmin() ||
+        isAdminOrSubdirector() ||
         (canMaestro() && teacherHasGroup(request.resource.data.groupId))
       );
       allow update: if isAuthenticated() && (
-        isAdmin() ||
+        isAdminOrSubdirector() ||
         (canMaestro() && teacherHasGroup(resource.data.groupId))
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdminOrSubdirector();
     }
 
     // ─── INCIDENCIAS ───────────────────────
     match /incidents/{incidentId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (isAdmin() || canOrientador() || canMaestro());
-      allow update: if isAuthenticated() && (isAdmin() || canOrientador());
-      allow delete: if isAuthenticated() && (isAdmin() || canOrientador());
+      allow create: if isAuthenticated() && (isAdmin() || isSubdirector() || canOrientador() || canMaestro());
+      allow update: if isAuthenticated() && (isAdmin() || isSubdirector() || canOrientador());
+      allow delete: if isAuthenticated() && (isAdmin() || isSubdirector() || canOrientador());
     }
 
     // ─── HORAS DE MAESTRO ──────────────────
     match /teacherHours/{docId} {
       allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && (isAdmin() || canMaestro());
-      allow delete: if isAdmin();
+      allow create, update: if isAuthenticated() && (isAdmin() || isSubdirector() || canMaestro());
+      allow delete: if isAdminOrSubdirector();
     }
 
     // ─── CORRECCIONES DE CALIFICACIONES ────
-    // A-2 FIX: validar payload mínimo
+    // FLUJO v5.59:
+    //   - Maestros crean solicitudes con status='pending' (sobre sus alumnos)
+    //   - Admin/Subdirector/Directivo (read), aprueban/aplican
+    //   - La aplicacion real se valida via /config/correctionsWindow (manual)
     match /gradeCorrections/{correctionId} {
-      allow read: if isAuthenticated() && (isAdmin() || isDirectivo());
-      allow create: if isAuthenticated() && (isAdmin() || isDirectivo())
-        && request.resource.data.keys().hasAll(['studentId', 'subjectId', 'partial', 'newGrade', 'reason'])
+      allow read: if isAuthenticated() && (
+        isAdmin() || isSubdirector() || canReadAsDirectivo() ||
+        // El maestro lee SUS propias solicitudes
+        (canMaestro() && resource.data.requestedBy == request.auth.uid)
+      );
+
+      // CREATE: admin/subdirector/directivo siempre, maestro solo de sus alumnos.
+      // Status inicial debe ser 'pending'. Se exige folio + datos minimos.
+      // REGLA EPO 67: la cal nueva NUNCA puede ser MENOR que la cal actual capturada.
+      // Si currentGrade es null/ausente (alumno sin captura previa) se permite cualquier cal valida.
+      allow create: if isAuthenticated()
+        && request.resource.data.keys().hasAll(['studentId', 'subjectId', 'partial', 'newGrade', 'reason', 'folio', 'status'])
         && request.resource.data.newGrade is number
         && request.resource.data.newGrade >= 5
-        && request.resource.data.newGrade <= 10;
-      allow update: if isAuthenticated() && (isAdmin() || isDirectivo());
+        && request.resource.data.newGrade <= 10
+        && request.resource.data.status == 'pending'
+        && (
+          // Si hay currentGrade y es numero, la nueva debe ser >= currentGrade.
+          !('currentGrade' in request.resource.data) ||
+          request.resource.data.currentGrade == null ||
+          !(request.resource.data.currentGrade is number) ||
+          request.resource.data.newGrade >= request.resource.data.currentGrade
+        )
+        && (
+          isAdmin() || isSubdirector() || isDirectivo() ||
+          (canMaestro()
+            && request.resource.data.requestedBy == request.auth.uid
+            && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId))
+        );
+
+      // UPDATE:
+      //   - El maestro autor puede ANULAR su propia solicitud mientras este 'pending'
+      //     (cambia status a 'cancelled'). No puede modificar otros campos.
+      //   - Admin/Subdirector pueden cambiar status a received/authorized/applied/rejected.
+      allow update: if isAuthenticated() && (
+        isAdmin() || isSubdirector() ||
+        (
+          // Maestro autor anula su propia solicitud mientras este pending.
+          canMaestro()
+          && resource.data.requestedBy == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'cancelled'
+          // Solo se permite cambiar status, cancelledAt y cancelledBy (afectados)
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'cancelledAt', 'cancelledBy'])
+        )
+      );
+
+      // DELETE: solo admin (auditoria - no se borran solicitudes normales)
       allow delete: if isAdmin();
     }
 
     // ─── NOTIFICACIONES ────────────────────
     match /notifications/{notifId} {
-      allow read: if isAuthenticated() && (isAdmin() || isDirectivo());
-      allow create: if isAuthenticated() && (isAdmin() || isDirectivo());
+      allow read: if isAuthenticated() && (isAdmin() || isSubdirector() || canReadAsDirectivo());
+      allow create: if isAuthenticated() && (isAdmin() || isSubdirector() || isDirectivo());
     }
   }
 }

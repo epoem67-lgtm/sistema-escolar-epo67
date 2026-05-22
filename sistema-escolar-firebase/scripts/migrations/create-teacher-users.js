@@ -43,20 +43,25 @@ const PASSWORD_LENGTH = 16;
 const DELAY_BETWEEN_OPS_MS = 250;
 
 // Lista oficial de orientadores (espejo de teachers.js:185-194 — actualizar ambos juntos).
-// En EPO 67, todas las orientadoras también dan clase, así que reciben el rol
+// En EPO 67, varias orientadoras también dan clase, así que reciben el rol
 // híbrido 'orientador_docente' (puede capturar calificaciones Y gestionar orientación).
-// Si en el futuro hay alguien que sea SOLO orientador (sin clases), se le pone 'orientador'
-// manualmente desde el panel admin.
 const ORIENTADOR_NAMES = [
-  'CORREA SALGADO ANA ISABEL',
   'DIAZ CAMARENA SANDRA',
   'MORLAN ORTIZ NEFTALI MARGARITA',
-  'RANGEL PALACIOS JUANA',
   'SALAZAR ZUNIGA JOSE EDGAR',
   'CEDILLO POLO IVONNE GABRIELA',
   'GARCIA GONZALEZ BEATRIZ ALEJANDRA',
   'MARTINEZ PEREZ LAURITA',
   'RODRIGUEZ VIVAS FERNANDA CITLALLI',
+];
+
+// Lista de orientadoras PURAS — aunque tengan asignaciones de clase, NO se les
+// da el rol híbrido 'orientador_docente'. Reciben SOLO 'orientador'. Decisión
+// administrativa: estas docentes ya no capturan calificaciones, sólo gestionan
+// orientación (no ven el tablero ni los menús de captura de calificaciones).
+const ORIENTADOR_PURO_NAMES = [
+  'RANGEL PALACIOS JUANA',
+  'CORREA SALGADO ANA ISABEL',
 ];
 
 // Lista de personal con acceso de solo lectura (rol 'consulta' en Firestore).
@@ -84,6 +89,7 @@ function normalizeName(s) {
 }
 
 const ORIENTADOR_NAMES_NORM = ORIENTADOR_NAMES.map(normalizeName);
+const ORIENTADOR_PURO_NAMES_NORM = ORIENTADOR_PURO_NAMES.map(normalizeName);
 const CONSULTA_NAMES_NORM = CONSULTA_NAMES.map(normalizeName);
 const ADMIN_NAMES_NORM = ADMIN_NAMES.map(normalizeName);
 
@@ -102,6 +108,7 @@ function _namesMatch(a, b) {
  * Determina el rol del sistema en base al nombre + datos cruzados:
  *  - 'admin'              — está en ADMIN_NAMES (precedencia máxima)
  *  - 'consulta'           — está en CONSULTA_NAMES (personal administrativo solo lectura)
+ *  - 'orientador'         — está en ORIENTADOR_PURO_NAMES (aunque tenga clases)
  *  - 'orientador_docente' — es orientador (lista o groups) Y tiene clases asignadas
  *  - 'orientador'         — orientador pero SIN clases
  *  - 'maestro'            — todos los demás
@@ -111,6 +118,9 @@ function roleForTeacher(teacher, hasAssignments, isOrientadorInGroups) {
   if (!n) return 'maestro';
   if (ADMIN_NAMES_NORM.some(an => n.includes(an) || an.includes(n))) return 'admin';
   if (CONSULTA_NAMES_NORM.some(on => n.includes(on) || on.includes(n))) return 'consulta';
+  // PRECEDE a la lista normal: orientadora pura (no recibe el rol híbrido aunque
+  // tenga asignaciones — decisión administrativa).
+  if (ORIENTADOR_PURO_NAMES_NORM.some(on => n.includes(on) || on.includes(n))) return 'orientador';
   const enListaOrient = ORIENTADOR_NAMES_NORM.some(on => n.includes(on) || on.includes(n));
   const esOrientador = enListaOrient || isOrientadorInGroups;
   if (esOrientador && hasAssignments) return 'orientador_docente';
@@ -297,6 +307,10 @@ async function main() {
   //   - 'directivo' → secretaria administrativa (lectura completa + reportes;
   //                    NO puede capturar ni cambiar calificaciones)
   //   - 'consulta'  → solo lectura general
+  // SOLO estos 6 roles existen en firestore.rules. CUALQUIER otro valor causa
+  // que isAdmin()/isDirectivo() devuelvan false y bloqueen todas las operaciones.
+  const VALID_ROLES = new Set(['admin', 'maestro', 'orientador', 'orientador_docente', 'directivo', 'consulta']);
+
   const staffEntries = [];
   const staffMap = schoolConfig?.fields?.staff?.mapValue?.fields || {};
   for (const [roleKey, mapVal] of Object.entries(staffMap)) {
@@ -305,7 +319,14 @@ async function main() {
     const nombre = f.nombre?.stringValue || '';
     const cargo  = f.cargo?.stringValue  || '';
     const email  = f.email?.stringValue  || '';
-    const role   = f.role?.stringValue   || 'admin';
+    let role     = f.role?.stringValue   || 'admin';
+    // BLINDAJE: si el role del config no es uno de los 6 válidos, normalizar.
+    // Caso histórico: roleKey 'subdirector'/'secretario_escolar'/'secretario_admin'
+    // se usaron como `role` por error y bloquean las firestore.rules.
+    if (!VALID_ROLES.has(role)) {
+      console.warn(`⚠️  rol inválido "${role}" para staff ${roleKey} → forzando 'admin' (excepto secretaria_admin → 'directivo')`);
+      role = (roleKey === 'secretaria_admin' || roleKey === 'secretario_admin') ? 'directivo' : 'admin';
+    }
     if (!nombre) continue;
     staffEntries.push({
       id: `staff-${roleKey}`,
