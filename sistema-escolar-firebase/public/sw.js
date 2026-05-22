@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v6.91-perf-sessionstorage-lazy-grades";
+const SW_VERSION = "v6.92-orientador-ve-todo-su-turno";
 const STATIC_CACHE = `epo67-static-${SW_VERSION}`;
 
 // Recursos a precachear durante la instalacion (la app shell minima)

@@ -48,18 +48,34 @@ const DashboardModule = (() => {
       const oriGroupIds = isOrientadorRole ? (lightResults[4] || []) : null;
 
       // ═══ SCOPE por rol ═══
+      // Orientador puro: ve TODOS los grupos del TURNO donde es orientador
+      // (no solo los grupos específicos asignados). Esto permite que un
+      // orientador del matutino vea estadísticas de los 9 grupos del matutino,
+      // no solo los 3 que tiene asignados directamente.
       let scopedGroups = groupsAll;
       let isOrientadorScope = false;
+      let scopedTurnos = [];
       if (isOrientadorRole) {
         const oriSet = new Set(oriGroupIds || []);
-        scopedGroups = groupsAll.filter(g => oriSet.has(g.id));
+        // Detectar el/los turno(s) donde es orientador
+        const turnosSet = new Set(
+          groupsAll
+            .filter(g => oriSet.has(g.id))
+            .map(g => g.turno)
+            .filter(Boolean)
+        );
+        scopedTurnos = [...turnosSet];
+        if (scopedTurnos.length > 0) {
+          scopedGroups = groupsAll.filter(g => turnosSet.has(g.turno));
+        } else {
+          scopedGroups = [];
+        }
         isOrientadorScope = true;
       }
 
       // ═══ FASE 2: Students con query scoped ═══
-      // Orientador puro: solo alumnos de SUS grupos (1 query por grupo, pero
-      // cada uno es chico y queda cacheado individualmente).
-      // Admin/directivo/etc: TODOS los alumnos (1 query grande).
+      // Orientador: alumnos de los grupos del/los turno(s) donde es orientador.
+      // Admin/directivo/etc: TODOS los alumnos.
       let students;
       if (isOrientadorScope) {
         const gIds = scopedGroups.map(g => g.id);
@@ -101,7 +117,9 @@ const DashboardModule = (() => {
         activeStudents, assignments,
         isOrientadorScope,
         scopeLabel: isOrientadorScope
-          ? `Estás viendo estadísticas de tus ${scopedGroups.length} grupo${scopedGroups.length === 1 ? '' : 's'} como orientador${App.currentUser?.role === 'orientador' && App.currentUser?.displayName ? ` · ${App.currentUser.displayName}` : ''}.`
+          ? (scopedTurnos.length > 0
+              ? `Vista de orientación · Estadísticas de los ${scopedGroups.length} grupos del turno ${scopedTurnos.join(' y ')}.`
+              : 'Aún no tienes grupos asignados como orientador.')
           : null,
       };
 
