@@ -363,35 +363,68 @@ const DashboardModule = (() => {
   // ─── KPIs PRINCIPALES ───────────────────────────────────────
   function renderKPICards(activeStudents, teachers, grades, assignments) {
     const avg = computeAverage(grades);
-    const reprobPct = computeFailRate(grades);
-    const aprobPct = grades.length > 0 ? 100 - reprobPct : 0;
     const interimAsg = (assignments || []).filter(a => a.interim).length;
 
-    // Estudiantes en riesgo: clasificacion oficial EPO67
-    //   ALTO  >= 5 materias reprobadas (emergencia)
-    //   MEDIO 3-4 materias reprobadas (necesita atencion)
-    //   BAJO  1-2 materias reprobadas (vigilar)
-    // El KPI principal cuenta SOLO los que necesitan atencion (>=3 materias);
-    // antes contaba a todo el que tenia 1+ materia reprobada — eso inflaba el
-    // numero (~362 de 811 alumnos) y daba falsa alarma.
+    // ═══ MÉTRICAS ALUMNO-CÉNTRICAS (correcto) ═══
+    // El ALUMNO es la unidad — no la calificación.
+    // Aprobado = alumno SIN ninguna materia reprobada
+    // Irregular = alumno con AL MENOS 1 materia reprobada
+    // Aprobados + Irregulares = Total (siempre cuadra contra los alumnos del salón)
+    //
+    // Solo contamos alumnos QUE TIENEN AL MENOS UNA CALIFICACIÓN CAPTURADA.
+    // Si no se les ha capturado nada, no podemos clasificarlos todavía.
     const failsByStudent = {};
+    const studentsWithGrades = new Set();
+    let totalIncidencias = 0; // sumatoria de calificaciones < 6 (magnitud del problema)
     grades.forEach(g => {
       const cal = getGradeCal(g);
-      if (cal !== null && cal < K.THRESHOLDS.PASS_GRADE) {
-        failsByStudent[g.studentId] = (failsByStudent[g.studentId] || 0) + 1;
+      if (cal !== null && cal !== undefined && !isNaN(cal)) {
+        studentsWithGrades.add(g.studentId);
+        if (cal < K.THRESHOLDS.PASS_GRADE) {
+          failsByStudent[g.studentId] = (failsByStudent[g.studentId] || 0) + 1;
+          totalIncidencias++;
+        }
       }
     });
+
+    // Solo consideramos activos con al menos una cal capturada
+    const activeIds = new Set(activeStudents.map(s => s.id));
+    const evaluatedIds = [...studentsWithGrades].filter(id => activeIds.has(id));
+    const totalEval = evaluatedIds.length;
+    const studentsIrregulares = evaluatedIds.filter(id => (failsByStudent[id] || 0) > 0).length;
+    const studentsAprobados = totalEval - studentsIrregulares;
+    const aprobPctStudents = totalEval > 0 ? (studentsAprobados * 100 / totalEval) : 0;
+
+    // Niveles de riesgo (clasificación oficial EPO 67):
+    //   ALTO  ≥ 5 materias reprobadas
+    //   MEDIO 3-4 materias reprobadas
+    //   BAJO  1-2 materias reprobadas
     let alto = 0, medio = 0, bajo = 0;
     Object.values(failsByStudent).forEach(n => {
       if (n >= 5) alto++;
       else if (n >= 3) medio++;
       else if (n >= 1) bajo++;
     });
-    const enRiesgoAtencion = alto + medio; // los que necesitan accion (>=3)
+    const enRiesgoAtencion = alto + medio;
 
     const kpis = [
       { label: 'Promedio General', value: grades.length > 0 ? avg.toFixed(2) : '—', icon: 'analytics', color: avg >= 8.3 ? '#16a34a' : avg >= 7 ? '#d97706' : '#dc2626', bg: avg >= 8.3 ? '#f0fdf4' : avg >= 7 ? '#fffbeb' : '#fef2f2' },
-      { label: '% Aprobación', value: grades.length > 0 ? aprobPct.toFixed(1) + '%' : '—', icon: 'check_circle', color: aprobPct >= 86 ? '#16a34a' : aprobPct >= 75 ? '#d97706' : '#dc2626', bg: aprobPct >= 86 ? '#f0fdf4' : aprobPct >= 75 ? '#fffbeb' : '#fef2f2' },
+      {
+        label: '% Alumnos Aprobados',
+        value: totalEval > 0 ? aprobPctStudents.toFixed(1) + '%' : '—',
+        icon: 'check_circle',
+        color: aprobPctStudents >= 86 ? '#16a34a' : aprobPctStudents >= 75 ? '#d97706' : '#dc2626',
+        bg: aprobPctStudents >= 86 ? '#f0fdf4' : aprobPctStudents >= 75 ? '#fffbeb' : '#fef2f2',
+        sub: `${studentsAprobados} de ${totalEval} sin reprobadas`
+      },
+      {
+        label: 'Alumnos Irregulares',
+        value: studentsIrregulares,
+        icon: 'priority_high',
+        color: '#d97706',
+        bg: '#fffbeb',
+        sub: `${totalIncidencias} incidencia${totalIncidencias === 1 ? '' : 's'} de reprobación`
+      },
       {
         label: 'Alumnos en Riesgo (≥3 mat.)',
         value: enRiesgoAtencion,
@@ -1058,9 +1091,29 @@ const DashboardModule = (() => {
       const studentList = studentsByGrupo[grupoName] || [];
       const gradeList = gradesByGrupo[grupoName] || [];
       const avg = computeAverage(gradeList);
-      const reprob = computeFailRate(gradeList);
 
-      // Status indicator — elegant dot + text, no badge pills
+      // ═══ Métrica ALUMNO-céntrica de irregularidad ═══
+      // Contamos alumnos del grupo, no calificaciones.
+      // Irregular = alumno con AL MENOS una calificación < 6.
+      // Solo consideramos alumnos CON al menos una cal capturada.
+      const failsByStudent = {};
+      const evaluatedStudents = new Set();
+      let totalIncidencias = 0;
+      gradeList.forEach(g => {
+        const cal = getGradeCal(g);
+        if (cal !== null && cal !== undefined && !isNaN(cal)) {
+          evaluatedStudents.add(g.studentId);
+          if (cal < K.THRESHOLDS.PASS_GRADE) {
+            failsByStudent[g.studentId] = (failsByStudent[g.studentId] || 0) + 1;
+            totalIncidencias++;
+          }
+        }
+      });
+      const totalEval = evaluatedStudents.size;
+      const irregulares = Object.keys(failsByStudent).length;
+      const aprobados = totalEval - irregulares;
+      const pctIrregulares = totalEval > 0 ? (irregulares * 100 / totalEval) : 0;
+
       let statusHtml;
       if (gradeList.length === 0) {
         statusHtml = '<span style="color:var(--color-text-light);font-size:13px;">— Sin datos</span>';
@@ -1072,11 +1125,12 @@ const DashboardModule = (() => {
         statusHtml = '<span style="color:var(--color-danger);font-weight:600;font-size:13px;">● Crítico</span>';
       }
 
-      // Turno fallback: infer from students if not in groups collection
       let turno = info.turno || '';
       if (!turno && studentList.length > 0) {
         turno = studentList[0].turno || '';
       }
+
+      const irrColor = pctIrregulares <= 14 ? 'var(--color-success)' : pctIrregulares <= 30 ? '#c05621' : 'var(--color-danger)';
 
       return `
         <tr>
@@ -1084,7 +1138,9 @@ const DashboardModule = (() => {
           <td><strong>${Utils.sanitize(grupoName)}</strong></td>
           <td style="text-align:center;">${studentList.length}</td>
           <td style="text-align:center;font-weight:600;color:${gradeList.length > 0 ? (avg >= 8 ? 'var(--color-success)' : avg >= 7 ? '#c05621' : 'var(--color-danger)') : 'inherit'};">${gradeList.length > 0 ? avg.toFixed(2) : '-'}</td>
-          <td style="text-align:center;font-weight:600;color:${gradeList.length > 0 ? (reprob <= 14 ? 'var(--color-success)' : reprob <= 20 ? '#c05621' : 'var(--color-danger)') : 'inherit'};">${gradeList.length > 0 ? reprob.toFixed(1) + '%' : '-'}</td>
+          <td style="text-align:center;font-weight:600;color:${gradeList.length > 0 ? 'var(--color-success)' : 'inherit'};">${totalEval > 0 ? aprobados : '-'}</td>
+          <td style="text-align:center;font-weight:600;color:${gradeList.length > 0 ? irrColor : 'inherit'};">${totalEval > 0 ? `${irregulares} (${pctIrregulares.toFixed(0)}%)` : '-'}</td>
+          <td style="text-align:center;color:#6b7280;font-size:12px;">${totalIncidencias > 0 ? totalIncidencias : '-'}</td>
           <td style="text-align:center;">${statusHtml}</td>
         </tr>
       `;
@@ -1092,10 +1148,14 @@ const DashboardModule = (() => {
 
     return `
       <div class="card" style="margin-top:24px;">
-        <h2 class="section-title" style="margin-bottom:16px;">
+        <h2 class="section-title" style="margin-bottom:6px;">
           <span class="material-icons-round" style="vertical-align:middle;margin-right:8px;font-size:22px;">table_chart</span>
           Estado de Grupos
         </h2>
+        <p style="margin:0 0 16px;font-size:12px;color:#6b7280;">
+          <strong>Aprobados / Irregulares:</strong> alumnos sin / con al menos una materia reprobada.
+          <strong>Incidencias:</strong> total de calificaciones &lt; 6 (un alumno puede tener varias).
+        </p>
         <div class="table-container">
           <table class="table-light">
             <thead>
@@ -1104,12 +1164,14 @@ const DashboardModule = (() => {
                 <th>Grupo</th>
                 <th style="text-align:center;">Alumnos</th>
                 <th style="text-align:center;">Promedio</th>
-                <th style="text-align:center;">% Reprob</th>
+                <th style="text-align:center;">Aprobados</th>
+                <th style="text-align:center;">Irregulares</th>
+                <th style="text-align:center;">Incidencias</th>
                 <th style="text-align:center;">Estado</th>
               </tr>
             </thead>
             <tbody>
-              ${rows || '<tr><td colspan="6" style="text-align:center;">Sin datos de grupos</td></tr>'}
+              ${rows || '<tr><td colspan="8" style="text-align:center;">Sin datos de grupos</td></tr>'}
             </tbody>
           </table>
         </div>

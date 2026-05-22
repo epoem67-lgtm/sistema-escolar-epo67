@@ -120,54 +120,96 @@ const PresidenteAcademiaModule = (() => {
     const studentIds = new Set(studentsFiltered.map(s => s.id));
     grades = grades.filter(g => studentIds.has(g.studentId) && filteredGroupIds.has(g.groupId));
 
-    // KPIs
+    // ═══ MÉTRICAS ═══
+    // - PROMEDIO: promedio de TODAS las calificaciones capturadas (valor numérico)
+    // - ALUMNOS APROBADOS = alumnos SIN materias reprobadas en mi academia
+    // - ALUMNOS IRREGULARES = alumnos CON ≥1 materia reprobada en mi academia
+    // - INCIDENCIAS = total de calificaciones < 6 (sumatoria, magnitud)
     const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
     const cals = grades.map(g => Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN))).filter(c => !isNaN(c));
     const promedio = cals.length ? (cals.reduce((a, b) => a + b, 0) / cals.length).toFixed(2) : '—';
-    const reprob = cals.filter(c => c < passGrade).length;
-    const pctReprob = cals.length ? ((reprob * 100) / cals.length).toFixed(1) : '—';
+    const incidencias = cals.filter(c => c < passGrade).length;
+
+    // Métricas alumno-céntricas
+    const failsByStudent = {};
+    const evaluatedSet = new Set();
+    grades.forEach(g => {
+      const c = Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN));
+      if (isNaN(c)) return;
+      evaluatedSet.add(g.studentId);
+      if (c < passGrade) failsByStudent[g.studentId] = (failsByStudent[g.studentId] || 0) + 1;
+    });
+    const totalEval = evaluatedSet.size;
+    const irregulares = Object.keys(failsByStudent).length;
+    const aprobados = totalEval - irregulares;
+    const pctIrreg = totalEval > 0 ? ((irregulares * 100) / totalEval).toFixed(1) : '—';
+    const pctAprob = totalEval > 0 ? ((aprobados * 100) / totalEval).toFixed(1) : '—';
+
     const numAlumnos = studentsFiltered.length;
     const numGrupos = filteredGroups.length;
     const numMaterias = subjectsMine.length;
 
-    const META_PROM = 8.3, META_REPROB = 14;
+    const META_PROM = 8.3, META_IRREG = 14;
     const promCumple = promedio !== '—' && parseFloat(promedio) >= META_PROM;
-    const reprobCumple = pctReprob !== '—' && parseFloat(pctReprob) <= META_REPROB;
+    const irregCumple = pctIrreg !== '—' && parseFloat(pctIrreg) <= META_IRREG;
 
-    // Tabla por materia
+    // ─── Tabla por materia ───
+    // En cada materia, contamos ALUMNOS aprobados/irregulares (no calificaciones).
+    // Aprobado = alumno que NO reprobó esa materia · Irregular = la reprobó.
     const matRows = subjectsMine.map(subj => {
       const subjGrades = grades.filter(g => g.subjectId === subj.id);
       const subjCals = subjGrades.map(g => Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN))).filter(c => !isNaN(c));
       const subjProm = subjCals.length ? (subjCals.reduce((a, b) => a + b, 0) / subjCals.length).toFixed(2) : '—';
-      const subjReprob = subjCals.filter(c => c < passGrade).length;
-      const subjPctRep = subjCals.length ? ((subjReprob * 100) / subjCals.length).toFixed(1) : '—';
+      const subjEvalStudents = new Set();
+      let subjReprobStudents = 0;
+      subjGrades.forEach(g => {
+        const c = Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN));
+        if (isNaN(c)) return;
+        subjEvalStudents.add(g.studentId);
+        if (c < passGrade) subjReprobStudents++;
+      });
+      const subjTotalEval = subjEvalStudents.size;
+      const subjAprob = subjTotalEval - subjReprobStudents;
+      const subjPctIrr = subjTotalEval > 0 ? ((subjReprobStudents * 100) / subjTotalEval).toFixed(1) : '—';
       const promBg = subjProm !== '—' && parseFloat(subjProm) < META_PROM ? 'background:#fee2e2;' : '';
-      const repBg = subjPctRep !== '—' && parseFloat(subjPctRep) > META_REPROB ? 'background:#fee2e2;' : '';
+      const irrBg = subjPctIrr !== '—' && parseFloat(subjPctIrr) > META_IRREG ? 'background:#fee2e2;' : '';
       return `<tr>
         <td>${Utils.sanitize(subj.nombre || subj.id)}</td>
-        <td style="text-align:center;">${subjCals.length}</td>
+        <td style="text-align:center;">${subjTotalEval}</td>
         <td style="text-align:center;font-weight:700;${promBg}">${subjProm}</td>
-        <td style="text-align:center;">${subjReprob}</td>
-        <td style="text-align:center;font-weight:700;${repBg}">${subjPctRep}%</td>
+        <td style="text-align:center;color:#16a34a;font-weight:600;">${subjTotalEval > 0 ? subjAprob : '—'}</td>
+        <td style="text-align:center;font-weight:700;${irrBg}">${subjTotalEval > 0 ? `${subjReprobStudents} (${subjPctIrr}%)` : '—'}</td>
       </tr>`;
     }).join('');
 
-    // Tabla por grupo
+    // ─── Tabla por grupo ───
+    // Mismo principio: alumnos aprobados / irregulares en mi academia dentro del grupo.
     const grpRows = filteredGroups.map(grp => {
       const grpStudents = studentsFiltered.filter(s => s.groupId === grp.id);
       const grpGrades = grades.filter(g => g.groupId === grp.id);
       const grpCals = grpGrades.map(g => Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN))).filter(c => !isNaN(c));
       const grpProm = grpCals.length ? (grpCals.reduce((a, b) => a + b, 0) / grpCals.length).toFixed(2) : '—';
-      const grpReprob = grpCals.filter(c => c < passGrade).length;
-      const grpPctRep = grpCals.length ? ((grpReprob * 100) / grpCals.length).toFixed(1) : '—';
+      const grpFails = {};
+      const grpEvalSet = new Set();
+      grpGrades.forEach(g => {
+        const c = Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN));
+        if (isNaN(c)) return;
+        grpEvalSet.add(g.studentId);
+        if (c < passGrade) grpFails[g.studentId] = (grpFails[g.studentId] || 0) + 1;
+      });
+      const grpTotalEval = grpEvalSet.size;
+      const grpIrreg = Object.keys(grpFails).length;
+      const grpAprob = grpTotalEval - grpIrreg;
+      const grpPctIrr = grpTotalEval > 0 ? ((grpIrreg * 100) / grpTotalEval).toFixed(1) : '—';
       const promBg = grpProm !== '—' && parseFloat(grpProm) < META_PROM ? 'background:#fee2e2;' : '';
+      const irrBg = grpPctIrr !== '—' && parseFloat(grpPctIrr) > META_IRREG ? 'background:#fee2e2;' : '';
       return `<tr>
         <td><strong>${Utils.sanitize(grp.nombre)}</strong></td>
         <td style="text-align:center;">${grp.turno}</td>
         <td style="text-align:center;">${grpStudents.length}</td>
         <td style="text-align:center;font-weight:700;${promBg}">${grpProm}</td>
-        <td style="text-align:center;">${grpReprob}</td>
-        <td style="text-align:center;">${grpPctRep}%</td>
+        <td style="text-align:center;color:#16a34a;font-weight:600;">${grpTotalEval > 0 ? grpAprob : '—'}</td>
+        <td style="text-align:center;font-weight:700;${irrBg}">${grpTotalEval > 0 ? `${grpIrreg} (${grpPctIrr}%)` : '—'}</td>
       </tr>`;
     }).join('');
 
@@ -177,21 +219,24 @@ const PresidenteAcademiaModule = (() => {
         `Indicadores académicos de tus ${numMaterias} materia${numMaterias === 1 ? '' : 's'}, en ${numGrupos} grupos`
       ),
       _renderFilters(),
-      _renderKPIs({ numAlumnos, numGrupos, numMaterias, promedio, pctReprob, reprob, promCumple, reprobCumple }),
+      _renderKPIs({ numAlumnos, numGrupos, numMaterias, promedio, totalEval, aprobados, irregulares, pctAprob, pctIrreg, incidencias, promCumple, irregCumple }),
       _renderDownloads(),
       `<div class="card" style="margin-top:18px;">
         <div style="padding:14px 18px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
           <h3 style="margin:0;font-size:18px;">📚 Por Materia</h3>
           <span style="font-size:12px;color:#6b7280;">${subjectsMine.length} materias</span>
         </div>
+        <p style="margin:0;padding:0 18px 6px;font-size:11px;color:#6b7280;">
+          <strong>Aprobados / Irregulares:</strong> alumnos sin / con reprobada en esa materia. NO son sumatorias — un mismo alumno aparece UNA vez.
+        </p>
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
             <thead style="background:#f9fafb;"><tr>
               <th style="text-align:left;padding:10px 14px;">Materia</th>
-              <th style="text-align:center;padding:10px 14px;">Calificaciones</th>
+              <th style="text-align:center;padding:10px 14px;">Alumnos eval.</th>
               <th style="text-align:center;padding:10px 14px;">Promedio</th>
-              <th style="text-align:center;padding:10px 14px;">Reprobados</th>
-              <th style="text-align:center;padding:10px 14px;">% Reprob.</th>
+              <th style="text-align:center;padding:10px 14px;">Aprobados</th>
+              <th style="text-align:center;padding:10px 14px;">Irregulares</th>
             </tr></thead>
             <tbody>${matRows || '<tr><td colspan="5" style="padding:18px;text-align:center;color:#9ca3af;">Sin datos en este parcial.</td></tr>'}</tbody>
           </table>
@@ -202,6 +247,9 @@ const PresidenteAcademiaModule = (() => {
           <h3 style="margin:0;font-size:18px;">👥 Por Grupo</h3>
           <span style="font-size:12px;color:#6b7280;">${filteredGroups.length} grupos</span>
         </div>
+        <p style="margin:0;padding:0 18px 6px;font-size:11px;color:#6b7280;">
+          <strong>Irregulares:</strong> alumnos del grupo con ≥1 reprobada en CUALQUIER materia de mi academia.
+        </p>
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
             <thead style="background:#f9fafb;"><tr>
@@ -209,8 +257,8 @@ const PresidenteAcademiaModule = (() => {
               <th style="text-align:center;padding:10px 14px;">Turno</th>
               <th style="text-align:center;padding:10px 14px;">Alumnos</th>
               <th style="text-align:center;padding:10px 14px;">Promedio</th>
-              <th style="text-align:center;padding:10px 14px;">Reprobados</th>
-              <th style="text-align:center;padding:10px 14px;">% Reprob.</th>
+              <th style="text-align:center;padding:10px 14px;">Aprobados</th>
+              <th style="text-align:center;padding:10px 14px;">Irregulares</th>
             </tr></thead>
             <tbody>${grpRows || '<tr><td colspan="6" style="padding:18px;text-align:center;color:#9ca3af;">No hay grupos en este filtro.</td></tr>'}</tbody>
           </table>
@@ -264,7 +312,9 @@ const PresidenteAcademiaModule = (() => {
       ${card('👥', 'Alumnos', k.numAlumnos, `en ${k.numGrupos} grupos`)}
       ${card('📚', 'Materias', k.numMaterias, 'de tu academia')}
       ${card('📈', 'Promedio', k.promedio, 'meta ≥ 8.3', k.promCumple)}
-      ${card('🚨', '% Reprob.', `${k.pctReprob}%`, `${k.reprob} incidencias · meta ≤ 14%`, k.reprobCumple)}
+      ${card('✅', 'Alumnos Aprobados', k.totalEval > 0 ? `${k.aprobados}` : '—', k.totalEval > 0 ? `de ${k.totalEval} (${k.pctAprob}%) sin reprobadas` : 'sin datos')}
+      ${card('🚨', 'Alumnos Irregulares', k.totalEval > 0 ? `${k.irregulares}` : '—', k.totalEval > 0 ? `${k.pctIrreg}% · meta ≤ 14%` : 'sin datos', k.irregCumple)}
+      ${card('📊', 'Incidencias', k.incidencias, 'total de calif. < 6 (sumatoria)')}
     </div>`;
   }
 

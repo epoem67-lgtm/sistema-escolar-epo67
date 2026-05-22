@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v6.92-orientador-ve-todo-su-turno";
+const SW_VERSION = "v6.93-metricas-alumno-centricas";
 const STATIC_CACHE = `epo67-static-${SW_VERSION}`;
 
 // Recursos a precachear durante la instalacion (la app shell minima)
