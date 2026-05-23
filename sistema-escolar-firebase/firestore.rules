@@ -72,6 +72,18 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/assignmentsByGroup/$(groupId + '_' + getTeacherId()));
     }
 
+    // Presidente/Secretario de Academia: permite leer alumnos/grades/etc.
+    // de los grupos de SU grado+turno aunque no tenga asignación docente
+    // en ellos. Triggered cuando el user doc tiene academiaGrado + academiaTurno
+    // y el grupo coincide con ambos.
+    function isAcademiaScopeOf(groupId) {
+      return isAuthenticated() &&
+        getUserData().academiaGrado != null &&
+        getUserData().academiaTurno != null &&
+        get(/databases/$(database)/documents/groups/$(groupId)).data.grado == getUserData().academiaGrado &&
+        get(/databases/$(database)/documents/groups/$(groupId)).data.turno == getUserData().academiaTurno;
+    }
+
     // Para calificaciones: valida asignación triple (teacher + group + subject)
     function teacherHasAssignment(groupId, subjectId) {
       return canMaestro() &&
@@ -208,7 +220,10 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (
         isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
         isPresidenteAcademia() ||
-        (canMaestro() && teacherHasGroup(resource.data.groupId))
+        (canMaestro() && teacherHasGroup(resource.data.groupId)) ||
+        // Presidente/Secretario de Academia (con academiaGrado/Turno): puede leer
+        // alumnos de los grupos de su grado+turno aunque no sea su maestro.
+        isAcademiaScopeOf(resource.data.groupId)
       );
       allow create, update, delete: if canManageEnrollment();
     }
@@ -218,6 +233,12 @@ service cloud.firestore {
     // Presidente de Academia: lectura solo de las materias de su academia
     // (filtrado client-side; permite leer todas para luego filtrar).
     match /grades/{gradeId} {
+      // Lectura: cualquier rol con acceso a la sección Calificaciones.
+      // Maestros pueden leer cualquier grade (filtro client-side por
+      // groupId). isAcademiaScopeOf no se evalúa aquí porque ya cubre
+      // canMaestro (al menos para los 12 presidentes). Si en el futuro
+      // hay presidentes que NO son maestros, agregar:
+      //   || isAcademiaScopeOf(resource.data.groupId)
       allow read: if isAuthenticated() && (
         isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || canMaestro() || isPresidenteAcademia()
       );

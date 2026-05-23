@@ -2532,7 +2532,11 @@ html, body { margin:0; padding:0; height:100%; }
       );
     }
 
-    // Helper: calcula stats {prom, aprob, reprob, total} de una materia en un grupo
+    // Helper: stats POR MATERIA dentro de un grupo.
+    // - aprob: alumnos que aprobaron ESA materia (cal >= 6)
+    // - reprob: alumnos que reprobaron ESA materia (cal < 6)
+    // - incidencias: igual que reprob (porque 1 alumno tiene 1 cal por materia)
+    // - total: alumnos con calificación capturada en esa materia
     function statsForSubjectInGroup(subjectId, groupId) {
       const grades = allGrades.filter(g =>
         g.partial === partial && g.groupId === groupId && g.subjectId === subjectId
@@ -2547,11 +2551,19 @@ html, body { margin:0; padding:0; height:100%; }
       }
       return {
         prom: cnt > 0 ? +(sum / cnt).toFixed(2) : null,
-        aprob, reprob, total: cnt
+        aprob, reprob, total: cnt,
+        incidencias: reprob,  // por materia: mismo número que reprob
       };
     }
 
-    // Helper: stats GENERAL del grupo (promedio de promedios individuales de alumnos)
+    // Helper: stats GENERAL del grupo — métricas ALUMNO-céntricas.
+    // Un alumno se cuenta UNA SOLA VEZ aunque tenga varias reprobadas.
+    //   - aprob   = alumnos del grupo SIN ninguna reprobada en las
+    //               materias del grado (todas sus cals >= 6)
+    //   - reprob  = alumnos del grupo CON >=1 reprobada
+    //   - total   = aprob + reprob (cuadra contra los alumnos evaluados)
+    //   - incidencias = sumatoria total de cals < 6 (magnitud del problema)
+    //   - prom    = promedio de promedios individuales de los alumnos
     function statsGeneralForGroup(groupId, grado) {
       const subjectsForGrado = INDICADORES_SUBJECTS[grado] || [];
       const subjectIds = subjectsForGrado.map(([oficial]) => {
@@ -2559,25 +2571,36 @@ html, body { margin:0; padding:0; height:100%; }
         return subj ? subj.id : null;
       }).filter(Boolean);
       const students = allStudents.filter(s => s.groupId === groupId && !s.bajaPendiente);
-      let promSum = 0, promCnt = 0, totalAprob = 0, totalReprob = 0;
+      let promSum = 0, promCnt = 0;
+      let aprobAlumnos = 0, reprobAlumnos = 0;
+      let totalIncidencias = 0;
       for (const stu of students) {
         const studentGrades = allGrades.filter(g =>
           g.partial === partial && g.studentId === stu.id && subjectIds.includes(g.subjectId)
         );
-        let sum = 0, cnt = 0;
+        let sum = 0, cnt = 0, reprobsDelAlumno = 0;
         for (const g of studentGrades) {
           const cal = g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null);
           if (cal == null || isNaN(cal)) continue;
           sum += cal; cnt++;
-          if (cal >= passGrade) totalAprob++; else totalReprob++;
+          if (cal < passGrade) {
+            reprobsDelAlumno++;
+            totalIncidencias++;
+          }
         }
-        if (cnt > 0) { promSum += sum / cnt; promCnt++; }
+        if (cnt > 0) {
+          promSum += sum / cnt;
+          promCnt++;
+          if (reprobsDelAlumno === 0) aprobAlumnos++;
+          else reprobAlumnos++;
+        }
       }
       return {
         prom: promCnt > 0 ? +(promSum / promCnt).toFixed(2) : null,
-        aprob: totalAprob,
-        reprob: totalReprob,
-        total: totalAprob + totalReprob,
+        aprob: aprobAlumnos,     // alumnos sin reprobadas
+        reprob: reprobAlumnos,   // alumnos irregulares
+        total: aprobAlumnos + reprobAlumnos,  // alumnos evaluados del grupo
+        incidencias: totalIncidencias,  // sumatoria de cals < 6
       };
     }
 
@@ -2637,13 +2660,23 @@ html, body { margin:0; padding:0; height:100%; }
         genCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCD34D' } };
         genCell.border = thinBorder;
 
-        // Filas 1-5 del bloque: PROMEDIO, ALUMNOS APROBADOS, % APROBACION, ALUMNOS REPROBADOS, % REPROBACION
+        // Filas del bloque (6 filas):
+        //   PROMEDIO        — promedio numérico
+        //   ALUMNOS APROBADOS — alumnos sin reprobadas (general) / cal >= 6 (materia)
+        //   % APROBACION    — porcentaje sobre alumnos evaluados
+        //   ALUMNOS REPROBADOS — alumnos con >=1 reprobada (general) / cal < 6 (materia)
+        //   % REPROBACION   — porcentaje sobre alumnos evaluados
+        //   INCIDENCIAS     — total de cals < 6 (SUMATORIA, muestra magnitud)
+        //     · Por materia: = ALUMNOS REPROBADOS (1 cal por alumno)
+        //     · General: suma de todas las reprobadas (un alumno cuenta
+        //       tantas veces como materias reprobadas tenga)
         const statRows = [
-          { label: 'PROMEDIO',           fn: s => s.prom != null ? s.prom : '',                       fmt: null },
-          { label: 'ALUMNOS APROBADOS',  fn: s => s.total > 0 ? s.aprob : '',                          fmt: null },
-          { label: '% APROBACION',       fn: s => s.total > 0 ? +(s.aprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
-          { label: 'ALUMNOS REPROBADOS', fn: s => s.total > 0 ? s.reprob : '',                         fmt: null },
-          { label: '% REPROBACION',      fn: s => s.total > 0 ? +(s.reprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
+          { label: 'PROMEDIO',                   fn: s => s.prom != null ? s.prom : '',                       fmt: null },
+          { label: 'ALUMNOS APROBADOS',          fn: s => s.total > 0 ? s.aprob : '',                          fmt: null },
+          { label: '% APROBACION',               fn: s => s.total > 0 ? +(s.aprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
+          { label: 'ALUMNOS REPROBADOS',         fn: s => s.total > 0 ? s.reprob : '',                         fmt: null },
+          { label: '% REPROBACION',              fn: s => s.total > 0 ? +(s.reprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
+          { label: 'INCIDENCIAS DE REPROB.',     fn: s => s.total > 0 ? (s.incidencias != null ? s.incidencias : s.reprob) : '', fmt: null },
         ];
 
         // Pre-calcular stats por materia + general
@@ -2690,7 +2723,7 @@ html, body { margin:0; padding:0; height:100%; }
           gc.border = thinBorder;
         });
 
-        blockStartRow += 7;  // 6 filas (header + 5 stats) + 1 vacía de separación
+        blockStartRow += 8;  // 7 filas (header + 6 stats) + 1 vacía de separación
       }
     }
 
@@ -2725,22 +2758,24 @@ html, body { margin:0; padding:0; height:100%; }
       ws.getCell(3, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } };
       ws.getCell(3, 1).border = thinBorder;
 
-      // Stats por grado
+      // Stats por grado (alumno-céntricas — un alumno cuenta UNA vez)
       const statsByGrado = {};
       for (const grado of [1, 2, 3]) {
         const groupsOfGrado = turnoGroups.filter(g => Number(g.grado) === grado);
-        let promSum = 0, promCnt = 0, totalAprob = 0, totalReprob = 0;
+        let promSum = 0, promCnt = 0, totalAprob = 0, totalReprob = 0, totalIncidencias = 0;
         for (const grp of groupsOfGrado) {
           const s = statsGeneralForGroup(grp.id, grado);
           if (s.prom != null) { promSum += s.prom; promCnt++; }
           totalAprob += s.aprob;
           totalReprob += s.reprob;
+          totalIncidencias += (s.incidencias || 0);
         }
         statsByGrado[grado] = {
           prom: promCnt > 0 ? +(promSum / promCnt).toFixed(2) : null,
           aprob: totalAprob,
           reprob: totalReprob,
           total: totalAprob + totalReprob,
+          incidencias: totalIncidencias,
         };
       }
       // Stats GENERAL (todo el turno)
@@ -2748,6 +2783,7 @@ html, body { margin:0; padding:0; height:100%; }
         prom: null,
         aprob: statsByGrado[1].aprob + statsByGrado[2].aprob + statsByGrado[3].aprob,
         reprob: statsByGrado[1].reprob + statsByGrado[2].reprob + statsByGrado[3].reprob,
+        incidencias: statsByGrado[1].incidencias + statsByGrado[2].incidencias + statsByGrado[3].incidencias,
         total: 0,
       };
       generalAll.total = generalAll.aprob + generalAll.reprob;
@@ -2755,11 +2791,12 @@ html, body { margin:0; padding:0; height:100%; }
       generalAll.prom = promValues.length > 0 ? +(promValues.reduce((a, b) => a + b, 0) / promValues.length).toFixed(2) : null;
 
       const statRows = [
-        { label: 'PROMEDIO',           fn: s => s.prom != null ? s.prom : '',                              fmt: null },
-        { label: 'ALUMNOS APROBADOS',  fn: s => s.total > 0 ? s.aprob : '',                                fmt: null },
-        { label: '% APROBACION',       fn: s => s.total > 0 ? +(s.aprob * 100 / s.total).toFixed(1) : '',  fmt: '0.0"%"' },
-        { label: 'ALUMNOS REPROBADOS', fn: s => s.total > 0 ? s.reprob : '',                               fmt: null },
-        { label: '% REPROBACION',      fn: s => s.total > 0 ? +(s.reprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
+        { label: 'PROMEDIO',                fn: s => s.prom != null ? s.prom : '',                              fmt: null },
+        { label: 'ALUMNOS APROBADOS',       fn: s => s.total > 0 ? s.aprob : '',                                fmt: null },
+        { label: '% APROBACION',            fn: s => s.total > 0 ? +(s.aprob * 100 / s.total).toFixed(1) : '',  fmt: '0.0"%"' },
+        { label: 'ALUMNOS REPROBADOS',      fn: s => s.total > 0 ? s.reprob : '',                               fmt: null },
+        { label: '% REPROBACION',           fn: s => s.total > 0 ? +(s.reprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
+        { label: 'INCIDENCIAS DE REPROB.',  fn: s => s.total > 0 ? (s.incidencias || 0) : '',                   fmt: null },
       ];
       statRows.forEach((sr, idx) => {
         const r = 4 + idx;

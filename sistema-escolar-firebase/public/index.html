@@ -235,10 +235,16 @@
         </div>
 
         <!-- ═══════════════════════════════════════════════ -->
-        <!-- ACADEMIA — solo Presidente de Academia + admin  -->
+        <!-- ACADEMIA — Presidentes/Secretarios de Academia  -->
+        <!-- Visible para users con academiaGrado seteado    -->
+        <!-- (lo hace JS en app.js, no via data-roles)       -->
         <!-- ═══════════════════════════════════════════════ -->
-        <div class="nav-section" data-roles="admin,presidente_academia">
+        <div class="nav-section" id="nav-section-academia" data-roles="admin,presidente_academia" style="display:none;">
           <span class="nav-section-title">Academia</span>
+          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')">
+            <span class="material-icons-round">insights</span>
+            <span class="nav-label">Indicadores de mi Academia</span>
+          </a>
           <a href="#" class="nav-item" data-module="mi-academia" onclick="Router.navigate('mi-academia')" data-roles="admin,presidente_academia">
             <span class="material-icons-round">school</span>
             <span class="nav-label">Mi Academia</span>
@@ -375,7 +381,7 @@
   <script src="/js/modules/import-students.js?v=6.29" defer></script>
   <script src="/js/modules/boletas.js?v=6.85" defer></script>
   <script src="/js/modules/indicadores.js?v=6.98" defer></script>
-  <script src="/js/modules/concentrado.js?v=6.97" defer></script>
+  <script src="/js/modules/concentrado.js?v=6.99" defer></script>
   <script src="/js/modules/attendance.js?v=6.29" defer></script>
   <script src="/js/modules/reports-comparative.js?v=6.29" defer></script>
   <script src="/js/modules/bitacora.js?v=6.29" defer></script>
