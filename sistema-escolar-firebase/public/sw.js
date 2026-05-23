@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v6.99-academia-permisos-incidencias";
+const SW_VERSION = "v7.0-academia-sidebar-fix";
 const STATIC_CACHE = `epo67-static-${SW_VERSION}`;
 // Bumpear este flag dispara una limpieza del IndexedDB de Firestore en todos
 // los clientes al activar el nuevo SW. Útil cuando hay datos viejos cacheados

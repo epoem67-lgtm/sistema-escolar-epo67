@@ -140,6 +140,20 @@ const App = {
     const inherited = (K.ROLE_INHERITS && K.ROLE_INHERITS[role]) || [];
     const effectiveRoles = new Set([role, ...inherited]);
 
+    // ═══ PRESIDENTE/SECRETARIO DE ACADEMIA ═══
+    // Si el usuario tiene academiaGrado + academiaTurno seteados, agregamos
+    // 'presidente_academia' a sus roles efectivos. Esto hace que la sección
+    // Academia del sidebar (data-roles="admin,presidente_academia") se
+    // muestre naturalmente sin parches post-loop.
+    // El rol BASE (maestro/orientador_docente) sigue siendo el principal —
+    // esto es un permiso ADICIONAL.
+    const u = this.currentUser || App.currentUser || {};
+    const isAcademia = !!(u.academiaGrado && u.academiaTurno);
+    if (isAcademia) {
+      effectiveRoles.add('presidente_academia');
+      console.log(`🎓 Academia: ${u.academiaGrado}° ${u.academiaTurno} ${u.academiaRol || 'sin rol'} — agregando 'presidente_academia' a roles efectivos`);
+    }
+
     // IMPORTANTE: usar match EXACTO contra cada rol listado en data-roles.
     // Antes se usaba `[data-roles*="orientador"]` (substring) que coincidía
     // con `orientador_docente` también — un orientador puro veía menús de
@@ -158,20 +172,7 @@ const App = {
     // para directivos en módulos donde solo deben leer)
     document.body.classList.remove('role-admin','role-directivo','role-subdirector','role-secretario_escolar','role-secretario_admin','role-orientador','role-orientador_docente','role-maestro','role-consulta','role-presidente_academia');
     document.body.classList.add('role-' + role);
-
-    // ═══ PRESIDENTE/SECRETARIO DE ACADEMIA ═══
-    // Si el usuario tiene academiaGrado + academiaTurno seteados, le damos
-    // acceso ADICIONAL al menú "Indicadores" sin importar su rol base.
-    // Hay 2 links de indicadores en el HTML (uno en Orientación, otro en
-    // Docentes). Mostramos TODOS los que encontremos + su sección padre.
-    const u = this.currentUser || App.currentUser || {};
-    if (u.academiaGrado && u.academiaTurno) {
-      document.querySelectorAll('a[data-module="indicadores"]').forEach(link => {
-        link.style.display = '';
-        const parentSection = link.closest('.nav-section');
-        if (parentSection) parentSection.style.display = '';
-      });
-    }
+    if (isAcademia) document.body.classList.add('is-academia-presidente');
 
     console.log(`👤 Visibilidad aplicada para rol: ${role} (efectivos: ${[...effectiveRoles].join(',')})`);
 
