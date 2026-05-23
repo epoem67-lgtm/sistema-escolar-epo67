@@ -33,14 +33,31 @@ const IndicadoresModule = (() => {
     const gradoOpts = K.GRADOS.map(g => `<option value="${g}">${g}\u00ba</option>`).join('');
     const parcialOpts = K.PARCIALES.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('');
 
+    // Detección de Presidente/Secretario de Academia (acceso filtrado a grado+turno)
+    const _user = App.currentUser || {};
+    const _acaGrado = Number(_user.academiaGrado) || null;
+    const _acaTurno = _user.academiaTurno || null;
+    const _acaRol = _user.academiaRol || null;
+    const _isAcademia = !!(_acaGrado && _acaTurno);
+    const _acaTitulo = _isAcademia
+      ? 'Indicadores · ' + _acaGrado + '° ' + _acaTurno
+      : 'Indicadores Institucionales';
+    const _acaSubtitulo = _isAcademia
+      ? 'Vista de la Academia de ' + _acaGrado + '° grado del turno ' + _acaTurno.toLowerCase() + '.' + (_acaRol ? ' Eres ' + _acaRol + '.' : '')
+      : 'Elige el turno y la acción que necesitas. Eso es todo.';
+
     container.innerHTML = `
       <div class="module-container">
         <div class="module-header">
           <div class="module-header-text">
-            <h1 class="module-title">Indicadores Institucionales</h1>
-            <p class="module-subtitle">Elige el turno y la acción que necesitas. Eso es todo.</p>
+            <h1 class="module-title">${_acaTitulo}</h1>
+            <p class="module-subtitle">${_acaSubtitulo}</p>
           </div>
         </div>
+        ${_isAcademia ? `
+        <div class="alert alert-info" style="margin-bottom:14px;border-left:4px solid #0891b2;background:#ecfeff;color:#155e75;padding:12px 16px;">
+          <strong>🎓 Vista de Academia:</strong> Estás viendo los indicadores SOLO de los grupos de ${_acaGrado}° grado del turno ${_acaTurno.toLowerCase()}.
+        </div>` : ''}
 
         <!-- SELECTOR DE PARCIAL (chico, default P2) -->
         <div class="chip-filter-bar" id="ind-chip-filters" style="padding:12px 16px;margin-bottom:18px;">
@@ -62,8 +79,8 @@ const IndicadoresModule = (() => {
         <!-- 2 TARJETAS POR TURNO con 2 acciones ÚTILES cada una -->
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:18px;margin-bottom:18px;">
 
-          <!-- TARJETA MATUTINO -->
-          <div style="background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(220,38,38,0.25);">
+          <!-- TARJETA MATUTINO (oculta si presidente_academia de otro turno) -->
+          <div style="background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(220,38,38,0.25);${_isAcademia && _acaTurno !== 'MATUTINO' ? 'display:none;' : ''}">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
               <span style="font-size:42px;">☀</span>
               <div>
@@ -103,8 +120,8 @@ const IndicadoresModule = (() => {
             </div>
           </div>
 
-          <!-- TARJETA VESPERTINO -->
-          <div style="background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(124,58,237,0.25);">
+          <!-- TARJETA VESPERTINO (oculta si presidente_academia de otro turno) -->
+          <div style="background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(124,58,237,0.25);${_isAcademia && _acaTurno !== 'VESPERTINO' ? 'display:none;' : ''}">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
               <span style="font-size:42px;">🌙</span>
               <div>
@@ -214,41 +231,57 @@ const IndicadoresModule = (() => {
   // ═══════════════════════════════════════════════════════════════
   // DATA
   // ═══════════════════════════════════════════════════════════════
+  // Solo carga datos LIVIANOS al abrir Indicadores. Los grades se cargan
+  // SOLO cuando el usuario presiona "Generar Excel" o "Análisis".
   async function loadData() {
     try {
-      const [students, subjects, groups, oriGroups] = await Promise.all([
-        Store.getStudents(), Store.getSubjects(), Store.getGroups(), Store.getOrientadorGroups()
+      const [studentsBase, subjects, groups, oriGroups] = await Promise.all([
+        Store.getStudents(),
+        Store.getSubjects(),
+        Store.getGroups(),
+        Store.getOrientadorGroups()
       ]);
 
-      // ═══════════════════════════════════════════════════════════
-      // FILTRADO POR ROL para Indicadores:
-      // - Admin / Subdirector / Directivo: ven TODO (oriGroups === null)
-      // - Orientador / Orientador-docente: ven TODO el TURNO donde son orientadores
-      //   (no solo sus grupos específicos — necesitan reportar del turno completo)
-      // ═══════════════════════════════════════════════════════════
+      // ═══ FILTRADO POR ROL ═══
+      // Admin / Subdirector / Directivo: ven TODO (oriGroups === null)
+      // Orientador / Orientador-docente: ven TODO el TURNO donde son orientadores
+      // Presidente de Academia (campos academiaGrado/Turno seteados): ven
+      //   SOLO los grupos de su grado + turno (filtro más estricto que orientador)
       let filteredGroups;
+      const user = App.currentUser || {};
+      const acaGrado = Number(user.academiaGrado) || null;
+      const acaTurno = user.academiaTurno || null;
+      const isAcademia = !!(acaGrado && acaTurno);
+
       if (oriGroups === null) {
-        // Admin: sin filtro
-        filteredGroups = groups;
-      } else if (oriGroups.length === 0) {
-        // Orientador sin grupos asignados: nada
-        filteredGroups = [];
+        filteredGroups = groups; // admin
+      } else if (oriGroups.length === 0 && !isAcademia) {
+        filteredGroups = []; // ni orientadora ni presidenta de academia
       } else {
-        // Detectar el/los turno(s) donde es orientador
-        const oriGroupSet = new Set(oriGroups);
-        const turnosDelOrientador = new Set(
-          groups.filter(g => oriGroupSet.has(g.id)).map(g => g.turno).filter(Boolean)
+        // Determinar turnos visibles (de su rol de orientadora si aplica + de academia si aplica)
+        const turnosVisibles = new Set();
+        if (oriGroups.length > 0) {
+          const oriGroupSet = new Set(oriGroups);
+          groups.filter(g => oriGroupSet.has(g.id))
+            .forEach(g => g.turno && turnosVisibles.add(g.turno));
+        }
+        if (isAcademia) turnosVisibles.add(acaTurno);
+        // Filtrar grupos de esos turnos
+        filteredGroups = groups.filter(g => turnosVisibles.has(g.turno));
+      }
+
+      // Filtro ADICIONAL para presidente de academia: limitar al grado específico
+      if (isAcademia) {
+        filteredGroups = filteredGroups.filter(g =>
+          Number(g.grado) === acaGrado && g.turno === acaTurno
         );
-        // Mostrar todos los grupos de esos turnos (no solo los específicos)
-        filteredGroups = groups.filter(g => turnosDelOrientador.has(g.turno));
       }
 
       const allowedIds = new Set(filteredGroups.map(g => g.id));
-      allStudents = students.filter(s =>
+      allStudents = studentsBase.filter(s =>
         s.estatus === 'ACTIVO' && (oriGroups === null || allowedIds.has(s.groupId))
       );
-      const groupIds = filteredGroups.map(g => g.id);
-      allGrades = groupIds.length > 0 ? await Store.getGradesByGroups(groupIds) : [];
+      allGrades = [];
       allSubjects = subjects;
       allGroups = filteredGroups;
       updateGroupOptions();
@@ -256,6 +289,19 @@ const IndicadoresModule = (() => {
       console.error('Error:', e);
       Toast.show('Error al cargar datos', 'error');
     }
+  }
+
+  // Carga las grades SOLO cuando se necesitan (lazy). Cachea localmente
+  // dentro del módulo para que múltiples generaciones consecutivas no
+  // re-pidan. El cache del Store ya deduplicaba pero esto evita re-loops.
+  let _gradesLoaded = false;
+  async function _ensureGradesLoaded() {
+    if (_gradesLoaded && allGrades.length > 0) return;
+    if (allGroups.length === 0) return;
+    Toast.show('Cargando calificaciones…', 'info', 1500);
+    const groupIds = allGroups.map(g => g.id);
+    allGrades = await Store.getGradesByGroups(groupIds);
+    _gradesLoaded = true;
   }
 
   function updateGroupOptions() {
@@ -373,10 +419,23 @@ const IndicadoresModule = (() => {
 
     const totalEval = studentAvgs.length;
     const genAvg = totalEval ? +(studentAvgs.reduce((s, sa) => s + sa.avg, 0) / totalEval).toFixed(2) : 0;
-    const failCount = studentAvgs.filter(sa => sa.avg < pass).length;
-    const repPct = totalEval ? Math.round(failCount / totalEval * 100) : 0;
+    // ALUMNO IRREGULAR = tiene ≥1 calificación < 6 (criterio estricto por reglamento académico).
+    // NO basta con que su promedio sea bajo — debe tener al menos una materia reprobada.
+    // Esta es la métrica institucional correcta.
+    let totalIrregulares = 0, totalAprobados = 0, totalIncidencias = 0;
+    studentAvgs.forEach(sa => {
+      const reprobs = (sa.grades || []).filter(g => g.cal < pass).length;
+      if (reprobs > 0) { totalIrregulares++; totalIncidencias += reprobs; }
+      else totalAprobados++;
+    });
+    const repPct = totalEval ? Math.round(totalIrregulares / totalEval * 100) : 0;
+    const aprobPct = totalEval ? Math.round(totalAprobados / totalEval * 100) : 0;
 
-    return { students, grades, studentAvgs, byGroup, bySubject, byGS, dist, genAvg, repPct, totalEval, metaP, metaR, pass, studentMap, groupNameMap };
+    return {
+      students, grades, studentAvgs, byGroup, bySubject, byGS, dist, genAvg,
+      repPct, aprobPct, totalEval, totalAprobados, totalIrregulares, totalIncidencias,
+      metaP, metaR, pass, studentMap, groupNameMap
+    };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -385,8 +444,9 @@ const IndicadoresModule = (() => {
   let _currentData = null;
   let _currentTab = 'panorama';
 
-  function calculate() {
+  async function calculate() {
     _destroyCharts();
+    await _ensureGradesLoaded(); // lazy load de calificaciones
     const turno = _chipValue("turno");
     const grado = _chipValue("grado");
     const grupo = _chipValue("grupo");
@@ -446,9 +506,19 @@ const IndicadoresModule = (() => {
           <div class="stat-label">Meta: ${d.metaP}</div>
         </div></div>
         <div class="stat-card stat-card--bordered"><div class="stat-content">
-          <div class="stat-label">Reprobación</div>
-          <div class="stat-number" style="color:var(--color-${repColor})">${d.repPct}%</div>
-          <div class="stat-label">Meta: &le;${d.metaR}%</div>
+          <div class="stat-label">Alumnos Aprobados</div>
+          <div class="stat-number" style="color:var(--color-success)">${d.totalAprobados}</div>
+          <div class="stat-label">${d.aprobPct}% del total</div>
+        </div></div>
+        <div class="stat-card stat-card--bordered"><div class="stat-content">
+          <div class="stat-label">Alumnos Irregulares</div>
+          <div class="stat-number" style="color:var(--color-${repColor})">${d.totalIrregulares}</div>
+          <div class="stat-label">${d.repPct}% &middot; meta ≤${d.metaR}%</div>
+        </div></div>
+        <div class="stat-card stat-card--bordered"><div class="stat-content">
+          <div class="stat-label">Incidencias</div>
+          <div class="stat-number" style="color:#d97706">${d.totalIncidencias}</div>
+          <div class="stat-label">total calif. &lt; 6</div>
         </div></div>
         <div class="stat-card stat-card--bordered"><div class="stat-content">
           <div class="stat-label">Alumnos Evaluados</div>
@@ -1934,6 +2004,7 @@ Cuando esté lista, dame la presentación en el formato que pueda descargar dire
 
     try {
       if (!allGroups.length) await loadData();
+      await _ensureGradesLoaded(); // lazy: solo cargamos grades al generar análisis
       const analysis = _computeAnalisis(turno, partial);
       if (!analysis) {
         Toast.show(`No hay grupos en turno ${turno}`, 'warning');

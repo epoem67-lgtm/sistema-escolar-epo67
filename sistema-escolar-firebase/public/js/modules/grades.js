@@ -75,6 +75,7 @@ const GradesModule = (function () {
       }
       else if (a === 'switch-partial') api.switchPartial(t.dataset.partial);
       else if (a === 'save-grades') api.saveGrades();
+      else if (a === 'refresh-from-server') api.refreshFromServer();
       else if (a === 'clear-grades-list') _confirmClearCurrentList();
       else if (a === 'back-to-list') {
         if (!_canLeaveEditor('back')) return;
@@ -93,9 +94,288 @@ const GradesModule = (function () {
       else if (a === 'print-grades') api.printGrades();
       else if (a === 'print-selected-assignments') _printSelectedAssignments(false);
       else if (a === 'print-all-assignments') _printSelectedAssignments(true);
+      else if (a === 'print-all-my-lists') _printAllMyListsFromEditor();
+      else if (a === 'show-other-partials') _showOtherPartialsModal();
+      else if (a === 'select-lists-to-print') _showSelectListsModal();
+      else if (a === 'open-failure-incidents-modal') _openFailureIncidentsFromBanner();
+      else if (a === 'toggle-paste-help') {
+        const body = document.getElementById('paste-help-body');
+        const chevron = document.getElementById('paste-help-chevron');
+        if (body) {
+          const isOpen = body.style.display !== 'none';
+          body.style.display = isOpen ? 'none' : 'block';
+          if (chevron) chevron.textContent = isOpen ? 'expand_more' : 'expand_less';
+          try { localStorage.setItem('epo67_paste_help_collapsed', isOpen ? '1' : '0'); } catch (_) {}
+        }
+      }
       else if (a === 'print-admin-grades') api.printAdminGrades();
       else if (a === 'report-incident') _showIncidentModal(t.dataset.studentId, t.dataset.studentName);
     });
+  }
+
+  // Resuelve el parcial ACTIVO (primero NO bloqueado). Si todos bloqueados,
+  // retorna el último. Esto es independiente del parcial que el maestro
+  // esté VIENDO en el editor — evita errores como "imprimí P1 sin querer".
+  async function _resolveActivePartial() {
+    try {
+      const partials = await Store.getPartials();
+      const ordered = K.PARCIALES.map(kp => ({
+        id: kp.id,
+        nombre: kp.nombre,
+        locked: partials.find(p => p.id === kp.id)?.locked === true,
+      }));
+      const open = ordered.find(p => !p.locked);
+      return open || ordered[ordered.length - 1] || { id: 'P1', nombre: 'Primer Parcial', locked: false };
+    } catch (e) {
+      return { id: 'P1', nombre: 'Primer Parcial', locked: false };
+    }
+  }
+
+  // Print TODAS las listas del maestro en UN solo PDF.
+  // SIEMPRE usa el parcial ACTIVO (el actual/abierto), NO el que está viendo
+  // en el editor — para evitar accidentes como el del maestro que imprimió P1
+  // estando en captura de P2.
+  async function _printAllMyListsFromEditor() {
+    if (!_capAssignments || _capAssignments.length === 0) {
+      Toast.show('No hay listas para imprimir', 'warning');
+      return;
+    }
+    // BLOQUEO: si la lista actual tiene reprobados sin motivo, forzar captura
+    // antes de imprimir. La lista impresa debe llevar TODOS los motivos.
+    const ok = await _enforceIncidentsBeforeLeave('imprimir tus listas');
+    if (!ok) return;
+    const activePartial = await _resolveActivePartial();
+    const btn = document.querySelector('[data-action="print-all-my-lists"]');
+    const label = document.getElementById('print-all-label');
+    const origText = label?.textContent || '';
+    try {
+      if (btn) { btn.disabled = true; btn.style.opacity = '0.7'; }
+      if (label) label.textContent = 'Generando PDF, espera…';
+      const ids = _capAssignments.map(a => a.id);
+      await printMultipleAssignments(ids, activePartial.id);
+    } catch (e) {
+      console.error('Error al generar PDF de todas las listas:', e);
+      Toast.show('No se pudo generar el PDF: ' + (e.message || ''), 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+      if (label) label.textContent = origText;
+    }
+  }
+
+  // Actualiza la zona de impresión al final del editor con:
+  // (1) Nombre del parcial ACTIVO en el botón primario.
+  // (2) Avance "X de Y listas completas" según assignmentStatusCache.
+  // Se ejecuta async tras el render — no bloquea la pintura inicial.
+  async function _updatePrintZoneAfterRender() {
+    try {
+      const labelEl = document.getElementById('print-all-label');
+      const detailEl = document.getElementById('print-progress-detail');
+      const warnEl = document.getElementById('print-progress-warning');
+      const total = (_capAssignments || []).length;
+      if (!labelEl && !detailEl) return;
+
+      const activeP = await _resolveActivePartial();
+      const parcialUpper = (activeP.nombre || 'PARCIAL ACTUAL').toUpperCase();
+      if (labelEl) {
+        const word = total === 1 ? 'LISTA' : 'LISTAS';
+        // Texto compacto para la tarjeta (la palabra "RECOMENDADO" ya está visible arriba)
+        labelEl.textContent = `TODAS MIS ${total || ''} ${word} DEL ${parcialUpper}`;
+      }
+
+      // Avance — solo si tenemos asignaciones
+      if (!detailEl || total === 0) return;
+      let cache;
+      try {
+        cache = await _loadAssignmentStatuses(activeP.id);
+      } catch (e) {
+        // Si falla (p.ej. reglas), mostrar mensaje genérico
+        detailEl.textContent = `Vas a imprimir ${total} lista(s) del ${activeP.nombre}.`;
+        return;
+      }
+
+      let complete = 0, partial = 0, empty = 0;
+      for (const a of _capAssignments) {
+        const st = cache[a.id]?.status;
+        if (st === 'complete') complete++;
+        else if (st === 'partial') partial++;
+        else empty++;
+      }
+      const allDone = complete === total && total > 0;
+      const pending = total - complete;
+      if (allDone) {
+        detailEl.innerHTML = `✅ ${complete} de ${total} listas completas. Ya puedes imprimir.`;
+        detailEl.style.background = 'rgba(16,185,129,0.45)';
+        if (warnEl) warnEl.style.borderColor = 'rgba(255,255,255,0.7)';
+      } else {
+        const parts = [];
+        parts.push(`📊 ${complete} de ${total} completas`);
+        if (partial > 0) parts.push(`⚠ ${partial} a medias`);
+        if (empty > 0) parts.push(`⬜ ${empty} sin empezar`);
+        detailEl.innerHTML = parts.join(' · ') + ` &nbsp;·&nbsp; te faltan <u>${pending}</u> antes de imprimir`;
+        detailEl.style.background = 'rgba(0,0,0,0.25)';
+      }
+    } catch (e) {
+      console.warn('No se pudo actualizar la zona de impresión:', e);
+    }
+  }
+
+  // Modal: el maestro escoge MANUALMENTE cuáles de sus asignaciones incluir en
+  // el PDF. Útil cuando solo quiere algunas (no todas). Pre-marca la lista que
+  // está abierta en este momento.
+  async function _showSelectListsModal() {
+    if (!_capAssignments || _capAssignments.length === 0) {
+      Toast.show('No hay listas para seleccionar.', 'warning');
+      return;
+    }
+    const activeP = await _resolveActivePartial();
+    const currentAsgId = assignments.find(a => a.groupId === selectedGroup && a.subjectId === selectedSubject)?.id;
+    const total = _capAssignments.length;
+
+    // Tarjetas con checkbox por cada asignación. La actual viene pre-marcada.
+    const cards = _capAssignments.map(a => {
+      const isCurrent = a.id === currentAsgId;
+      const subjectName = K.getUACNombre(a.subjectName || a.subjectId);
+      const groupName = a.groupName || a.groupId;
+      const status = _assignmentStatusCache[a.id];
+      let statusBadge = '';
+      if (status) {
+        if (status.status === 'complete') statusBadge = `<span style="background:#dcfce7;color:#14532d;font-size:11px;padding:1px 6px;border-radius:4px;font-weight:700;">✓ ${status.filled}/${status.total}</span>`;
+        else if (status.status === 'partial') statusBadge = `<span style="background:#fef3c7;color:#78350f;font-size:11px;padding:1px 6px;border-radius:4px;font-weight:700;">⚠ ${status.filled}/${status.total}</span>`;
+        else statusBadge = `<span style="background:#fee2e2;color:#7f1d1d;font-size:11px;padding:1px 6px;border-radius:4px;font-weight:700;">⬜ ${status.filled}/${status.total}</span>`;
+      }
+      const currentBadge = isCurrent ? '<span style="background:#3182ce;color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;margin-left:4px;">ACTUAL</span>' : '';
+      return `
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:#fff;border:2px solid ${isCurrent ? '#3182ce' : '#e5e7eb'};border-radius:8px;cursor:pointer;transition:border-color 0.15s;">
+          <input type="checkbox" class="select-list-cb" value="${Utils.sanitize(a.id)}" ${isCurrent ? 'checked' : ''} style="margin-top:3px;transform:scale(1.2);flex-shrink:0;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:700;font-size:14px;color:#1e293b;line-height:1.25;">
+              ${Utils.sanitize(groupName)}${currentBadge}
+            </div>
+            <div style="font-size:12.5px;color:#475569;margin-top:2px;">${Utils.sanitize(subjectName)}</div>
+            <div style="margin-top:4px;">${statusBadge}</div>
+          </div>
+        </label>
+      `;
+    }).join('');
+
+    const body = `
+      <div style="font-size:13px;color:#374151;margin-bottom:12px;line-height:1.5;">
+        Marca las listas que quieres incluir en el PDF del <strong>${Utils.sanitize(activeP.nombre)}</strong>.
+        Vas a obtener un solo documento con todas las listas que marques.
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+        <div style="font-size:12px;color:#64748b;">
+          Total disponibles: <strong>${total}</strong> · Seleccionadas:
+          <strong id="sel-count">1</strong>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-outline btn-sm" id="sel-mark-all" type="button" style="font-size:12px;">
+            Marcar todas
+          </button>
+          <button class="btn btn-outline btn-sm" id="sel-unmark-all" type="button" style="font-size:12px;">
+            Desmarcar
+          </button>
+        </div>
+      </div>
+      <div style="max-height:55vh;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:8px;padding:2px;">
+        ${cards}
+      </div>
+    `;
+
+    const footer = `
+      <button class="btn btn-outline" id="sel-cancel" type="button">Cancelar</button>
+      <button class="btn btn-primary" id="sel-print" type="button" style="background:#16a34a;border-color:#15803d;">
+        <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">picture_as_pdf</span>
+        Imprimir seleccionadas (<span id="sel-print-count">1</span>)
+      </button>
+    `;
+
+    Modal.open(`Escoger listas para el ${activeP.nombre}`, body, footer);
+
+    setTimeout(() => {
+      const updateCount = () => {
+        const n = document.querySelectorAll('.select-list-cb:checked').length;
+        const elA = document.getElementById('sel-count');
+        const elB = document.getElementById('sel-print-count');
+        if (elA) elA.textContent = n;
+        if (elB) elB.textContent = n;
+        const btn = document.getElementById('sel-print');
+        if (btn) btn.disabled = (n === 0);
+        // resaltar tarjeta seleccionada
+        document.querySelectorAll('.select-list-cb').forEach(cb => {
+          const card = cb.closest('label');
+          if (!card) return;
+          if (cb.checked) {
+            card.style.background = '#eff6ff';
+            card.style.borderColor = '#3182ce';
+          } else {
+            card.style.background = '#fff';
+            card.style.borderColor = '#e5e7eb';
+          }
+        });
+      };
+      document.querySelectorAll('.select-list-cb').forEach(cb => cb.addEventListener('change', updateCount));
+      document.getElementById('sel-mark-all')?.addEventListener('click', () => {
+        document.querySelectorAll('.select-list-cb').forEach(cb => cb.checked = true);
+        updateCount();
+      });
+      document.getElementById('sel-unmark-all')?.addEventListener('click', () => {
+        document.querySelectorAll('.select-list-cb').forEach(cb => cb.checked = false);
+        updateCount();
+      });
+      document.getElementById('sel-cancel')?.addEventListener('click', () => Modal.close());
+      document.getElementById('sel-print')?.addEventListener('click', async () => {
+        const ids = [...document.querySelectorAll('.select-list-cb:checked')].map(cb => cb.value);
+        if (ids.length === 0) return;
+        Modal.close();
+        try {
+          await printMultipleAssignments(ids, activeP.id);
+        } catch (e) {
+          Toast.show('Error generando PDF: ' + (e.message || ''), 'error');
+        }
+      });
+      updateCount();
+    }, 60);
+  }
+
+  // Permite al maestro elegir explícitamente un parcial CERRADO para imprimir
+  // todas sus listas. Se abre como modal con opciones (P1, P3, etc.).
+  async function _showOtherPartialsModal() {
+    const partials = await Store.getPartials();
+    const activeP = await _resolveActivePartial();
+    const others = K.PARCIALES.filter(p => p.id !== activeP.id);
+    const opts = others.map(p => {
+      const doc = partials.find(pp => pp.id === p.id);
+      const locked = doc?.locked === true;
+      const status = locked ? '🔒 Cerrado' : '🟢 Abierto';
+      return `<button class="btn btn-outline" style="display:block;width:100%;margin-bottom:8px;padding:14px;text-align:left;" data-other-partial="${p.id}">
+        <strong>${Utils.sanitize(p.nombre)}</strong> · ${status}
+      </button>`;
+    }).join('');
+    const body = `
+      <p style="font-size:14px;color:#374151;margin-bottom:12px;">
+        El parcial actual ya está disponible arriba. Elige otro parcial para imprimir
+        todas tus listas de ese periodo:
+      </p>
+      ${opts}
+    `;
+    Modal.open('Imprimir otro parcial', body, '<button class="btn btn-outline" id="other-p-cancel">Cancelar</button>');
+    setTimeout(() => {
+      document.querySelectorAll('[data-other-partial]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const pid = btn.dataset.otherPartial;
+          Modal.close();
+          if (!_capAssignments || _capAssignments.length === 0) return;
+          try {
+            Toast.show('Generando PDF…', 'info');
+            await printMultipleAssignments(_capAssignments.map(a => a.id), pid);
+          } catch (e) {
+            Toast.show('Error: ' + (e.message || ''), 'error');
+          }
+        });
+      });
+      document.getElementById('other-p-cancel')?.addEventListener('click', () => Modal.close());
+    }, 50);
   }
 
   // Verifica si hay alumnos reprobados sin incidencia y FUERZA al maestro a
@@ -369,19 +649,25 @@ const GradesModule = (function () {
     }).join('');
 
     return `
-      <div class="card bulk-print-panel">
+      <div class="card bulk-print-panel" style="border:2px solid #f59e0b;background:linear-gradient(135deg,#fef3c7 0%,#fffbeb 100%);">
         <div class="bulk-print-header">
           <div>
-            <h3>Imprimir listas</h3>
-            <p>Elige el parcial y marca las listas que quieres imprimir en un solo documento.</p>
+            <h3 style="display:flex;align-items:center;gap:8px;color:#78350f;">
+              <span class="material-icons-round" style="font-size:24px;color:#b45309;">picture_as_pdf</span>
+              Obtener PDF o Imprimir varias listas
+            </h3>
+            <p style="color:#92400e;">
+              Elige el parcial, marca las listas y obtén un documento con todas juntas (puedes
+              guardarlo como PDF o enviarlo a la impresora).
+            </p>
           </div>
           <div class="bulk-print-actions">
             <select id="bulk-print-partial" aria-label="Parcial para imprimir">${partialOptions}</select>
             <button class="btn btn-outline" data-action="print-selected-assignments">
-              <span class="material-icons-round">print</span> Seleccionadas
+              <span class="material-icons-round">download</span> Solo las marcadas
             </button>
-            <button class="btn btn-primary" data-action="print-all-assignments">
-              <span class="material-icons-round">print</span> Todas
+            <button class="btn btn-warning" data-action="print-all-assignments" style="background:#d97706;color:#fff;border:none;">
+              <span class="material-icons-round">picture_as_pdf</span> Obtener TODAS en un PDF
             </button>
           </div>
         </div>
@@ -398,6 +684,8 @@ const GradesModule = (function () {
     }
     window.removeEventListener('beforeunload', _beforeUnloadGuard);
     if (_draftTimer) { clearInterval(_draftTimer); _draftTimer = null; }
+    if (_partialPollTimer) { clearInterval(_partialPollTimer); _partialPollTimer = null; }
+    _partialClosedAlertShown = false;
     _undoStack.length = 0;
     _isDirty = false;
     _isSaving = false;
@@ -432,7 +720,11 @@ const GradesModule = (function () {
         if (target) {
           if (pendingOrSaved.partial) currentPartial = pendingOrSaved.partial;
           assignments = _capAssignments;
-          api.openGradeEditor(target.id, target.groupId, target.subjectId);
+          // preservePartial=true porque ya fijamos currentPartial arriba con el
+          // valor guardado. Si NO pasamos el flag, openGradeEditor lo resetearía
+          // al primer parcial abierto y el maestro acabaría en una pantalla
+          // distinta a la que tenía abierta antes del refresh.
+          api.openGradeEditor(target.id, target.groupId, target.subjectId, { preservePartial: true });
           return;
         }
         // Estado obsoleto (cambió la asignación, fue revocada, etc.): limpiar.
@@ -649,7 +941,40 @@ const GradesModule = (function () {
     try { sessionStorage.removeItem(_EDITOR_STATE_KEY); } catch (_) { /* */ }
   }
 
-  async function openGradeEditor(assignmentId, groupId, subjectId) {
+  // ¿El usuario tiene poder de admin REAL? Considera el caso de impersonación:
+  // si admin está usando "Ver como" otro usuario, su rol REAL sigue siendo admin
+  // y debe poder escribir sin restricciones aunque la UI muestre rol falso.
+  function _hasAdminPower() {
+    const u = App.currentUser;
+    if (!u) return false;
+    if (u.role === 'admin') return true;
+    if (u._impersonating === true && u._realRole === 'admin') return true;
+    return false;
+  }
+
+  // Lee partialOverrides/{partial}_{teacherId} y retorna true si existe y
+  // está vigente (sin expiresAt o expiresAt > ahora). Admin siempre retorna
+  // true (acceso administrativo de emergencia, sin necesidad de override).
+  async function _checkActiveOverride(partialId) {
+    try {
+      if (_hasAdminPower()) return true;
+      if (!_isTeacherCaptureRole()) return false;
+      const teacherDocId = await Store.getTeacherDocId();
+      if (!teacherDocId) return false;
+      const doc = await db.collection('partialOverrides').doc(`${partialId}_${teacherDocId}`).get();
+      if (!doc.exists) return false;
+      const data = doc.data() || {};
+      if (!data.expiresAt) return true;
+      const exp = data.expiresAt.toDate ? data.expiresAt.toDate() : new Date(data.expiresAt);
+      return exp > new Date();
+    } catch (e) {
+      console.warn('No se pudo verificar override:', e);
+      return false;
+    }
+  }
+
+  async function openGradeEditor(assignmentId, groupId, subjectId, opts) {
+    const preservePartial = !!(opts && opts.preservePartial);
     selectedGroup = groupId;
     selectedSubject = subjectId;
     // Si el caller no pasó assignmentId (ej. switchPartial), resolverlo
@@ -667,9 +992,14 @@ const GradesModule = (function () {
         ? Store.getStudents()
         : Store.getStudentsByGroup(groupId);
 
+      // FORCE=true en getPartials: el estado de cierre del parcial es CRÍTICO
+      // para decidir si el editor es solo-lectura o editable. Si el admin acaba
+      // de cerrar el parcial, los maestros NO deben poder seguir editando — y
+      // sin force, el caché de 5min los deja editar localmente aunque las rules
+      // del servidor rechacen sus guardadas (data loss silenciosa).
       const [allStudents, partials, allGroups, groupGrades] = await Promise.all([
         fetchStudents,
-        Store.getPartials(),
+        Store.getPartials(true),
         Store.getGroups(),
         Store.getGradesByGroup(groupId, true)
       ]);
@@ -687,13 +1017,21 @@ const GradesModule = (function () {
         currentTurno = students[0].turno || 'MATUTINO';
       }
 
-      // Set initial partial to first open one
-      const sorted = K.PARCIALES.map(kp => {
-        const doc = partials.find(p => p.id === kp.id);
-        return { id: kp.id, locked: doc ? (doc.locked || false) : false };
-      });
-      const open = sorted.find(p => !p.locked);
-      currentPartial = open ? open.id : 'P1';
+      // Set initial partial to first open one — SOLO al abrir asignación nueva
+      // (assignmentId presente y NO viene con preservePartial). Casos:
+      //   - switchPartial(P1): assignmentId=null → preserva el partial elegido
+      //   - clic en asignación desde menú: assignmentId='xxx', preservePartial=false → resetea al primer abierto
+      //   - restauración tras refresh: assignmentId='xxx', preservePartial=true → preserva el partial guardado
+      //   - currentPartial vacío (primera carga): siempre resetea
+      const shouldResetPartial = !preservePartial && (assignmentId || !currentPartial);
+      if (shouldResetPartial) {
+        const sorted = K.PARCIALES.map(kp => {
+          const doc = partials.find(p => p.id === kp.id);
+          return { id: kp.id, locked: doc ? (doc.locked || false) : false };
+        });
+        const open = sorted.find(p => !p.locked);
+        currentPartial = open ? open.id : 'P1';
+      }
 
       // Filter grades to this subject only (already cached per-group)
       grades = {};
@@ -705,6 +1043,11 @@ const GradesModule = (function () {
       // Pre-cargar estado de TODAS las asignaciones del maestro para las pestañas
       // (no bloquea — usa cache si ya está cargado para este parcial).
       _loadAssignmentStatuses(currentPartial).catch(() => {});
+
+      // Resolver si el maestro tiene OVERRIDE activo para este parcial cerrado.
+      // Si lo tiene, el editor NO se mostrará en modo solo-lectura y el auto-save
+      // SÍ permitirá escrituras (las firestore.rules también respetan el override).
+      _editorOverrideActive = await _checkActiveOverride(currentPartial);
 
       _renderGradeEditor(partials);
     } catch (error) {
@@ -724,14 +1067,27 @@ const GradesModule = (function () {
 
   // ─── DIRTY STATE (unsaved changes tracking) ───
   let _isDirty = false;
+  // Override activo del admin para el (parcial, maestro) actual. Se resuelve
+  // una vez por openGradeEditor y se consulta en los chequeos cliente
+  // (_renderGradeEditor para deshabilitar/no inputs, _autoSaveGrades para
+  // permitir/bloquear escritura). Se invalida al cambiar de parcial.
+  let _editorOverrideActive = false;
   let _isSaving = false;
   let _draftKey = ''; // localStorage key for auto-recovery
 
   function _markDirty() {
+    // Programar auto-save SIEMPRE que se marque dirty (incluso si ya estaba dirty,
+    // así extendemos la debounce con cada nuevo cambio del maestro).
+    _scheduleAutoSave();
+
     if (_isDirty) return;
     _isDirty = true;
     const indicator = document.getElementById('unsaved-indicator');
-    if (indicator) indicator.style.display = '';
+    if (indicator) {
+      indicator.style.display = '';
+      indicator.innerHTML = '<span class="material-icons-round" style="font-size:14px;vertical-align:middle;">edit_note</span> Sin guardar';
+      indicator.className = 'unsaved-badge';
+    }
     const saveBtn = document.querySelector('[data-action="save-grades"]');
     if (saveBtn) saveBtn.classList.add('btn-pulse');
   }
@@ -746,8 +1102,159 @@ const GradesModule = (function () {
     if (_draftKey) { try { localStorage.removeItem(_draftKey); } catch(e){} }
   }
 
+  // ─── AUTO-SAVE con debounce (anti-pérdida de datos) ───
+  // Si el maestro está tecleando, programamos un guardado en 3 segundos.
+  // Cada tecla nueva reinicia el contador (típico debounce). Cuando termina
+  // de escribir y pasan 3s sin cambios, guardamos en silencio.
+  let _autoSaveTimer = null;
+  const AUTO_SAVE_DELAY_MS = 3000;
+
+  function _scheduleAutoSave() {
+    // Si el usuario es admin/orientador en vista de admin del módulo (no editor de maestro),
+    // no programamos auto-save (no aplica).
+    if (!_draftKey) return;
+    if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(() => {
+      _autoSaveTimer = null;
+      if (_isDirty && !_isSaving) {
+        _autoSaveGrades().catch(err => {
+          console.warn('Auto-save falló:', err);
+          _showSaveStatus('error', err?.message || 'Error al guardar — reintentaremos');
+          // Reintentar 1 vez después de 5 segundos
+          setTimeout(() => { if (_isDirty && !_isSaving) _scheduleAutoSave(); }, 5000);
+        });
+      }
+    }, AUTO_SAVE_DELAY_MS);
+
+    _showSaveStatus('pending', 'Se guardará en unos segundos…');
+  }
+
+  /** Muestra el estado del auto-save al lado del título del editor. */
+  function _showSaveStatus(state, msg) {
+    const el = document.getElementById('autosave-status');
+    if (!el) return;
+    el.style.display = '';
+    if (state === 'pending') {
+      el.innerHTML = '<span class="material-icons-round" style="font-size:14px;vertical-align:middle;color:#d69e2e;">schedule</span> ' + msg;
+      el.style.color = '#92400e';
+      el.style.background = '#fef3c7';
+      el.style.border = '1px solid #fbbf24';
+    } else if (state === 'saving') {
+      el.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:14px;vertical-align:middle;color:#2b6cb0;">autorenew</span> ' + msg;
+      el.style.color = '#1e3a8a';
+      el.style.background = '#dbeafe';
+      el.style.border = '1px solid #93c5fd';
+    } else if (state === 'saved') {
+      el.innerHTML = '<span class="material-icons-round" style="font-size:14px;vertical-align:middle;color:#15803d;">check_circle</span> ' + msg;
+      el.style.color = '#14532d';
+      el.style.background = '#dcfce7';
+      el.style.border = '1px solid #86efac';
+      // Auto-ocultar tras 4 segundos si está en estado "saved"
+      setTimeout(() => { if (el && el.dataset.state === 'saved' && !_isDirty) el.style.display = 'none'; }, 4000);
+    } else if (state === 'error') {
+      el.innerHTML = '<span class="material-icons-round" style="font-size:14px;vertical-align:middle;color:#b91c1c;">error</span> ' + msg;
+      el.style.color = '#7f1d1d';
+      el.style.background = '#fee2e2';
+      el.style.border = '1px solid #fca5a5';
+    }
+    el.dataset.state = state;
+  }
+
+  /** Versión SILENT de saveGrades: sin modales, sin toasts ruidosos. */
+  async function _autoSaveGrades() {
+    if (_isSaving) return;
+    if (!_isDirty) return;
+    // Si parcial está cerrado: no auto-save. FORCE=true para que detectemos
+    // CIERRES recientes — si el maestro está editando y el admin cierra el
+    // parcial al mismo tiempo, la próxima autosave debe detectarlo y avisarle
+    // que sus cambios no se guardarán.
+    try {
+      const cachedPartials = await Store.getPartials(true);
+      const pDoc = cachedPartials.find(p => p.id === currentPartial);
+      if (pDoc && pDoc.locked && !_hasAdminPower() && !_editorOverrideActive) {
+        // Cliente bloqueado: mostrar mensaje claro y desactivar más auto-save
+        _showSaveStatus('error', '🔒 Parcial cerrado — tus cambios NO se están guardando. Recarga la página.');
+        return;
+      }
+    } catch(e) { /* continuar */ }
+
+    _showSaveStatus('saving', 'Guardando…');
+    try {
+      await saveGrades({ silent: true });
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2,'0');
+      const mm = String(now.getMinutes()).padStart(2,'0');
+      _showSaveStatus('saved', 'Guardado a las ' + hh + ':' + mm);
+    } catch(e) {
+      _showSaveStatus('error', e.message || 'No se pudo guardar — reintenta');
+      throw e;
+    }
+  }
+
   // ─── AUTO-RECOVERY DRAFT (save to localStorage periodically) ───
   let _draftTimer = null;
+  // Timer que cada 30s revisa si el parcial actual sigue abierto.
+  // Si lo cerraron mientras el maestro estaba editando, le avisamos y bloqueamos.
+  let _partialPollTimer = null;
+
+  // Revisa el estado actual del parcial directo en Firestore (sin caché).
+  // Si lo encuentra cerrado Y el maestro NO tiene admin power ni override,
+  // muestra un aviso bloqueante y desactiva los inputs.
+  async function _pollPartialState() {
+    if (_hasAdminPower() || _editorOverrideActive) return; // no afecta a admin/override
+    if (!currentPartial) return;
+    try {
+      const doc = await db.collection('partials').doc(currentPartial).get();
+      if (!doc.exists) return;
+      const data = doc.data() || {};
+      if (data.locked === true) {
+        _onPartialClosedMidEdit();
+      }
+    } catch (e) { /* network blip, ignorar — el próximo ciclo lo intenta */ }
+  }
+
+  // Llamada cuando detectamos que el parcial se cerró mientras el maestro
+  // estaba editando. Detiene timers, muestra modal bloqueante y desactiva
+  // inputs para que NO siga capturando cosas que no se guardarán.
+  let _partialClosedAlertShown = false;
+  function _onPartialClosedMidEdit() {
+    if (_partialClosedAlertShown) return; // ya está mostrado
+    _partialClosedAlertShown = true;
+
+    // Detener timers
+    if (_partialPollTimer) { clearInterval(_partialPollTimer); _partialPollTimer = null; }
+    if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
+
+    // Desactivar TODOS los inputs de la tabla y horas inmediatamente
+    document.querySelectorAll('.grade-editor-table input.ge-input, .horas-input').forEach(inp => {
+      inp.disabled = true;
+    });
+
+    // Modal bloqueante con instrucción clara
+    const partialName = K.PARCIALES.find(p => p.id === currentPartial)?.nombre || currentPartial;
+    const body = `
+      <div style="text-align:center;padding:10px 0;">
+        <span class="material-icons-round" style="font-size:64px;color:#dc2626;display:block;margin-bottom:10px;">lock</span>
+        <h2 style="color:#991b1b;font-size:20px;font-weight:900;margin:0 0 10px;">El parcial fue cerrado</h2>
+        <p style="color:#374151;font-size:14px;line-height:1.5;margin:0 0 14px;">
+          <strong>${Utils.sanitize(partialName)}</strong> acaba de cerrarse mientras estabas capturando.
+          Los cambios que hagas a partir de ahora <strong>NO se guardarán</strong>.
+        </p>
+        <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:10px 14px;border-radius:6px;text-align:left;font-size:13px;color:#7f1d1d;line-height:1.5;">
+          Si necesitas modificar una calificación de este parcial, debes hacer una
+          <strong>solicitud formal de cambio</strong> en el módulo "Cambios de Calificación".
+        </div>
+      </div>
+    `;
+    const footer = `
+      <button class="btn btn-outline" onclick="Modal.close(); Router.navigate('my-grades');">Volver a mis listas</button>
+      <button class="btn btn-primary" onclick="Modal.close(); Router.navigate('correction-request');" style="background:#dc2626;border-color:#b91c1c;">
+        <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">rate_review</span>
+        Ir a Cambios de Calificación
+      </button>
+    `;
+    Modal.open('Parcial cerrado', body, footer);
+  }
 
   function _saveDraft() {
     if (!_isDirty || !_draftKey) return;
@@ -962,6 +1469,7 @@ const GradesModule = (function () {
     Toast.show('Lista preparada en blanco. Guarda para aplicar el cambio.', 'warning', 6000);
   }
 
+
   function _updateUndoBtn() {
     const btn = document.getElementById('undo-btn');
     if (!btn) return;
@@ -975,6 +1483,20 @@ const GradesModule = (function () {
   function _renderGradeEditor(partials) {
     const container = _container();
     const rubros = K.getRubros(currentTurno);
+
+    // \u2550\u2550\u2550 DETECTAR MODO SOLO LECTURA \u2550\u2550\u2550
+    // Regla EPO 67: parcial cerrado \u2192 maestro NO puede editar. Solo puede
+    // SOLICITAR cambio formal via "Cambios de Calificaci\u00F3n".
+    // Admin S\u00CD puede editar (acceso administrativo de emergencia).
+    const _currentPartialDoc = partials.find(p => p.id === currentPartial);
+    const isLocked = _currentPartialDoc ? (_currentPartialDoc.locked || false) : false;
+    const userRole = App.currentUser?.role;
+    const isAdminUser = userRole === 'admin' || _hasAdminPower();
+    // Si el maestro tiene override activo del admin (acceso de emergencia),
+    // NO se considera solo-lectura aunque el parcial esté cerrado.
+    // _hasAdminPower() también cubre el caso de admin impersonando.
+    const isReadOnlyForUser = isLocked && !isAdminUser && !_editorOverrideActive;
+    const lockedDisabled = isReadOnlyForUser ? ' disabled' : '';
 
     // Partial buttons
     const partialsHtml = K.PARCIALES.map(kp => {
@@ -1009,9 +1531,10 @@ const GradesModule = (function () {
       const inputCells = rubros.map(r => {
         const val = isTraslado ? '' : (gradeData[r.key] !== undefined ? gradeData[r.key] : '');
         const peClass = (r.key === 'pe' && peIgnoredInitial) ? ' pe-input-ignored' : '';
+        const cellDisabled = (isTraslado || isReadOnlyForUser) ? ' disabled' : '';
         return `<td class="cell-rubro" data-field="${r.key}">
           <input type="number" min="0" max="${r.max}" step="${r.step}" value="${val}" placeholder="${isTraslado ? '' : '-'}"
-            class="ge-input grade-rubro${peClass}" data-student-id="${s.docId}" data-field="${r.key}"${isTraslado ? ' disabled' : ''}>
+            class="ge-input grade-rubro${peClass}" data-student-id="${s.docId}" data-field="${r.key}"${cellDisabled}>
         </td>`;
       }).join('');
 
@@ -1037,7 +1560,7 @@ const GradesModule = (function () {
         <td class="cell-cal ${calClass} col-cal">${cal}</td>
         <td class="cell-faltas">
           <input type="number" min="0" max="99" step="1" value="${faltas}" placeholder="${isTraslado ? '' : '-'}"
-            class="ge-input input-faltas grade-faltas" data-student-id="${s.docId}" data-field="faltas"${isTraslado ? ' disabled' : ''}>
+            class="ge-input input-faltas grade-faltas" data-student-id="${s.docId}" data-field="faltas"${(isTraslado || isReadOnlyForUser) ? ' disabled' : ''}>
         </td>
         <td style="text-align:center;padding:2px;">
           ${isTraslado ? '' : `<button class="btn-icon" data-action="report-incident" data-student-id="${s.docId}" data-student-name="${Utils.sanitize(s.nombreCompleto || '')}" title="Reportar incidencia" style="color:var(--warning);background:none;border:none;cursor:pointer;padding:2px;">
@@ -1056,13 +1579,12 @@ const GradesModule = (function () {
     const pasteFieldOptions = rubros.map(r => `<option value="${r.key}">${r.label} (${r.abbr})</option>`).join('') +
       `<option value="faltas">FALTAS</option>`;
 
-    // Check if current partial is locked (for warning banner)
-    const currentPartialDoc = partials.find(p => p.id === currentPartial);
-    const isLocked = currentPartialDoc ? (currentPartialDoc.locked || false) : false;
-    const lockWarning = isLocked ? `
+    // lockWarning aparece SOLO para admin cuando el parcial está cerrado
+    // (el maestro ya ve el hero morado grande con CTA a "Cambios de Calificación")
+    const lockWarning = (isLocked && isAdminUser) ? `
       <div class="partial-lock-banner">
         <span class="material-icons-round" style="font-size:20px;">lock</span>
-        <span>Este parcial está <b>cerrado</b>. No se pueden guardar cambios a menos que tengas acceso especial.</span>
+        <span>Este parcial está <b>cerrado</b>. Acceso administrativo activo — puedes editar con responsabilidad.</span>
       </div>` : '';
 
     // Pesta\u00f1as de asignaciones (solo si tiene >1 asignaci\u00f3n)
@@ -1090,25 +1612,81 @@ const GradesModule = (function () {
             <h2 class="module-title">${Utils.sanitize(subjectName)}</h2>
             <p class="module-subtitle">${Utils.sanitize(groupName)} \u00b7 ${Utils.sanitize(currentTurno)} \u00b7 ${hCount}H / ${mCount}M = ${students.length} alumnos</p>
           </div>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <span id="unsaved-indicator" class="unsaved-badge" style="display:none;">
-              <span class="material-icons-round" style="font-size:14px;vertical-align:middle;">edit_note</span> Sin guardar
-            </span>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            ${isReadOnlyForUser ? `
+              <span style="display:inline-flex;align-items:center;gap:6px;background:#ede9fe;color:#5b21b6;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;border:1px solid #c4b5fd;">
+                <span class="material-icons-round" style="font-size:16px;">lock</span>
+                Solo lectura
+              </span>
+            ` : `
+              <span id="autosave-status" style="display:none;padding:6px 12px;border-radius:8px;font-size:13px;font-weight:600;"></span>
+              <span id="unsaved-indicator" class="unsaved-badge" style="display:none;">
+                <span class="material-icons-round" style="font-size:14px;vertical-align:middle;">edit_note</span> Sin guardar
+              </span>
+            `}
             <button class="btn btn-outline" data-action="back-to-list">\u2190 Volver</button>
           </div>
         </div>
 
-        <div style="background:linear-gradient(135deg,#d1fae5 0%,#a7f3d0 100%);border:2px solid #10b981;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:14px;">
-          <span class="material-icons-round" style="font-size:36px;color:#047857;flex-shrink:0;">verified</span>
-          <div style="flex:1;">
-            <div style="font-size:15px;font-weight:700;color:#064e3b;margin-bottom:2px;">
-              Guardar NO es definitivo
+        ${isReadOnlyForUser ? `
+        <!-- \u2550\u2550\u2550 MODO SOLO LECTURA: parcial cerrado para maestros \u2550\u2550\u2550 -->
+        <div style="background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 50%,#4c1d95 100%);border-radius:14px;padding:20px 24px;margin-bottom:14px;color:#fff;box-shadow:0 8px 24px rgba(91,33,182,0.35);">
+          <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+            <span class="material-icons-round" style="font-size:54px;flex-shrink:0;background:rgba(255,255,255,0.2);border-radius:50%;padding:10px;">lock</span>
+            <div style="flex:1;min-width:240px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;opacity:0.85;text-transform:uppercase;margin-bottom:3px;">
+                Parcial ${Utils.sanitize(_currentPartialDoc?.nombre || currentPartial)}
+              </div>
+              <div style="font-size:22px;font-weight:900;line-height:1.15;margin-bottom:6px;">
+                Este parcial est\u00e1 CERRADO
+              </div>
+              <div style="font-size:13.5px;opacity:0.95;line-height:1.5;">
+                <strong>No puedes editar calificaciones aqu\u00ed.</strong> Esta vista es solo de consulta para ver lo que qued\u00f3 capturado al cierre del parcial.
+              </div>
             </div>
-            <div style="font-size:13px;color:#065f46;line-height:1.4;">
-              Puedes regresar a esta pantalla las veces que necesites y modificar cualquier calificaci\u00f3n, falta o punto extra <strong>mientras el parcial est\u00e9 abierto</strong>. Da clic en "Guardar Calificaciones" cuantas veces quieras \u2014 no bloquea la edici\u00f3n ni borra trabajo anterior.
+            <button onclick="Router.navigate('correction-request')" style="background:#fff;color:#5b21b6;border:none;border-radius:10px;padding:14px 20px;font-weight:800;font-size:14px;cursor:pointer;font-family:inherit;box-shadow:0 3px 8px rgba(0,0,0,0.2);display:flex;align-items:center;gap:8px;flex-shrink:0;">
+              <span class="material-icons-round" style="font-size:20px;">edit_note</span>
+              Solicitar cambio formal
+            </button>
+          </div>
+          <div style="background:rgba(0,0,0,0.2);border-radius:8px;padding:10px 14px;margin-top:14px;font-size:12.5px;line-height:1.5;">
+            <strong>\u00bfEncontraste un error?</strong> Para modificar una calificaci\u00f3n de un parcial cerrado debes
+            <strong>solicitar un cambio formal</strong> en el m\u00f3dulo "Cambios de Calificaci\u00f3n". La solicitud
+            se imprime, la firma la directora, y Subdirecci\u00f3n la aplica. Es la \u00fanica v\u00eda permitida una vez
+            cerrada la ventana de edici\u00f3n.
+          </div>
+        </div>
+        ` : `
+        <!-- MENSAJE HERO: NO HAY QUE GUARDAR \u2014 lo primero que ven al entrar -->
+        <div style="background:linear-gradient(135deg,#10b981 0%,#059669 100%);border-radius:14px;padding:18px 22px;margin-bottom:14px;color:#fff;box-shadow:0 6px 18px rgba(16,185,129,0.28);display:flex;align-items:center;gap:18px;">
+          <span class="material-icons-round" style="font-size:48px;flex-shrink:0;background:rgba(255,255,255,0.18);border-radius:50%;padding:8px;">bolt</span>
+          <div style="flex:1;">
+            <div style="font-size:20px;font-weight:900;line-height:1.15;letter-spacing:0.3px;margin-bottom:4px;">
+              NO TIENES QUE GUARDAR \u2014 SE GUARDA SOLO
+            </div>
+            <div style="font-size:13px;opacity:0.95;line-height:1.45;">
+              Cada calificaci\u00f3n, falta o punto extra que escribas se guarda autom\u00e1ticamente <strong>3 segundos</strong> despu\u00e9s de cada cambio. Despreoc\u00fapate del bot\u00f3n "Guardar": <strong>no existe el riesgo de perder lo capturado</strong>. Edita las veces que necesites mientras el parcial siga abierto.
+            </div>
+          </div>
+          <div style="background:rgba(255,255,255,0.18);border-radius:8px;padding:8px 12px;text-align:center;flex-shrink:0;display:none;" id="autosave-hero-state">
+            <div style="font-size:10px;font-weight:700;letter-spacing:0.5px;opacity:0.9;">Estado</div>
+            <div style="font-size:13px;font-weight:800;">Guardado</div>
+          </div>
+        </div>
+
+        <!-- Regla de entrega a Direcci\u00f3n: transl\u00facido + suave -->
+        <div style="background:rgba(243,232,255,0.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border:1px solid rgba(147,51,234,0.35);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:12px;">
+          <span class="material-icons-round" style="font-size:26px;color:#7e22ce;flex-shrink:0;margin-top:2px;opacity:0.85;">assignment_turned_in</span>
+          <div style="flex:1;font-size:12.5px;color:#5b21b6;line-height:1.5;">
+            <div style="font-size:13.5px;font-weight:700;margin-bottom:3px;color:#4c1d95;">
+              Tu lista impresa es tu responsabilidad
+            </div>
+            <div>
+              Direcci\u00f3n recibe <strong>UNA sola lista</strong> por grupo y materia, con TODAS las firmas. No se acepta entregar una lista con errores y luego otra firmada solo por los corregidos. Si imprimes y luego cambias algo, <strong>reimprime completa y vuelve a recoger todas las firmas</strong>. Imprime solo al final, cuando ya capturaste todas tus listas.
             </div>
           </div>
         </div>
+        `}
 
         ${tabsHtml}
 
@@ -1120,10 +1698,14 @@ const GradesModule = (function () {
 
         <div id="risk-banner-faltas"></div>
 
+        <!-- Banner persistente: alumnos reprobados con motivo PENDIENTE de reportar -->
+        <div id="failure-incident-reminder"></div>
+
         <div class="card">
           <div class="form-group"><label>Parcial:</label><div class="btn-group">${partialsHtml}</div></div>
         </div>
 
+        ${isReadOnlyForUser ? '' : `
         <!-- ═══ TIP + UNDO BAR (sin modos, sin paneles confusos) ═══ -->
         <div class="input-mode-bar" style="background:#ebf8ff;border:1px solid #bee3f8;border-radius:8px;flex-wrap:wrap;">
           <span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#2b6cb0;font-weight:500;">
@@ -1142,6 +1724,114 @@ const GradesModule = (function () {
             </button>
           </div>
         </div>
+        `}
+
+        ${isReadOnlyForUser ? '' : `
+        <!-- ═══ CARD: REGLAS PARA PEGAR DESDE EXCEL (visible por defecto, colapsable) ═══ -->
+        <div id="paste-help-card" style="background:linear-gradient(135deg,#fff7ed 0%,#fed7aa 100%);border:3px solid #ea580c;border-radius:14px;padding:0;margin:14px 0 16px;box-shadow:0 6px 18px rgba(234,88,12,0.18);overflow:hidden;">
+          <!-- HEADER llamativo, siempre visible -->
+          <button data-action="toggle-paste-help" style="width:100%;background:linear-gradient(135deg,#ea580c 0%,#c2410c 100%);border:none;color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-family:inherit;text-align:left;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="material-icons-round" style="font-size:30px;background:rgba(255,255,255,0.18);border-radius:8px;padding:6px;">content_paste</span>
+              <div>
+                <div style="font-size:17px;font-weight:900;letter-spacing:0.3px;line-height:1.15;">
+                  📋 REGLAS PARA PEGAR DESDE EXCEL
+                </div>
+                <div style="font-size:12px;opacity:0.92;margin-top:2px;font-weight:500;">
+                  Léelas antes de pegar — turno ${Utils.sanitize(currentTurno)} · clic para ocultar
+                </div>
+              </div>
+            </div>
+            <span class="material-icons-round" id="paste-help-chevron" style="font-size:28px;transition:transform 0.2s;">expand_more</span>
+          </button>
+
+          <!-- COLAPSADO por defecto (display:none). El maestro lo abre cuando lo necesita. -->
+          <div id="paste-help-body" style="padding:16px 18px;background:#fff;display:none;">
+
+            <!-- NUEVO: aviso de pegado inteligente -->
+            <div style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:2px solid #f59e0b;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+              <div style="font-size:14px;font-weight:800;color:#78350f;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+                <span style="font-size:18px;">✨</span> Nuevo: Pegado inteligente
+              </div>
+              <div style="font-size:12.5px;color:#78350f;line-height:1.5;">
+                Si pegas con problemas comunes (<strong>escala /100</strong>, <strong>columnas en otro orden</strong>, encabezado con SUMA/CAL, filas vacías), el sistema te <strong>avisa antes de aplicar</strong> y te ofrece arreglarlo automáticamente con una vista previa. Siempre puedes pegar tal cual o deshacer con <kbd style="padding:2px 6px;background:#fff;border:1px solid #cbd5e0;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;">Ctrl + Z</kbd>.
+              </div>
+            </div>
+
+            <!-- TABLA DE ESCALAS (rubros según el turno actual) — siempre visible primero -->
+            <div style="background:#fff7ed;border-radius:8px;padding:12px 14px;margin-bottom:14px;border:2px solid #fb923c;">
+              <div style="font-size:14px;font-weight:800;color:#9a3412;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+                <span style="font-size:18px;">📏</span> Máximos permitidos por columna
+              </div>
+              <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                  <thead>
+                    <tr style="background:#fed7aa;">
+                      <th style="text-align:left;padding:8px 10px;font-weight:800;color:#7c2d12;">Columna</th>
+                      <th style="text-align:center;padding:8px 10px;font-weight:800;color:#7c2d12;width:80px;">Mínimo</th>
+                      <th style="text-align:center;padding:8px 10px;font-weight:800;color:#7c2d12;width:80px;">Máximo</th>
+                      <th style="text-align:center;padding:8px 10px;font-weight:800;color:#7c2d12;width:110px;">Decimales</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rubros.map((r, i) => `<tr style="background:${i % 2 ? '#fff' : '#fffbf5'};">
+                      <td style="padding:8px 10px;font-weight:700;color:#0f172a;border-bottom:1px solid #fed7aa;">${Utils.sanitize(r.label)} <span style="color:#9a3412;font-weight:600;">(${Utils.sanitize(r.key.toUpperCase())})</span></td>
+                      <td style="text-align:center;padding:8px 10px;color:#475569;border-bottom:1px solid #fed7aa;">0</td>
+                      <td style="text-align:center;padding:8px 10px;color:#c2410c;font-weight:900;font-size:15px;border-bottom:1px solid #fed7aa;">${r.max}</td>
+                      <td style="text-align:center;padding:8px 10px;color:#475569;border-bottom:1px solid #fed7aa;">${r.step === 1 ? 'No (entero)' : 'Sí (0.1)'}</td>
+                    </tr>`).join('')}
+                    <tr style="background:${rubros.length % 2 ? '#fff' : '#fffbf5'};">
+                      <td style="padding:8px 10px;font-weight:700;color:#0f172a;">FALTAS</td>
+                      <td style="text-align:center;padding:8px 10px;color:#475569;">0</td>
+                      <td style="text-align:center;padding:8px 10px;color:#c2410c;font-weight:900;font-size:15px;">99</td>
+                      <td style="text-align:center;padding:8px 10px;color:#475569;">No (entero)</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div style="font-size:12px;color:#7c2d12;margin-top:10px;line-height:1.45;background:rgba(255,255,255,0.7);border-radius:6px;padding:8px 10px;">
+                <strong>⛔ NO pegues las columnas SUMA ni CAL</strong> — el sistema las calcula sola. Si tu Excel las trae, simplemente las ignora.
+                ${currentTurno === 'VESPERTINO' ? '<br><strong>📝 Vespertino:</strong> EXAMEN PARCIAL (EX) sólo aplica para tu turno.' : '<br><strong>📝 Matutino:</strong> NO hay columna EXAMEN PARCIAL (esa solo aplica en vespertino).'}
+              </div>
+            </div>
+
+            <!-- PASOS PARA PEGAR -->
+            <div style="background:#ecfdf5;border-radius:8px;padding:12px 14px;margin-bottom:12px;border-left:4px solid #10b981;">
+              <div style="font-size:14px;font-weight:800;color:#065f46;margin-bottom:8px;">✅ Cómo pegar paso a paso</div>
+              <ol style="font-size:13px;color:#064e3b;line-height:1.65;margin:0;padding-left:22px;">
+                <li>En Excel, <strong>selecciona y copia (Ctrl+C)</strong> la columna o el bloque que quieres pegar — solo valores numéricos, sin SUMA ni CAL.</li>
+                <li>En esta tabla, <strong>haz clic en la celda</strong> del primer alumno donde quieres que empiece el pegado (ej. fila del alumno #1, columna EC).</li>
+                <li>Presiona <kbd style="padding:2px 6px;background:#fff;border:1px solid #cbd5e0;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;">Ctrl + V</kbd> (Windows) o <kbd style="padding:2px 6px;background:#fff;border:1px solid #cbd5e0;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;">⌘ + V</kbd> (Mac).</li>
+                <li>El sistema rellena hacia abajo desde esa celda y te muestra cuántas filas aplicó y cuántas quedaron en rojo (fuera de rango).</li>
+              </ol>
+            </div>
+
+            <!-- POR QUÉ FALLA -->
+            <div style="background:#fef3c7;border-radius:8px;padding:12px 14px;margin-bottom:12px;border-left:4px solid #f59e0b;">
+              <div style="font-size:14px;font-weight:800;color:#78350f;margin-bottom:8px;">⚠ Si no se pega, casi siempre es esto:</div>
+              <ul style="font-size:13px;color:#78350f;line-height:1.65;margin:0;padding-left:22px;">
+                <li><strong>Olvidaste hacer clic en una celda primero.</strong> El cursor debe estar adentro de un input de la tabla. Si está en cualquier otro lado el navegador no pega.</li>
+                <li><strong>Valor fuera de rango.</strong> Si pegas un 9 en EC del matutino (máx 8), queda en rojo y NO se aplica. Corrige el dato en Excel y vuelve a pegar, o escríbelo a mano.</li>
+                <li><strong>Texto en vez de número.</strong> Celdas con texto como "NP", "FALTA" o comentarios se ignoran. Usa solo dígitos (coma o punto como decimal: <code>8.5</code> o <code>8,5</code>).</li>
+                <li><strong>Encabezado.</strong> Si el primer renglón del clipboard es texto ("EC", "Calificación"...), el sistema lo detecta y lo brinca — no consume el lugar del primer alumno.</li>
+                <li><strong>Celdas vacías.</strong> NO sobrescriben lo que ya está. Si quieres borrar un valor, hazlo a mano celda por celda.</li>
+              </ul>
+            </div>
+
+            <!-- TIPS ADICIONALES -->
+            <div style="background:#eff6ff;border-radius:8px;padding:12px 14px;border-left:4px solid #3182ce;">
+              <div style="font-size:14px;font-weight:800;color:#1e40af;margin-bottom:8px;">💡 Tips útiles</div>
+              <ul style="font-size:13px;color:#1e3a8a;line-height:1.65;margin:0;padding-left:22px;">
+                <li>Puedes pegar <strong>una sola columna</strong> (ej. solo EC) o un <strong>bloque de columnas contiguas</strong> — el sistema respeta el orden de las columnas de tu Excel.</li>
+                <li>Si pegas un bloque que NO incluye todas las columnas (ej. solo EC y TR), solo se llenan esas — el resto queda intacto.</li>
+                <li>Si te equivocaste, dale <strong>Deshacer</strong> (botón arriba o <kbd style="padding:2px 6px;background:#fff;border:1px solid #cbd5e0;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;">Ctrl + Z</kbd>) y el sistema regresa al estado anterior.</li>
+                <li>Los alumnos con badge "TRASLADO PENDIENTE" naranja NO reciben pegado — se brincan automáticamente.</li>
+                <li>Para borrar todo de golpe, usa <strong>"Dejar lista en blanco"</strong> (no borra alumnos ni horas).</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        `}
 
 
         <div class="table-container" style="overflow-x:auto;max-height:65vh;">
@@ -1178,7 +1868,7 @@ const GradesModule = (function () {
               `<div class="horas-month">
                 <label>${m}</label>
                 <input type="number" min="0" max="99" step="1" id="horas-${m.toLowerCase()}"
-                  class="ge-input horas-input" data-month="${m.toLowerCase()}">
+                  class="ge-input horas-input" data-month="${m.toLowerCase()}"${lockedDisabled}>
               </div>`
             ).join('')}
             <div class="horas-total-box">
@@ -1188,14 +1878,120 @@ const GradesModule = (function () {
           </div>
         </div>
 
-        <div style="display:flex;gap:12px;justify-content:center;margin-top:20px;flex-wrap:wrap;">
-          <button class="btn btn-primary" data-action="save-grades" style="font-size:15px;padding:10px 28px;">
-            <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">save</span>Guardar Calificaciones
+        <!-- ZONA DE FIN DE CAPTURA: lo PRIMERO que ve el maestro al terminar la tabla -->
+        <div style="background:linear-gradient(135deg,#1e3a8a 0%,#312e81 50%,#4338ca 100%);border-radius:14px;padding:24px;margin-top:32px;color:#fff;box-shadow:0 8px 24px rgba(49,46,129,0.35);">
+          <div style="text-align:center;margin-bottom:14px;">
+            <div style="font-size:14px;font-weight:600;opacity:0.9;margin-bottom:4px;">¿Ya terminaste de capturar TODAS tus listas?</div>
+            <div style="font-size:22px;font-weight:800;line-height:1.2;">
+              📄 Descarga tu PDF del parcial actual
+            </div>
+            <div style="font-size:13px;opacity:0.95;margin-top:6px;line-height:1.45;">
+              Tus cambios ya se guardaron solos.
+              <strong>Imprime, recolecta firmas y entrega a Dirección.</strong>
+            </div>
+          </div>
+
+          <!-- AVISO CRÍTICO: imprime SOLO al terminar todas las listas -->
+          <div id="print-progress-warning" style="background:rgba(255,255,255,0.16);border:2px solid rgba(255,255,255,0.55);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:10px;line-height:1.45;">
+            <span class="material-icons-round" style="font-size:22px;flex-shrink:0;margin-top:1px;">priority_high</span>
+            <div style="flex:1;font-size:13px;">
+              <div style="font-weight:800;font-size:14px;margin-bottom:3px;">Imprime UNA sola vez, al final</div>
+              <div style="opacity:0.95;">
+                Dirección recibe <strong>una sola lista por grupo y materia</strong>, con TODAS
+                las firmas. <strong>No</strong> se acepta entregar una lista con errores y
+                luego otra "con correcciones" firmada solo por algunos alumnos. Si imprimes
+                a medias o con errores, tendrás que reimprimir la lista completa y
+                <strong>volver a recoger todas las firmas</strong>.
+              </div>
+              <div id="print-progress-detail" style="margin-top:8px;font-size:13px;font-weight:700;background:rgba(0,0,0,0.18);border-radius:6px;padding:6px 10px;display:inline-block;">
+                Calculando avance…
+              </div>
+            </div>
+          </div>
+
+          <!-- Subtítulo de las 3 opciones -->
+          <div style="text-align:center;font-size:13px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;opacity:0.85;margin-bottom:10px;">
+            Elige cómo imprimir
+          </div>
+
+          <!-- 3 OPCIONES PROMINENTES: TODAS · ESCOGER · SÓLO ESTA -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:12px;">
+
+            <!-- 1. TODAS (recomendada — fondo blanco sólido) -->
+            <button class="btn" data-action="print-all-my-lists"
+              style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+                     background:#fff;color:#312e81;border:3px solid #fff;border-radius:12px;
+                     padding:18px 14px;cursor:pointer;font-family:inherit;text-align:center;
+                     box-shadow:0 6px 16px rgba(0,0,0,0.25);position:relative;">
+              <span style="position:absolute;top:-10px;right:10px;background:#16a34a;color:#fff;font-size:10px;font-weight:800;padding:3px 8px;border-radius:10px;letter-spacing:0.5px;">RECOMENDADO</span>
+              <span class="material-icons-round" style="font-size:38px;color:#4338ca;">picture_as_pdf</span>
+              <div style="font-size:14px;font-weight:900;line-height:1.2;">
+                <span id="print-all-label">TODAS MIS ${_capAssignments?.length || ''} LISTAS DEL PARCIAL ACTUAL</span>
+              </div>
+              <div style="font-size:11px;color:#6b21a8;line-height:1.35;font-weight:500;">
+                Un solo PDF con todas tus listas. Lo más rápido cuando ya terminaste todo.
+              </div>
+            </button>
+
+            <!-- 2. ESCOGER ALGUNAS -->
+            <button class="btn" data-action="select-lists-to-print"
+              style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+                     background:rgba(255,255,255,0.12);color:#fff;border:2px dashed rgba(255,255,255,0.7);border-radius:12px;
+                     padding:18px 14px;cursor:pointer;font-family:inherit;text-align:center;">
+              <span class="material-icons-round" style="font-size:38px;opacity:0.95;">checklist</span>
+              <div style="font-size:14px;font-weight:900;line-height:1.2;">
+                ESCOGER ALGUNAS LISTAS
+              </div>
+              <div style="font-size:11px;opacity:0.9;line-height:1.35;font-weight:500;">
+                Te abre una lista con casillas para marcar exactamente cuáles entrarán al PDF.
+              </div>
+            </button>
+
+            <!-- 3. SÓLO ESTA LISTA -->
+            <button class="btn" data-action="print-grades"
+              style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+                     background:rgba(255,255,255,0.12);color:#fff;border:2px dashed rgba(255,255,255,0.7);border-radius:12px;
+                     padding:18px 14px;cursor:pointer;font-family:inherit;text-align:center;">
+              <span class="material-icons-round" style="font-size:38px;opacity:0.95;">description</span>
+              <div style="font-size:14px;font-weight:900;line-height:1.2;">
+                SÓLO ESTA LISTA
+              </div>
+              <div style="font-size:11px;opacity:0.9;line-height:1.35;font-weight:500;">
+                Sólo la lista que tienes abierta ahora — la del grupo y materia visible arriba.
+              </div>
+            </button>
+
+          </div>
+
+          <div style="text-align:center;margin-top:14px;font-size:11px;opacity:0.85;line-height:1.4;">
+            Para guardarlo como archivo elige <strong>"Guardar como PDF"</strong> en lugar de impresora.
+          </div>
+
+          <!-- Opción secundaria menor: otro parcial -->
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.25);text-align:center;">
+            <button class="btn-link" data-action="show-other-partials"
+              style="background:none;border:none;color:#fff;cursor:pointer;font-size:12.5px;padding:6px 12px;text-decoration:underline;opacity:0.8;font-family:inherit;">
+              <span class="material-icons-round" style="font-size:14px;vertical-align:middle;">history</span>
+              ¿Necesitas imprimir otro parcial (anterior o posterior)?
+            </button>
+          </div>
+        </div>
+
+        <!-- Acciones secundarias en línea pequeña -->
+        <div style="display:flex;gap:12px;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;font-size:12px;color:#64748b;">
+          <button class="btn-link" data-action="back-to-list" style="background:none;border:none;color:#3182ce;cursor:pointer;font-size:13px;padding:4px 8px;text-decoration:underline;">
+            ← Volver a mis listas
           </button>
-          <button class="btn btn-outline" data-action="print-grades">
-            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;margin-right:4px;">print</span>Imprimir
-          </button>
-          <button class="btn btn-outline" data-action="back-to-list">Salir sin guardar</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn-link" data-action="refresh-from-server" style="background:none;border:1px solid #cbd5e1;color:#0891b2;cursor:pointer;font-size:12px;padding:6px 12px;border-radius:6px;" title="Si las celdas se ven vacías pero ya las llenaste antes, esto fuerza una recarga desde el servidor (limpia el cache local).">
+              🔄 Refrescar datos del servidor
+            </button>
+            ${isReadOnlyForUser ? '' : `
+            <button class="btn-link" data-action="save-grades" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:12px;padding:4px 8px;" title="Tus cambios ya se guardan solos cada 3 segundos. Este botón fuerza un guardado ahora mismo.">
+              💾 Forzar guardado (opcional)
+            </button>
+            `}
+          </div>
         </div>
       </div>`;
 
@@ -1241,6 +2037,10 @@ const GradesModule = (function () {
       input.classList.remove('ge-input-invalid');
       if (input.classList.contains('grade-rubro')) _recalcRow(input);
       _snapshotPending = false;
+      // Al terminar de teclear una calificación, refrescamos el banner de
+      // incidencias pendientes (debounced 400ms). Si el alumno quedó reprobado
+      // y sin motivo capturado, el maestro lo verá enseguida.
+      _scheduleFailureBannerUpdate();
     });
 
     container.addEventListener('input', (e) => {
@@ -1268,21 +2068,19 @@ const GradesModule = (function () {
     container.addEventListener('keydown', (e) => {
       const input = e.target;
       if (!_isGradeInput(input)) return;
-      const isInteger = input.classList.contains('grade-faltas');
 
-      // 1) Bloquear caracteres invalidos
-      const navKeys = [8, 46, 9, 27, 13, 37, 38, 39, 40, 35, 36];
-      const ctrlComboKeys = [65, 67, 86, 88, 90]; // Ctrl+A/C/V/X/Z
-      const isNav = navKeys.includes(e.keyCode);
-      const isCtrlCombo = (e.ctrlKey || e.metaKey) && ctrlComboKeys.includes(e.keyCode);
-      const isDecimal = !isInteger && (e.key === '.' || e.key === ',');
-      const isDigit = e.key >= '0' && e.key <= '9';
-      if (!isNav && !isCtrlCombo && !isDecimal && !isDigit) {
-        e.preventDefault();
-        return;
-      }
+      // NOTA: ya NO bloqueamos caracteres con preventDefault. Antes hacíamos
+      // un filtro estricto (solo dígitos/nav/Ctrl+combos) y eso causaba un bug
+      // raro: después de imprimir o cambiar de tab, algunos teclados/navegadores
+      // empezaban a reportar e.key con valores distintos (dead-keys, layouts
+      // hispanos, numpad sin numlock) y el filtro empezaba a rechazar dígitos
+      // legítimos. Resultado: el maestro no podía teclear, solo usar la rueda
+      // del mouse en el spinner del input number.
+      // Solución: confiar en type="number" del navegador + clamping al hacer
+      // blur (focusout handler arriba). Si el maestro escribe texto inválido,
+      // el blur lo limpia automáticamente. Cero bloqueo de teclas.
 
-      // 2) Smart navigation: Enter va a siguiente fila misma columna; al final pasa a primera fila siguiente columna
+      // Smart navigation: Enter va a siguiente fila misma columna; al final pasa a primera fila siguiente columna
       if (e.key === 'Enter') {
         e.preventDefault();
         const row = input.closest('tr');
@@ -1351,9 +2149,26 @@ const GradesModule = (function () {
     if (_draftTimer) clearInterval(_draftTimer);
     _draftTimer = setInterval(_saveDraft, 30000);
 
+    // ═══ POLLING DE ESTADO DEL PARCIAL (cada 30s) ═══
+    // Si el admin cierra el parcial mientras un maestro está editando, el
+    // editor debe detectarlo y entrar en modo solo-lectura ANTES de que el
+    // maestro siga capturando datos que no se van a guardar. Sin esto, el
+    // maestro teclea por minutos creyendo que se guarda y pierde todo.
+    if (_partialPollTimer) clearInterval(_partialPollTimer);
+    if (!_hasAdminPower()) {  // Admin nunca se bloquea, ahorrar la query
+      _partialPollTimer = setInterval(_pollPartialState, 30000);
+    }
+
     // ═══ HORAS IMPARTIDAS ═══
     container.querySelectorAll('.horas-input').forEach(input => {
-      input.addEventListener('input', () => { _updateHorasTotal(); _markDirty(); _scheduleRiskBannerUpdate(); });
+      input.addEventListener('input', () => {
+        // Si vino de fallback y ahora el usuario lo está modificando, ya no es
+        // prestado — quitar la marca para que sí se persista al guardar.
+        delete input.dataset.fromFallback;
+        _updateHorasTotal();
+        _markDirty();
+        _scheduleRiskBannerUpdate();
+      });
     });
     _loadHoras().then(() => _updateRiskBanner());
     _updateCaptureDeadlineBanner();
@@ -1366,6 +2181,26 @@ const GradesModule = (function () {
     _updateStats();
     _updateUndoBtn();
     _bindInputModes(container);
+
+    // Actualiza la zona de impresión (botón con nombre del parcial activo +
+    // contador de avance) asíncronamente para no bloquear el render inicial.
+    _updatePrintZoneAfterRender();
+
+    // Actualiza el banner de incidencias pendientes al cargar el editor.
+    // Si la lista trae reprobados previos sin motivo, el maestro lo ve enseguida.
+    _scheduleFailureBannerUpdate();
+
+    // Respetar el estado guardado de la tarjeta "reglas para pegar".
+    // Por defecto está COLAPSADA (cargaba mucho la pantalla). Solo se abre si
+    // el maestro explícitamente la dejó abierta antes.
+    try {
+      if (localStorage.getItem('epo67_paste_help_collapsed') === '0') {
+        const body = document.getElementById('paste-help-body');
+        const chevron = document.getElementById('paste-help-chevron');
+        if (body) body.style.display = 'block';
+        if (chevron) chevron.textContent = 'expand_less';
+      }
+    } catch (_) {}
 
     // ═══ HIGHLIGHT EMPTY CELLS (when coming from monitor) ═══
     if (sessionStorage.getItem('epo67_highlightEmpty') === '1') {
@@ -1414,14 +2249,14 @@ const GradesModule = (function () {
     });
   }
 
-  // ─── PASTE NATIVO TIPO EXCEL ───
-  // El maestro hace clic en cualquier celda de la tabla y Ctrl+V.
-  // Si pegó una columna: llena hacia abajo desde esa celda.
-  // Si pegó un bloque (varias columnas): llena el bloque a partir de la celda.
-  // Celdas vacías en el clipboard NO sobrescriben los valores existentes.
-  // Valores fuera de rango se marcan en rojo y NO se aplican.
-  // Si el primer renglón es un encabezado (texto no-numérico), se salta
-  // sin desplazar la asignación de filas.
+  // ─── PASTE NATIVO TIPO EXCEL — INSPECCIÓN INTELIGENTE ───
+  // Flujo:
+  //  1. Parsear clipboard.
+  //  2. _inspectPaste detecta problemas comunes (header desordenado, escala /100,
+  //     filas vacías intermedias, columnas calculadas como SUMA/CAL).
+  //  3. Si hay issues, abrir modal bloqueante con checkboxes + preview.
+  //  4. Aplicar con o sin transformaciones según elección del maestro.
+  //  5. Snapshot de undo SIEMPRE → Ctrl+Z deshace todo.
   function _bindInputModes(container) {
     const tableContainer = container.querySelector('.grade-editor-table');
     if (!tableContainer) return;
@@ -1429,7 +2264,331 @@ const GradesModule = (function () {
     tableContainer.addEventListener('paste', _handleTablePaste);
   }
 
-  function _handleTablePaste(e) {
+  // ─── DICCIONARIO DE ALIAS PARA HEADERS DE EXCEL ───
+  // Cada field interno mapea a sus posibles nombres en el Excel del maestro.
+  // Normalizado: sin acentos, mayúsculas, sin paréntesis, sin puntuación.
+  const _PASTE_FIELD_ALIASES = {
+    ec: ['EC', 'EVALUACION', 'EVALUACION CONTINUA', 'EVAL CONTINUA', 'EV CONT', 'CONTINUA', 'EVAL'],
+    tr: ['TR', 'TRANSVERSAL', 'TRANSV', 'TRANS'],
+    pe: ['PE', 'PUNTO EXTRA', 'P EXTRA', 'PUNTOS EXTRA', 'EXTRA'],
+    ex: ['EX', 'EXAMEN', 'EXAMEN PARCIAL', 'EX PARCIAL', 'EXAMEN PARC'],
+    faltas: ['FALTAS', 'INASISTENCIAS', 'INASIST', 'FALTA'],
+  };
+
+  // Columnas que el maestro a veces deja en su Excel pero que el sistema CALCULA solo.
+  // Las brincamos al pegar.
+  const _PASTE_IGNORED_HEADERS = [
+    'SUMA', 'CAL', 'CALIFICACION', 'CALIF', 'TOTAL', 'PROMEDIO', 'PROM',
+    'NUM', 'NUMERO', 'N', 'NO', '#', 'NOMBRE', 'ALUMNO', 'ESTUDIANTE',
+  ];
+
+  function _normalizePasteHeader(s) {
+    return (s || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')   // quitar marcas diacríticas
+      .replace(/\([^)]*\)/g, '')                          // quitar (max 8), (8 pts)
+      .replace(/[^A-Z0-9 ]/gi, ' ')                       // quitar puntuación
+      .replace(/\s+/g, ' ')
+      .toUpperCase().trim();
+  }
+
+  // Devuelve el field interno (ec, tr, pe, ex, faltas) si reconoce el header,
+  // o 'IGNORE' si es columna calculada (SUMA, CAL, etc), o null si no reconoce.
+  function _matchPasteHeader(cell) {
+    const norm = _normalizePasteHeader(cell);
+    if (!norm) return null;
+    for (const [field, aliases] of Object.entries(_PASTE_FIELD_ALIASES)) {
+      if (aliases.includes(norm)) return field;
+    }
+    if (_PASTE_IGNORED_HEADERS.includes(norm)) return 'IGNORE';
+    return null;
+  }
+
+  // Inspecciona el contenido del clipboard y devuelve un reporte con los
+  // problemas detectados y las transformaciones propuestas. NO modifica DOM.
+  function _inspectPaste(rows, startFieldIdx, fieldOrder) {
+    const report = {
+      headerSkipped: false,           // ¿la primera fila es header?
+      headerCells: null,              // celdas del header parseado
+      columnMap: null,                // { clipboardColIdx: targetField | 'IGNORE' | null }
+      canRemap: false,                // ¿hay reorden de columnas?
+      remapDescriptors: [],           // descripción legible del mapeo
+      scaleHints: {},                 // { targetField: { factor, examples, converted } }
+      canScale: false,
+      emptyMidRows: 0,                // filas completamente vacías intermedias
+      hasEmptyMid: false,
+      issues: [],                     // claves activas: 'remap', 'scale', 'empty'
+    };
+
+    if (!rows || rows.length === 0) return report;
+
+    // ─── 1) DETECTAR HEADER ───
+    const headerCells = (rows[0] || '').split('\t').map(c => c.trim());
+    // Es header si ALGUNA celda mapea a un field reconocido o IGNORE,
+    // O si la primera celda es texto no-numérico (heurística antigua).
+    const anyKnown = headerCells.some(c => _matchPasteHeader(c) !== null);
+    const firstNumeric = !isNaN(parseFloat((headerCells[0] || '').replace(',', '.').replace(/[^0-9.\-]/g, '')));
+    const isHeader = anyKnown || (headerCells[0] !== '' && !firstNumeric);
+    const dataStart = isHeader ? 1 : 0;
+    report.headerSkipped = isHeader;
+    if (isHeader) report.headerCells = headerCells;
+
+    // ─── 2) CONSTRUIR COLUMN MAP SI HAY HEADER ───
+    if (isHeader) {
+      const map = {};
+      let recognized = 0;
+      let ignored = 0;
+      for (let j = 0; j < headerCells.length; j++) {
+        const matched = _matchPasteHeader(headerCells[j]);
+        if (matched === 'IGNORE') {
+          map[j] = 'IGNORE';
+          ignored++;
+        } else if (matched && fieldOrder.includes(matched)) {
+          map[j] = matched;
+          recognized++;
+        } else {
+          map[j] = null;  // desconocida — caemos a posicional para esta columna
+        }
+      }
+      // Construir descriptor legible
+      report.remapDescriptors = headerCells.map((c, j) => ({
+        original: c,
+        target: map[j],
+      }));
+      // Proponemos remap si reconocimos ≥1 columna Y el orden difiere de lo
+      // que daría una asignación posicional desde startFieldIdx (esto cubre
+      // también el caso de "pegué EC en la columna equivocada").
+      if (recognized >= 1) {
+        report.columnMap = map;
+        // Comparar contra orden posicional
+        const positional = [];
+        for (let j = 0; j < headerCells.length; j++) {
+          const fi = startFieldIdx + j;
+          positional.push(fi < fieldOrder.length ? fieldOrder[fi] : null);
+        }
+        const isDifferent = headerCells.some((_, j) => {
+          const mapped = map[j];
+          if (mapped === 'IGNORE' || mapped === null) return false;
+          return mapped !== positional[j];
+        });
+        if (isDifferent || ignored > 0) {
+          report.canRemap = true;
+          report.issues.push('remap');
+        }
+      }
+    }
+
+    // ─── 3) RESOLVER FIELD PARA CADA COLUMNA (con o sin remap) ───
+    const resolveField = (j) => {
+      if (report.columnMap) {
+        const m = report.columnMap[j];
+        if (m === 'IGNORE') return null;
+        if (m) return m;
+      }
+      const fi = startFieldIdx + j;
+      return fi < fieldOrder.length ? fieldOrder[fi] : null;
+    };
+
+    // ─── 4) RECOLECTAR VALORES + FILAS VACÍAS INTERMEDIAS ───
+    const valuesByField = {};
+    let emptyMidCount = 0;
+    for (let i = dataStart; i < rows.length; i++) {
+      const cells = rows[i].split('\t');
+      let rowHasNumeric = false;
+      for (let j = 0; j < cells.length; j++) {
+        const field = resolveField(j);
+        if (!field) continue;
+        const cleaned = (cells[j] || '').trim().replace(',', '.').replace(/[^0-9.\-]/g, '');
+        if (cleaned === '') continue;
+        const num = parseFloat(cleaned);
+        if (!isNaN(num)) {
+          if (!valuesByField[field]) valuesByField[field] = [];
+          valuesByField[field].push(num);
+          rowHasNumeric = true;
+        }
+      }
+      // Fila completamente vacía en medio (no la última)
+      if (!rowHasNumeric && i < rows.length - 1) emptyMidCount++;
+    }
+    report.emptyMidRows = emptyMidCount;
+    if (emptyMidCount > 0) {
+      report.hasEmptyMid = true;
+      report.issues.push('empty');
+    }
+
+    // ─── 5) DETECTAR ESCALA /100 POR COLUMNA DESTINO ───
+    // Sólo para campos con max ≤10 (no faltas), y solo si >70% de valores exceden
+    // Y al dividir entre 10 todos caben dentro del rango.
+    const rubros = K.getRubros(currentTurno);
+    for (const [field, vals] of Object.entries(valuesByField)) {
+      if (vals.length === 0) continue;
+      if (field === 'faltas') continue;
+      const rubro = rubros.find(r => r.key === field);
+      const max = rubro ? rubro.max : 10;
+      if (max > 10) continue;
+      const overMax = vals.filter(v => v > max).length;
+      const ratio = overMax / vals.length;
+      const divFitsAll = vals.every(v => (v / 10) >= 0 && (v / 10) <= max);
+      if (ratio >= 0.7 && divFitsAll) {
+        report.scaleHints[field] = {
+          factor: 0.1,
+          examples: vals.slice(0, 4),
+          converted: vals.slice(0, 4).map(v => Math.round(v) / 10),
+          max,
+        };
+      }
+    }
+    if (Object.keys(report.scaleHints).length > 0) {
+      report.canScale = true;
+      report.issues.push('scale');
+    }
+
+    return report;
+  }
+
+  // Modal bloqueante. Devuelve Promise<{ accept, fixes }>
+  // accept=false → cancelar todo el paste.
+  // accept=true, fixes={} → pegar tal cual (sin transformaciones).
+  // accept=true, fixes={remap, scale, empty, emptyMode} → aplicar arreglos.
+  function _showPasteInspectionModal(report) {
+    return new Promise((resolve) => {
+      const blocks = [];
+
+      // BLOQUE: REORDEN DE COLUMNAS
+      if (report.canRemap) {
+        const rows = report.remapDescriptors.map(d => {
+          let badge = '';
+          if (d.target === 'IGNORE') {
+            badge = '<span style="background:#fef3c7;color:#78350f;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;">se ignora (columna calculada)</span>';
+          } else if (d.target) {
+            badge = `<span style="background:#dcfce7;color:#14532d;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;">→ ${d.target.toUpperCase()}</span>`;
+          } else {
+            badge = '<span style="background:#fef3c7;color:#78350f;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;">no reconocida — cae por posición</span>';
+          }
+          return `<tr>
+            <td style="padding:5px 8px;color:#1e293b;font-weight:600;">${Utils.sanitize(d.original)}</td>
+            <td style="padding:5px 8px;">${badge}</td>
+          </tr>`;
+        }).join('');
+        blocks.push(`
+          <div style="background:#f9fafb;border:2px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px;">
+            <label style="display:flex;gap:10px;cursor:pointer;align-items:flex-start;">
+              <input type="checkbox" data-issue-key="remap" checked style="margin-top:3px;transform:scale(1.2);flex-shrink:0;">
+              <div style="flex:1;">
+                <div style="font-weight:800;color:#1e40af;font-size:14.5px;display:flex;align-items:center;gap:6px;">
+                  🔀 Reordenar columnas según el encabezado de tu Excel
+                </div>
+                <div style="font-size:12.5px;color:#4b5563;margin-top:4px;margin-bottom:8px;">
+                  Detecté el encabezado y voy a meter cada columna en su lugar correcto sin importar el orden en que vino.
+                </div>
+                <table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #e5e7eb;">
+                  <thead><tr style="background:#f1f5f9;"><th style="text-align:left;padding:5px 8px;color:#475569;font-weight:700;">Tu Excel</th><th style="text-align:left;padding:5px 8px;color:#475569;font-weight:700;">Se pegará en</th></tr></thead>
+                  <tbody>${rows}</tbody>
+                </table>
+              </div>
+            </label>
+          </div>`);
+      }
+
+      // BLOQUE: ESCALA /100
+      if (report.canScale) {
+        const fieldList = Object.entries(report.scaleHints).map(([f, h]) => {
+          const before = h.examples.slice(0, 3).join(', ');
+          const after = h.converted.slice(0, 3).join(', ');
+          return `<li style="margin-bottom:3px;"><strong>${f.toUpperCase()}</strong> (máx ${h.max}): <code style="background:#fee2e2;padding:1px 5px;border-radius:3px;color:#991b1b;">${before}…</code> → <code style="background:#dcfce7;padding:1px 5px;border-radius:3px;color:#14532d;">${after}…</code></li>`;
+        }).join('');
+        blocks.push(`
+          <div style="background:#f9fafb;border:2px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px;">
+            <label style="display:flex;gap:10px;cursor:pointer;align-items:flex-start;">
+              <input type="checkbox" data-issue-key="scale" checked style="margin-top:3px;transform:scale(1.2);flex-shrink:0;">
+              <div style="flex:1;">
+                <div style="font-weight:800;color:#9a3412;font-size:14.5px;">
+                  📐 Tus valores parecen estar en escala /100
+                </div>
+                <div style="font-size:12.5px;color:#4b5563;margin-top:4px;margin-bottom:6px;">
+                  Detecté que la mayoría de valores son muy altos para la escala del sistema (/10). Te propongo dividir entre 10:
+                </div>
+                <ul style="font-size:13px;color:#374151;line-height:1.5;margin:0;padding-left:22px;">${fieldList}</ul>
+              </div>
+            </label>
+          </div>`);
+      }
+
+      // BLOQUE: FILAS VACÍAS INTERMEDIAS
+      if (report.hasEmptyMid) {
+        blocks.push(`
+          <div style="background:#f9fafb;border:2px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:12px;">
+            <label style="display:flex;gap:10px;cursor:pointer;align-items:flex-start;">
+              <input type="checkbox" data-issue-key="empty" checked style="margin-top:3px;transform:scale(1.2);flex-shrink:0;">
+              <div style="flex:1;">
+                <div style="font-weight:800;color:#92400e;font-size:14.5px;">
+                  ➖ ${report.emptyMidRows} fila(s) vacía(s) en medio de tus datos
+                </div>
+                <div style="font-size:12.5px;color:#4b5563;margin-top:4px;margin-bottom:8px;">
+                  ¿Qué hago con esas líneas en blanco?
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#374151;">
+                  <label style="display:flex;gap:6px;align-items:center;cursor:pointer;background:#fff;padding:6px 10px;border:1px solid #e5e7eb;border-radius:6px;">
+                    <input type="radio" name="empty-mode" value="skip" checked>
+                    <span><strong>Brincar</strong> las filas vacías (no consumen alumnos) <em style="color:#6b7280;">— recomendado si era separación visual</em></span>
+                  </label>
+                  <label style="display:flex;gap:6px;align-items:center;cursor:pointer;background:#fff;padding:6px 10px;border:1px solid #e5e7eb;border-radius:6px;">
+                    <input type="radio" name="empty-mode" value="keep">
+                    <span><strong>Mantener</strong> (avanza alumno sin escribir) <em style="color:#6b7280;">— si querías saltarte alumnos puntuales</em></span>
+                  </label>
+                </div>
+              </div>
+            </label>
+          </div>`);
+      }
+
+      const body = `
+        <div style="background:#eff6ff;border-left:4px solid #3182ce;padding:10px 12px;border-radius:6px;font-size:13px;color:#1e40af;margin-bottom:14px;">
+          <strong>Detecté ${report.issues.length} detalle${report.issues.length === 1 ? '' : 's'} en tu pegado.</strong>
+          Te propongo arreglarlos antes de aplicar. Marca los que quieras aplicar:
+        </div>
+        ${blocks.join('')}
+        <div style="background:#f1f5f9;padding:8px 12px;border-radius:6px;font-size:12px;color:#475569;line-height:1.45;margin-top:8px;">
+          <strong>🛟 Red de seguridad:</strong> sea cual sea tu elección, puedes deshacerlo con
+          <kbd style="padding:1px 5px;background:#fff;border:1px solid #cbd5e0;border-radius:3px;font-family:monospace;font-size:11px;font-weight:700;">Ctrl + Z</kbd>
+          inmediatamente.
+        </div>
+      `;
+
+      const footer = `
+        <button class="btn btn-outline" id="paste-cancel" style="margin-right:auto;">Cancelar</button>
+        <button class="btn" id="paste-raw" style="background:#94a3b8;color:#fff;">Pegar tal cual</button>
+        <button class="btn btn-primary" id="paste-apply">Aplicar arreglos</button>
+      `;
+
+      Modal.open('Pegado inteligente — revisa antes de aplicar', body, footer);
+
+      setTimeout(() => {
+        const wrap = document.getElementById('paste-cancel')?.closest('.modal, [role="dialog"], #genericModal') || document;
+        document.getElementById('paste-cancel')?.addEventListener('click', () => {
+          Modal.close();
+          resolve({ accept: false });
+        });
+        document.getElementById('paste-raw')?.addEventListener('click', () => {
+          Modal.close();
+          resolve({ accept: true, fixes: {} });
+        });
+        document.getElementById('paste-apply')?.addEventListener('click', () => {
+          const fixes = {};
+          document.querySelectorAll('[data-issue-key]').forEach(cb => {
+            if (cb.checked) fixes[cb.dataset.issueKey] = true;
+          });
+          if (fixes.empty) {
+            const mode = document.querySelector('input[name="empty-mode"]:checked')?.value || 'skip';
+            fixes.emptyMode = mode;
+          }
+          Modal.close();
+          resolve({ accept: true, fixes });
+        });
+      }, 60);
+    });
+  }
+
+  async function _handleTablePaste(e) {
     const targetInput = e.target.closest('input.ge-input');
     if (!targetInput) return;
 
@@ -1439,23 +2598,11 @@ const GradesModule = (function () {
     // Parsear: filas separadas por \n, columnas por \t
     let rows = clipboardText.split(/\r?\n/);
     // Solo quitar vacías trailing (suelen venir del clipboard como newline final).
-    // NO trimear leading: una celda vacía al inicio puede ser intencional —
-    // representa al primer alumno sin valor (caso reportado: el sistema
-    // "subía" todos los valores cuando el primer alumno tenía cero).
     while (rows.length > 0 && rows[rows.length - 1].trim() === '') rows.pop();
     if (rows.length === 0) return;
 
     // Si es UN solo valor sin tabs, dejar el paste nativo del input
     if (rows.length === 1 && !rows[0].includes('\t')) return;
-
-    // Detectar encabezado: si el primer renglón tiene texto no-numérico
-    // (ej. "FALTAS", "Punto Extra", "Cal"), se asume que es header y se
-    // salta. Así no consume el lugar del primer alumno.
-    const firstCellRaw = (rows[0] || '').split('\t')[0].trim();
-    const firstCleaned = firstCellRaw.replace(',', '.').replace(/[^0-9.\-]/g, '');
-    const isHeader = firstCellRaw !== '' && (firstCleaned === '' || isNaN(parseFloat(firstCleaned)));
-    const dataStart = isHeader ? 1 : 0;
-    let headerSkipped = isHeader;
 
     // Multi-valor: tomamos control del paste y distribuimos
     e.preventDefault();
@@ -1472,33 +2619,77 @@ const GradesModule = (function () {
     const startFieldIdx = fieldOrder.indexOf(targetInput.dataset.field);
     if (startFieldIdx === -1) return;
 
-    // Snapshot para Deshacer
+    // ═══ INSPECCIÓN: detectar problemas comunes ═══
+    const report = _inspectPaste(rows, startFieldIdx, fieldOrder);
+
+    // Si hay issues, mostrar modal bloqueante con preview
+    let choice = { accept: true, fixes: {} };
+    if (report.issues.length > 0) {
+      choice = await _showPasteInspectionModal(report);
+      if (!choice.accept) return;  // canceló
+    }
+
+    const fixes = choice.fixes || {};
+    const dataStart = report.headerSkipped ? 1 : 0;
+    const useRemap = !!fixes.remap && !!report.columnMap;
+    const useScale = !!fixes.scale && !!report.scaleHints;
+    const skipEmptyRows = fixes.empty && fixes.emptyMode === 'skip';
+
+    // ═══ SNAPSHOT UNDO ═══
     const dataRowCount = rows.length - dataStart;
     _pushUndo('Pegar (' + dataRowCount + ' fila' + (dataRowCount === 1 ? '' : 's') + ')');
+
+    // Función para resolver el field destino de cada columna del clipboard.
+    // Con remap activo: 'IGNORE' = brincar; field reconocido = directo; null = fallback posicional.
+    const resolveField = (j) => {
+      if (useRemap) {
+        const m = report.columnMap[j];
+        if (m === 'IGNORE') return null;       // SUMA, CAL, NOMBRE → brincar
+        if (m) return m;                        // header reconocido → field correcto
+        // m === null → header no reconocido → no perder el dato, usar posición
+      }
+      const fi = startFieldIdx + j;
+      return fi < fieldOrder.length ? fieldOrder[fi] : null;
+    };
 
     let appliedCount = 0;
     let invalidCount = 0;
     let emptyCount = 0;
+    let skippedEmptyRowsCount = 0;
+    let scaledCount = 0;
     const changedInputs = [];
     const invalidInputs = [];
 
+    let writtenIdx = 0;  // posición en la tabla destino (avanza solo cuando escribimos fila)
+
     for (let i = dataStart; i < rows.length; i++) {
-      const targetRowIdx = startRowIdx + (i - dataStart);
+      const cells = rows[i].split('\t');
+
+      // Detectar fila completamente vacía
+      const rowAllEmpty = cells.every(c => (c || '').trim() === '');
+      if (rowAllEmpty) {
+        if (skipEmptyRows) {
+          skippedEmptyRowsCount++;
+          continue;  // NO consumir alumno
+        }
+        // Modo default: avanzar alumno sin escribir
+        writtenIdx++;
+        continue;
+      }
+
+      const targetRowIdx = startRowIdx + writtenIdx;
+      writtenIdx++;
       if (targetRowIdx >= allRows.length) break;
       const targetRow = allRows[targetRowIdx];
       if (targetRow.dataset.traslado === '1') { emptyCount++; continue; }
 
-      // Una fila del clipboard puede tener múltiples columnas separadas por \t
-      const cells = rows[i].split('\t');
-
       for (let j = 0; j < cells.length; j++) {
-        const targetFieldIdx = startFieldIdx + j;
-        if (targetFieldIdx >= fieldOrder.length) break;
-        const targetField = fieldOrder[targetFieldIdx];
+        const targetField = resolveField(j);
+        if (!targetField) continue;
         const cellInput = targetRow.querySelector(`input.ge-input[data-field="${targetField}"]`);
         if (!cellInput) continue;
 
-        const cellRaw = cells[j].trim();
+        const cellRaw = (cells[j] || '').trim();
 
         // CELDA VACÍA: preservar valor existente del alumno (NO sobrescribir)
         if (cellRaw === '') { emptyCount++; continue; }
@@ -1506,8 +2697,14 @@ const GradesModule = (function () {
         // Limpiar y parsear (acepta coma decimal)
         const cleaned = cellRaw.replace(',', '.').replace(/[^0-9.\-]/g, '');
         const isInt = cellInput.classList.contains('grade-faltas');
-        const num = isInt ? parseInt(cleaned, 10) : parseFloat(cleaned);
+        let num = isInt ? parseInt(cleaned, 10) : parseFloat(cleaned);
         const max = Number(cellInput.max) || (isInt ? 99 : 10);
+
+        // Aplicar escala /100 si el maestro la confirmó para este field
+        if (useScale && report.scaleHints[targetField] && !isNaN(num)) {
+          num = num * report.scaleHints[targetField].factor;
+          scaledCount++;
+        }
 
         // Inválido: marcar rojo, NO aplicar
         if (isNaN(num) || num < 0 || num > max) {
@@ -1537,28 +2734,105 @@ const GradesModule = (function () {
     }, 5000);
 
     // Toast informativo
-    let msg = `✅ ${appliedCount} valor${appliedCount === 1 ? '' : 'es'} aplicado${appliedCount === 1 ? '' : 's'}`;
-    if (headerSkipped) msg += ` · 1 encabezado omitido`;
-    if (emptyCount > 0) msg += ` · ${emptyCount} sin cambio`;
-    if (invalidCount > 0) msg += ` · ${invalidCount} en rojo (fuera de rango)`;
-    Toast.show(msg, invalidCount > 0 ? 'warning' : 'success');
+    const parts = [];
+    parts.push(`✅ ${appliedCount} valor${appliedCount === 1 ? '' : 'es'} aplicado${appliedCount === 1 ? '' : 's'}`);
+    if (report.headerSkipped) parts.push('1 encabezado omitido');
+    if (useRemap) parts.push('columnas reordenadas');
+    if (useScale) parts.push('escala /100 convertida');
+    if (skippedEmptyRowsCount > 0) parts.push(`${skippedEmptyRowsCount} fila(s) vacía(s) brincadas`);
+    if (emptyCount > 0) parts.push(`${emptyCount} sin cambio`);
+    if (invalidCount > 0) parts.push(`${invalidCount} en rojo (fuera de rango)`);
+    Toast.show(parts.join(' · '), invalidCount > 0 ? 'warning' : 'success');
   }
 
 
   // ─── HORAS IMPARTIDAS ───
+  // Carga las horas del parcial actual. Si el doc de este parcial no existe o
+  // está vacío, hace FALLBACK a las horas del parcial más recientemente capturado
+  // del mismo grupo+materia. Las horas impartidas son básicamente las mismas
+  // para todo el semestre, así que mostrar las de otro parcial da contexto al
+  // maestro/admin para que vean lo que ya capturaron.
   async function _loadHoras() {
+    const months = ['febrero','marzo','abril','mayo','junio','julio'];
+    const hasAnyHoras = (data) => months.some(m => data && data[m] !== undefined && data[m] !== null && data[m] !== '');
+
+    let source = null;  // 'current' | partialId del que vino el fallback | null
+    let data = null;
+
     try {
+      // 1) Intentar el parcial actual
       const docId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
       const doc = await db.collection('teacherHours').doc(docId).get();
-      if (doc.exists) {
-        const data = doc.data();
-        ['febrero','marzo','abril','mayo','junio','julio'].forEach(m => {
+      if (doc.exists && hasAnyHoras(doc.data())) {
+        data = doc.data();
+        source = 'current';
+      }
+
+      // 2) Fallback: buscar en los OTROS parciales del mismo grupo+materia
+      if (!data) {
+        const otherPartials = K.PARCIALES
+          .map(p => p.id)
+          .filter(p => p !== currentPartial);
+        // Probar en orden: primero P2 (suele ser el más actualizado), luego los demás
+        const priorityOrder = ['P2', 'P3', 'P1'].filter(p => otherPartials.includes(p));
+        for (const p of priorityOrder) {
+          const fallbackId = `${selectedGroup}_${selectedSubject}_${p}`;
+          try {
+            const fbDoc = await db.collection('teacherHours').doc(fallbackId).get();
+            if (fbDoc.exists && hasAnyHoras(fbDoc.data())) {
+              data = fbDoc.data();
+              source = p;
+              break;
+            }
+          } catch (e) { /* continuar */ }
+        }
+      }
+
+      // 3) Aplicar los datos a los inputs (si encontramos algo).
+      //    Si vinieron de fallback, marcar el input para que NO se guarden
+      //    automáticamente en el parcial actual al guardar grades (el admin
+      //    podría sobrescribir P1 con horas de P2 sin querer).
+      if (data) {
+        months.forEach(m => {
           const el = document.getElementById('horas-' + m);
-          if (el && data[m] !== undefined) el.value = data[m];
+          if (el && data[m] !== undefined) {
+            el.value = data[m];
+            if (source && source !== 'current') {
+              el.dataset.fromFallback = source;
+            } else {
+              delete el.dataset.fromFallback;
+            }
+          }
         });
         _updateHorasTotal();
       }
+
+      // 4) Si vino de otro parcial, mostrar nota informativa
+      _showHorasSourceNote(source);
     } catch (e) { console.warn('Error loading horas:', e); }
+  }
+
+  // Inserta una nota arriba de la sección de horas indicando de qué parcial
+  // vienen las horas mostradas (solo cuando NO son del parcial actual).
+  function _showHorasSourceNote(source) {
+    const existing = document.getElementById('horas-source-note');
+    if (existing) existing.remove();
+    if (!source || source === 'current') return;
+
+    const partialName = K.PARCIALES.find(p => p.id === source)?.nombre || source;
+    const currentName = K.PARCIALES.find(p => p.id === currentPartial)?.nombre || currentPartial;
+    const horasCard = document.querySelector('.horas-card');
+    if (!horasCard) return;
+
+    const note = document.createElement('div');
+    note.id = 'horas-source-note';
+    note.style.cssText = 'background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:13px;color:#1e40af;line-height:1.4;display:flex;gap:10px;align-items:flex-start;';
+    note.innerHTML = `
+      <span class="material-icons-round" style="font-size:20px;color:#3b82f6;flex-shrink:0;margin-top:1px;">info</span>
+      <div>
+        Estas horas se tomaron del <strong>${Utils.sanitize(partialName)}</strong> porque no se capturaron horas específicas para el <strong>${Utils.sanitize(currentName)}</strong>. El cálculo de riesgo por faltas usa estas horas como referencia.
+      </div>`;
+    horasCard.parentNode.insertBefore(note, horasCard);
   }
 
   function _updateHorasTotal() {
@@ -1631,6 +2905,114 @@ const GradesModule = (function () {
     const refs = failingStudents.map(s => db.collection('incidents').doc(_failureIncidentDocId(s.studentId)));
     const snaps = await Promise.all(refs.map(ref => ref.get()));
     return failingStudents.filter((student, index) => !snaps[index].exists);
+  }
+
+  // Banner persistente que recuerda al maestro las incidencias pendientes.
+  // Se llama cada vez que termina de teclear (focusout) y tras autosave.
+  // Si hay alumnos reprobados sin incidencia → banner naranja con botón para reportar.
+  let _failureBannerTimer = null;
+  function _scheduleFailureBannerUpdate() {
+    if (_failureBannerTimer) clearTimeout(_failureBannerTimer);
+    _failureBannerTimer = setTimeout(_updateFailureIncidentBanner, 400);
+  }
+  async function _updateFailureIncidentBanner() {
+    const container = document.getElementById('failure-incident-reminder');
+    if (!container) return;
+    if (!_isTeacherCaptureRole() || _listCleared) {
+      container.innerHTML = '';
+      return;
+    }
+    try {
+      const rubros = K.getRubros(currentTurno);
+      const failing = _getFailingStudentsForIncident(rubros);
+      if (failing.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+      const missing = await _getMissingFailureIncidents(failing);
+      if (missing.length === 0) {
+        // Tiene reprobados pero TODOS con incidencia → mensaje verde discreto
+        container.innerHTML = `
+          <div style="background:#ecfdf5;border:1px solid #10b981;border-radius:8px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:#065f46;">
+            <span class="material-icons-round" style="font-size:18px;color:#059669;">check_circle</span>
+            <div><strong>${failing.length} alumno(s) reprobado(s)</strong> · todos con motivo reportado ✓</div>
+          </div>
+        `;
+        return;
+      }
+      // Hay missing → banner naranja prominente con CTA
+      container.innerHTML = `
+        <div style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:2px solid #f59e0b;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:flex-start;gap:14px;box-shadow:0 4px 12px rgba(245,158,11,0.18);">
+          <span class="material-icons-round" style="font-size:32px;color:#b45309;flex-shrink:0;">priority_high</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:800;color:#78350f;line-height:1.2;margin-bottom:3px;">
+              ${missing.length} alumno(s) reprobado(s) sin motivo reportado
+            </div>
+            <div style="font-size:12.5px;color:#78350f;line-height:1.45;">
+              Reportar el motivo de cada reprobación es <strong>obligatorio</strong>. Le ayuda a orientación cuando los papás vienen. Tienes que reportarlo antes de imprimir o salir de la lista.
+            </div>
+          </div>
+          <button data-action="open-failure-incidents-modal" style="background:#b45309;color:#fff;border:none;border-radius:8px;padding:12px 18px;font-weight:800;font-size:13px;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;flex-shrink:0;white-space:nowrap;">
+            <span class="material-icons-round" style="font-size:18px;">flag</span>
+            Reportar ahora (${missing.length})
+          </button>
+        </div>
+      `;
+    } catch (e) {
+      console.warn('Error actualizando banner de incidencias:', e);
+    }
+  }
+
+  // Abre el modal de captura de motivos de reprobación.
+  // Llamado desde el botón "Reportar ahora" del banner persistente.
+  async function _openFailureIncidentsFromBanner() {
+    try {
+      const rubros = K.getRubros(currentTurno);
+      const failing = _getFailingStudentsForIncident(rubros);
+      const missing = await _getMissingFailureIncidents(failing);
+      if (missing.length === 0) {
+        Toast.show('Ya están reportados todos los motivos.', 'success');
+        await _updateFailureIncidentBanner();
+        return;
+      }
+      const reports = await _collectFailureIncidentReasons(missing);
+      if (!Array.isArray(reports) || reports.length === 0) return;
+
+      // Persistir las incidencias capturadas
+      const currentList = _getCurrentListLabel();
+      const batch = db.batch();
+      reports.forEach(r => {
+        const ref = db.collection('incidents').doc(_failureIncidentDocId(r.studentId));
+        batch.set(ref, {
+          studentId: r.studentId,
+          groupId: selectedGroup,
+          turno: currentTurno,
+          type: 'academica',
+          incidentKind: 'reprobación',
+          requiredBy: 'banner-cta',
+          title: `Reprobación en ${currentList.subjectName}`,
+          description: r.reason,
+          subjectId: selectedSubject,
+          subjectName: currentList.subjectName,
+          partial: currentPartial,
+          partialName: currentList.partialName,
+          grade: r.cal,
+          suma: r.suma,
+          date: new Date(),
+          status: 'activa',
+          reportedBy: App.currentUser?.displayName || App.currentUser?.email || '',
+          reportedByUid: auth.currentUser.uid,
+          updatedAt: new Date(),
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      });
+      await batch.commit();
+      Toast.show(`${reports.length} incidencia(s) registrada(s). Gracias.`, 'success');
+      await _updateFailureIncidentBanner();
+    } catch (e) {
+      console.error('Error capturando incidencias:', e);
+      Toast.show('No se pudieron guardar las incidencias. Intenta de nuevo.', 'error');
+    }
   }
 
   function _buildFailureDescription(reason, detail) {
@@ -1826,7 +3208,11 @@ const GradesModule = (function () {
     const data = {};
     ['febrero','marzo','abril','mayo','junio','julio'].forEach(m => {
       const el = document.getElementById('horas-' + m);
-      if (el && el.value.trim() !== '') data[m] = parseInt(el.value);
+      if (!el || el.value.trim() === '') return;
+      // Si el valor vino de FALLBACK de otro parcial y el usuario NO lo modificó,
+      // NO se guarda — evita sobrescribir el parcial actual con datos prestados.
+      if (el.dataset.fromFallback) return;
+      data[m] = parseInt(el.value);
     });
     return data;
   }
@@ -2144,7 +3530,8 @@ const GradesModule = (function () {
   // excepción no controlada deja el flag pegado.
   let _saveStartedAt = 0;
 
-  async function saveGrades() {
+  async function saveGrades(opts) {
+    const silent = !!(opts && opts.silent);
     // ═══ PREVENT DOUBLE-CLICK + AUTO-RESCUE DE GUARDADO ATASCADO ═══
     if (_isSaving) {
       const stuckSeconds = (Date.now() - _saveStartedAt) / 1000;
@@ -2160,7 +3547,7 @@ const GradesModule = (function () {
         stuckBtn.disabled = false;
         stuckBtn.innerHTML = '<span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">save</span>Guardar';
       }
-      Toast.show('El guardado anterior se quedó atorado. Reseteado. Intenta otra vez.', 'warning');
+      if (!silent) Toast.show('El guardado anterior se quedó atorado. Reseteado. Intenta otra vez.', 'warning');
       return;
     }
 
@@ -2168,45 +3555,70 @@ const GradesModule = (function () {
 
     // ═══ CHECK NETWORK CONNECTIVITY ═══
     if (!navigator.onLine) {
-      Toast.show('Sin conexión a internet. Verifica tu red e intenta de nuevo.', 'error');
-      return;
+      if (!silent) Toast.show('Sin conexión a internet. Verifica tu red e intenta de nuevo.', 'error');
+      throw new Error('Sin conexión a internet');
     }
 
-    // ═══ VALIDAR HORAS IMPARTIDAS (obligatorio salvo cuando la lista se guarda en blanco) ═══
-    if (_isTeacherCaptureRole() && !_listCleared && !_hasRequiredHoras()) {
+    // ═══ VALIDAR HORAS IMPARTIDAS — solo si NO es silent (auto-save no bloquea por horas) ═══
+    // El auto-save guarda calificaciones aunque falten horas. El recordatorio
+    // de horas se muestra en pantalla pero NO bloquea el guardado automático.
+    if (!silent && _isTeacherCaptureRole() && !_listCleared && !_hasRequiredHoras()) {
       _showHorasRequiredReminder();
       return;
     }
 
-    // ═══ CHECK PARTIAL LOCK + OVERRIDE (use cached partials) ═══
+    // ═══ CHECK PARTIAL LOCK + OVERRIDE (force fresh read) ═══
+    // FORCE=true: el caché de 5 min puede dejar pasar guardadas a parciales que
+    // se acaban de cerrar. Mejor pagar la lectura extra y rechazar limpio
+    // antes de ir a Firestore (que igual lo rechazaría con error críptico).
     try {
-      const cachedPartials = await Store.getPartials();
+      const cachedPartials = await Store.getPartials(true);
       const partialDoc = cachedPartials.find(p => p.id === currentPartial);
       if (partialDoc && partialDoc.locked) {
-        let hasOverride = App.currentUser?.role === 'admin';
+        // 1) Admin (incluido cuando impersona) siempre puede.
+        // 2) Si no, ya pre-resolvimos el override en openGradeEditor (_editorOverrideActive).
+        // 3) Fallback final: consultar Firestore por si el override se acaba de otorgar
+        //    sin re-abrir el editor.
+        let hasOverride = _hasAdminPower() || _editorOverrideActive;
         if (!hasOverride) {
           const teacherDocId = await Store.getTeacherDocId();
           if (teacherDocId) {
-            const snap = await db.collection('partialOverrides')
-              .where('partialId', '==', currentPartial)
-              .where('teacherId', '==', teacherDocId).limit(1).get();
-            if (!snap.empty) {
-              const ov = snap.docs[0].data();
-              if (!ov.expiresAt) hasOverride = true;
-              else {
-                const exp = ov.expiresAt.toDate ? ov.expiresAt.toDate() : new Date(ov.expiresAt);
-                hasOverride = exp > new Date();
+            try {
+              const doc = await db.collection('partialOverrides').doc(`${currentPartial}_${teacherDocId}`).get();
+              if (doc.exists) {
+                const ov = doc.data();
+                if (!ov.expiresAt) hasOverride = true;
+                else {
+                  const exp = ov.expiresAt.toDate ? ov.expiresAt.toDate() : new Date(ov.expiresAt);
+                  hasOverride = exp > new Date();
+                }
+              }
+            } catch (_) { /* sigue al fallback de query por field por compatibilidad */ }
+            // Fallback query por field (overrides viejos sin migrar)
+            if (!hasOverride) {
+              const snap = await db.collection('partialOverrides')
+                .where('partialId', '==', currentPartial)
+                .where('teacherId', '==', teacherDocId).limit(1).get();
+              if (!snap.empty) {
+                const ov = snap.docs[0].data();
+                if (!ov.expiresAt) hasOverride = true;
+                else {
+                  const exp = ov.expiresAt.toDate ? ov.expiresAt.toDate() : new Date(ov.expiresAt);
+                  hasOverride = exp > new Date();
+                }
               }
             }
           }
         }
         if (!hasOverride) {
-          Toast.show('Parcial cerrado. No se pueden modificar calificaciones.', 'warning');
-          return;
+          if (!silent) Toast.show('Parcial cerrado. No se pueden modificar calificaciones.', 'warning');
+          throw new Error('Parcial cerrado');
         }
-        Toast.show('Guardando con acceso especial (parcial cerrado)', 'info');
+        if (!silent) Toast.show('Guardando con acceso especial (parcial cerrado)', 'info');
       }
     } catch (e) {
+      // Re-lanzar errores propios; ignorar errores de lectura
+      if (e?.message?.includes('Parcial cerrado')) throw e;
       console.warn('Error verificando parcial:', e);
     }
 
@@ -2241,25 +3653,35 @@ const GradesModule = (function () {
     });
 
     if (validationErrors > 0) {
-      Toast.show(`Hay ${validationErrors} valor(es) fuera de rango. Se corrigieron automáticamente. Revisa y guarda de nuevo.`, 'warning');
-      return;
+      if (!silent) Toast.show(`Hay ${validationErrors} valor(es) fuera de rango. Se corrigieron automáticamente. Revisa y guarda de nuevo.`, 'warning');
+      // En silent: continúa con los valores ya auto-corregidos (los inválidos quedan en rojo, no se guardan)
+      if (!silent) return;
     }
 
     let failureIncidentReports = [];
     try {
-      failureIncidentReports = await _collectRequiredFailureIncidents(rubros);
-      if (failureIncidentReports === null) return;
+      // Auto-save NO bloquea por incidencias obligatorias (el maestro las llena cuando guarda manual)
+      if (!silent) {
+        failureIncidentReports = await _collectRequiredFailureIncidents(rubros);
+        if (failureIncidentReports === null) return;
+      } else {
+        failureIncidentReports = [];
+      }
     } catch (error) {
       console.error('Error verificando incidencias de reprobación:', error);
-      Toast.show('No se pudieron revisar las incidencias obligatorias. Intenta de nuevo.', 'error');
-      return;
+      if (!silent) {
+        Toast.show('No se pudieron revisar las incidencias obligatorias. Intenta de nuevo.', 'error');
+        return;
+      }
     }
 
     // ═══ LOCK UI DURING SAVE ═══
     _isSaving = true;
     _saveStartedAt = Date.now();
     const origBtnText = saveBtn?.innerHTML || '';
-    if (saveBtn) {
+    // En auto-save (silent) NO cambiamos el botón — el indicador de auto-save flotante
+    // ya muestra "Guardando…" / "Guardado HH:MM" sin distraer al maestro.
+    if (saveBtn && !silent) {
       saveBtn.disabled = true;
       saveBtn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:18px;vertical-align:middle;margin-right:4px;">autorenew</span>Guardando...';
     }
@@ -2411,10 +3833,11 @@ const GradesModule = (function () {
         _listCleared = false;
         _hideClearPendingNotice();
         _markClean();
-        Toast.show(horasSaved ? 'Horas impartidas guardadas' : 'No hay cambios que guardar', horasSaved ? 'success' : 'info');
+        if (!silent) Toast.show(horasSaved ? 'Horas impartidas guardadas' : 'No hay cambios que guardar', horasSaved ? 'success' : 'info');
       } catch (error) {
         console.warn('Error saving horas:', error);
-        Toast.show('Error al guardar horas impartidas. Intenta de nuevo.', 'error');
+        if (!silent) Toast.show('Error al guardar horas impartidas. Intenta de nuevo.', 'error');
+        if (silent) throw error;
       } finally {
         _isSaving = false;
         if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = origBtnText; }
@@ -2512,7 +3935,7 @@ const GradesModule = (function () {
     if (wasListCleared) successParts.push(`${count} registros dejados en blanco`);
     else if (count > 0) successParts.push(`${count} calificaciones guardadas`);
     if (incidentCount > 0) successParts.push(`${incidentCount} incidencias registradas`);
-    Toast.show(successParts.length ? successParts.join(' y ') : 'Cambios guardados', 'success');
+    if (!silent) Toast.show(successParts.length ? successParts.join(' y ') : 'Cambios guardados', 'success');
 
     // Audit in background (don't block UI)
     const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
@@ -2875,6 +4298,10 @@ html, body { margin:0; padding:0; }
       Toast.show('No hay datos para imprimir', 'warning');
       return;
     }
+    // BLOQUEO: si hay reprobados sin motivo en esta lista, forzar captura
+    // antes de imprimir. La lista impresa no debe salir sin todos los motivos.
+    const ok = await _enforceIncidentsBeforeLeave('imprimir esta lista');
+    if (!ok) return;
 
     const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
     const subjectName = asg ? K.getUACNombre(asg.subjectName || asg.subjectId) : selectedSubject;
@@ -3525,10 +4952,53 @@ html, body { margin:0; padding:0; }
   // PUBLIC API
   // ═══════════════════════════════════════════════════════════════
 
+  // ─── REFRESCAR DESDE SERVIDOR ─────────────────────────────
+  // Cuando el cache local de Firestore (IndexedDB) tiene datos viejos/vacíos
+  // pero el servidor sí tiene la información, esta función limpia todos los
+  // caches y vuelve a cargar el editor con datos frescos del servidor.
+  // Caso típico: maestro abre en su celular, ve celdas vacías, pero en la
+  // PC del admin sí se ve la info. → Aquí su cache local quedó stale.
+  async function refreshFromServer() {
+    if (!selectedGroup || !selectedSubject) {
+      Toast.show('Abre primero una asignación', 'warning');
+      return;
+    }
+    if (_isDirty) {
+      if (!confirm('Tienes cambios sin guardar. ¿Refrescar los datos del servidor de todas formas? (perderás los cambios sin guardar)')) return;
+    }
+    const btn = document.querySelector('[data-action="refresh-from-server"]');
+    const orig = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Recargando…'; }
+    try {
+      // Limpiar cache de Store
+      Store.invalidateGradesForGroup(selectedGroup);
+      // Fetch DIRECTO del servidor (bypass de IndexedDB Firestore)
+      const freshGrades = await Store.getGradesByGroupFromServer(selectedGroup);
+      // Reconstruir el mapa local de grades para la materia/parcial activos
+      grades = {};
+      freshGrades.filter(g => g.subjectId === selectedSubject).forEach(g => {
+        const key = `${g.studentId}_${g.subjectId}_${g.partial}`;
+        grades[key] = g;
+      });
+      // Recargar el editor (re-render con los datos nuevos)
+      const partials = await Store.getPartials(true);
+      _renderGradeEditor(partials);
+      Toast.show('✓ Datos refrescados desde el servidor', 'success');
+    } catch (e) {
+      console.error('refreshFromServer:', e);
+      Toast.show('Error al refrescar: ' + (e.message || ''), 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+    }
+  }
+
   const api = {
     renderTeacher, renderAdmin, openGradeEditor,
     switchPartial, saveGrades, exportGrades,
-    printGrades, printAdminGrades, setPendingOpen
+    printGrades, printAdminGrades, setPendingOpen,
+    refreshFromServer,
+    // Expuesta para que el dashboard del maestro pueda imprimir TODAS sus listas
+    // sin pasar por la vista de Capturar Calificaciones.
+    printMultipleAssignments,
   };
   return api;
 })();

@@ -226,6 +226,43 @@ const Store = (() => {
     },
 
     /**
+     * Lee grades DIRECTO del servidor (bypass cache de Firestore offline +
+     * cache de memoria). Útil para los casos en que el cache local quedó
+     * corrupto o muestra datos vacíos pero el servidor sí tiene la info.
+     * @param {string} groupId
+     * @returns {Promise<Array>}
+     */
+    async getGradesByGroupFromServer(groupId) {
+      const key = 'grades_group_' + groupId;
+      // Limpiar caches en memoria + ssStorage para este grupo
+      delete _cache[key];
+      delete _timestamps[key];
+      delete _promises[key];
+      _ssRemove(key);
+      // Limpiar variantes por parcial también
+      Object.keys(_cache).forEach(k => {
+        if (k.startsWith(key + '_')) {
+          delete _cache[k];
+          delete _timestamps[k];
+          delete _promises[k];
+          _ssRemove(k);
+        }
+      });
+      // Fetch FORZADO desde servidor (no de IndexedDB local de Firestore)
+      try {
+        const snap = await db.collection('grades').where('groupId', '==', groupId).get({ source: 'server' });
+        const data = snapshotToArray(snap);
+        _cache[key] = data;
+        _timestamps[key] = Date.now();
+        return data;
+      } catch (e) {
+        // Si el server no responde, caer al cache normal
+        console.warn('getGradesByGroupFromServer falló, usando cache:', e);
+        return this.getGradesByGroup(groupId, true);
+      }
+    },
+
+    /**
      * Obtiene calificaciones filtradas por múltiples groupIds.
      * Para consultas de admin/orientador que abarcan varios grupos.
      * @param {string[]} groupIds

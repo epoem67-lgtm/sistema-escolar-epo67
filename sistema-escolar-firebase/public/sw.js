@@ -17,8 +17,12 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v6.93-metricas-alumno-centricas";
+const SW_VERSION = "v6.98-presidentes-academia-por-grado";
 const STATIC_CACHE = `epo67-static-${SW_VERSION}`;
+// Bumpear este flag dispara una limpieza del IndexedDB de Firestore en todos
+// los clientes al activar el nuevo SW. Útil cuando hay datos viejos cacheados
+// en navegadores de usuarios que no responden a refresh normal.
+const PURGE_FIRESTORE_CACHE_FLAG = '2026-05-22-fix-francisco';
 
 // Recursos a precachear durante la instalacion (la app shell minima)
 // Si algun fetch falla, no se rompe la instalacion (continueOnError).
@@ -52,12 +56,14 @@ self.addEventListener('install', (event) => {
 
 // ─── ACTIVATE ─────────────────────────────────────────────────
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(
       keys.filter((k) => k.startsWith('epo67-static-') && k !== STATIC_CACHE)
           .map((k) => caches.delete(k))
-    )).then(() => self.clients.claim())
-  );
+    );
+    await self.clients.claim();
+  })());
 });
 
 // ─── FETCH ────────────────────────────────────────────────────

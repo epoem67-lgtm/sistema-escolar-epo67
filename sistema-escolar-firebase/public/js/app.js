@@ -159,6 +159,20 @@ const App = {
     document.body.classList.remove('role-admin','role-directivo','role-subdirector','role-secretario_escolar','role-secretario_admin','role-orientador','role-orientador_docente','role-maestro','role-consulta','role-presidente_academia');
     document.body.classList.add('role-' + role);
 
+    // ═══ PRESIDENTE/SECRETARIO DE ACADEMIA ═══
+    // Si el usuario tiene academiaGrado + academiaTurno seteados, le damos
+    // acceso ADICIONAL al menú "Indicadores" sin importar su rol base.
+    // Hay 2 links de indicadores en el HTML (uno en Orientación, otro en
+    // Docentes). Mostramos TODOS los que encontremos + su sección padre.
+    const u = this.currentUser || App.currentUser || {};
+    if (u.academiaGrado && u.academiaTurno) {
+      document.querySelectorAll('a[data-module="indicadores"]').forEach(link => {
+        link.style.display = '';
+        const parentSection = link.closest('.nav-section');
+        if (parentSection) parentSection.style.display = '';
+      });
+    }
+
     console.log(`👤 Visibilidad aplicada para rol: ${role} (efectivos: ${[...effectiveRoles].join(',')})`);
 
     // Cargar contadores de notificaciones (badges en el menu)

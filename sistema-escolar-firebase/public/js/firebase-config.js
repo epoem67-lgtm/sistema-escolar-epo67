@@ -26,8 +26,10 @@ const storage = firebase.storage();
 // Reads repetidos se resuelven localmente (~70-80% menos consumo).
 // ═══════════════════════════════════════════════════════════════
 
-// Cache version — incrementar para forzar limpieza en todos los navegadores
-const FIRESTORE_CACHE_VERSION = 2;
+// Cache version — incrementar para forzar limpieza en todos los navegadores.
+// 2026-05-22: bumpeado a 3 para purgar caches viejos donde Francisco/admin
+// veían vacías las calificaciones de Mantenimiento de Redes 2-1 VESP.
+const FIRESTORE_CACHE_VERSION = 3;
 const _cacheKey = 'epo67_cache_v';
 const _storedVersion = localStorage.getItem(_cacheKey);
 if (_storedVersion !== String(FIRESTORE_CACHE_VERSION)) {
@@ -40,6 +42,13 @@ if (_storedVersion !== String(FIRESTORE_CACHE_VERSION)) {
       });
     }).catch(() => {});
   }
+  // Limpiar también el cache de sessionStorage del Store
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const k = sessionStorage.key(i);
+      if (k && k.startsWith('epo67_store_')) sessionStorage.removeItem(k);
+    }
+  } catch (_) {}
   localStorage.setItem(_cacheKey, String(FIRESTORE_CACHE_VERSION));
 }
 
@@ -74,6 +83,7 @@ const DB = {
   atRisk: () => db.collection('atRisk'),
   activityLog: () => db.collection('activityLog'),
   enrollments: () => db.collection('enrollments'),
+  emailAliases: () => db.collection('email_aliases'),
 
   // Helpers
   doc: (collection, id) => db.collection(collection).doc(id),

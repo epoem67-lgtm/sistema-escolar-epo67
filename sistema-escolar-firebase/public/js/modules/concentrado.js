@@ -163,13 +163,38 @@ const ConcentradoModule = (() => {
         Store.getOrientadorGroups()
       ]);
       orientadorGroupIds = oriGroups; // null for admin, array for orientador
-      allStudents = students.filter(s => s.estatus === 'ACTIVO');
-      allGroups = oriGroups ? groups.filter(g => oriGroups.includes(g.id)) : groups;
+
+      // ═══════════════════════════════════════════════════════════
+      // FILTRADO POR ROL (mismo criterio que indicadores.js):
+      // - Admin / Subdirector / Directivo: ven TODO (oriGroups === null)
+      // - Orientador / Orientador-docente: ven TODO el TURNO donde son
+      //   orientadores. No solo los grupos específicos asignados —
+      //   tienen que coordinar el turno completo (boletas, concentrado,
+      //   indicadores, etc.).
+      // ═══════════════════════════════════════════════════════════
+      let filteredGroups;
+      if (oriGroups === null) {
+        filteredGroups = groups; // admin: sin filtro
+      } else if (oriGroups.length === 0) {
+        filteredGroups = []; // orientador sin grupos asignados
+      } else {
+        // Detectar el/los turno(s) donde la persona es orientador
+        const oriGroupSet = new Set(oriGroups);
+        const turnosDelOrientador = new Set(
+          groups.filter(g => oriGroupSet.has(g.id)).map(g => g.turno).filter(Boolean)
+        );
+        // Mostrar TODOS los grupos de esos turnos
+        filteredGroups = groups.filter(g => turnosDelOrientador.has(g.turno));
+      }
+
+      const allowedIds = new Set(filteredGroups.map(g => g.id));
+      allStudents = students.filter(s =>
+        s.estatus === 'ACTIVO' && (oriGroups === null || allowedIds.has(s.groupId))
+      );
+      allGroups = filteredGroups;
       allSubjects = subjects;
       allAssignments = assignments;
       // Load grades per-group (much more efficient than loading ALL grades)
-      // Respeta cache (TTL 3 min). Las mutaciones llaman a Store.invalidateGradesForGroup(),
-      // asi que tras una captura el cache esta limpio y se re-fetchea solo lo necesario.
       const groupIds = allGroups.map(g => g.id);
       allGrades = await Store.getGradesByGroups(groupIds);
     } catch (e) {
@@ -877,14 +902,22 @@ html, body { margin:0; padding:0; height:100%; }
       const subStats = subs.map(() => ({ sum: 0, cnt: 0, aprob: 0, reprob: 0 }));
       let groupSumProm = 0, groupCntProm = 0;
 
+      // ═══ Métricas ALUMNO-céntricas para los totales del grupo ═══
+      // Un alumno se cuenta UNA sola vez aunque tenga varias reprobadas/aprobadas.
+      // Aprobado = 0 materias reprobadas. Irregular = ≥1 materia reprobada.
+      // Esto evita que sumar aprob de todas las materias dé 250 en un grupo de 30.
+      let totalAlumnosAprob = 0;     // alumnos con 0 reprobadas
+      let totalAlumnosIrregulares = 0; // alumnos con ≥1 reprobada
+      let totalAlumnosEvaluados = 0;   // alumnos con AL MENOS una cal capturada
+      let totalIncidencias = 0;        // suma de cals < 6 (magnitud)
+
       // Filas de alumnos (7+)
       stus.forEach((stu, idx) => {
         const row = [idx + 1, stu.apellido1 || '', stu.apellido2 || '', stu.nombres || '', ''];
         let sumCal = 0, cntCal = 0;
+        let stuReprobs = 0; // reprobadas DEL ALUMNO en este parcial
         subs.forEach((s, si) => {
           const gd = (gMap[stu.id] && gMap[stu.id][s.id]) || null;
-          // Regla EPO67: si el maestro CAPTURÓ algo para este alumno+materia (gd existe)
-          // pero dejó las faltas en blanco -> se muestra 0. Si no hay captura, queda vacío.
           const f = gd ? (gd.faltas != null ? Number(gd.faltas) : 0) : '';
           const c = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : '')) : '';
           row.push(f === '' ? '' : f, c === '' ? '' : c);
@@ -893,14 +926,19 @@ html, body { margin:0; padding:0; height:100%; }
             subStats[si].sum += Number(c);
             subStats[si].cnt++;
             if (Number(c) >= passGrade) subStats[si].aprob++;
-            else subStats[si].reprob++;
+            else { subStats[si].reprob++; stuReprobs++; }
           }
         });
         const prom = cntCal > 0 ? +(sumCal / cntCal).toFixed(2) : '';
         row.push(prom);
         aoa1.push(row);
-        // Para mejores promedios
+
+        // Contar alumno como evaluado si tiene al menos una cal
         if (cntCal > 0) {
+          totalAlumnosEvaluados++;
+          if (stuReprobs === 0) totalAlumnosAprob++;
+          else totalAlumnosIrregulares++;
+          totalIncidencias += stuReprobs;
           const fullName = `${stu.apellido1 || ''} ${stu.apellido2 || ''} ${stu.nombres || ''}`.trim();
           allBest.push({ grupo: grp.nombre, alumno: fullName, promedio: prom });
           groupSumProm += Number(prom);
@@ -925,19 +963,23 @@ html, body { margin:0; padding:0; height:100%; }
       const pctAprobPerSub = subStats.map(s => s.cnt > 0 ? +(s.aprob * 100 / s.cnt).toFixed(1) : '');
       const pctReprobPerSub = subStats.map(s => s.cnt > 0 ? +(s.reprob * 100 / s.cnt).toFixed(1) : '');
 
-      const totalAprob = subStats.reduce((a, s) => a + s.aprob, 0);
-      const totalReprob = subStats.reduce((a, s) => a + s.reprob, 0);
-      const totalCnt = totalAprob + totalReprob;
+      // TOTAL alumno-céntrico:
+      //   - ALUMNOS APROBADOS (total) = alumnos del grupo con 0 reprobadas
+      //   - ALUMNOS REPROBADOS (total) = alumnos del grupo con ≥1 reprobada
+      //   - El total cuadra contra los alumnos evaluados del grupo (NO la
+      //     sumatoria de aprobaciones a través de materias).
+      // El conteo POR MATERIA (aprobPerSub/reprobPerSub) sigue siendo correcto
+      // porque cada alumno aporta exactamente 1 cal por materia.
       const groupProm = groupCntProm > 0 ? +(groupSumProm / groupCntProm).toFixed(2) : '';
-      const groupPctAprob = totalCnt > 0 ? +(totalAprob * 100 / totalCnt).toFixed(1) : '';
-      const groupPctReprob = totalCnt > 0 ? +(totalReprob * 100 / totalCnt).toFixed(1) : '';
+      const groupPctAprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosAprob * 100 / totalAlumnosEvaluados).toFixed(1) : '';
+      const groupPctReprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosIrregulares * 100 / totalAlumnosEvaluados).toFixed(1) : '';
 
       // Fila índice donde empiezan las 5 stats (después de header + student rows)
       const firstStatRow = aoa1.length;
       aoa1.push(buildStatRow('PROMEDIO', promPerSub, groupProm));
-      aoa1.push(buildStatRow('ALUMNOS APROBADOS', aprobPerSub, totalAprob));
+      aoa1.push(buildStatRow('ALUMNOS APROBADOS', aprobPerSub, totalAlumnosAprob));
       aoa1.push(buildStatRow('% APROBACIÓN', pctAprobPerSub, groupPctAprob));
-      aoa1.push(buildStatRow('ALUMNOS REPROBADOS', reprobPerSub, totalReprob));
+      aoa1.push(buildStatRow('ALUMNOS REPROBADOS', reprobPerSub, totalAlumnosIrregulares));
       aoa1.push(buildStatRow('% REPROBACIÓN', pctReprobPerSub, groupPctReprob));
 
       const sheet1Merges = [
@@ -1208,9 +1250,17 @@ html, body { margin:0; padding:0; height:100%; }
         ws.getCell(6, promCol).font = { bold: true, size: 9 };
         ws.getCell(6, promCol).alignment = { horizontal: 'center', vertical: 'middle' };
 
-        // Acumuladores por materia para las 5 filas estadísticas del footer
+        // Acumuladores por materia + totales alumno-céntricos del grupo
         const subStats = subs.map(() => ({ sum: 0, cnt: 0, aprob: 0, reprob: 0 }));
         let groupSumProm = 0, groupCntProm = 0;
+        // Métricas alumno-céntricas:
+        //   ALUMNOS APROBADOS (total) = alumnos con 0 reprobadas
+        //   ALUMNOS REPROBADOS (total) = alumnos con ≥1 reprobada
+        //   Aprobados + Reprobados = alumnos evaluados del grupo (NO suma de
+        //   aprobaciones a través de materias, que daría números inflados).
+        let totalAlumnosAprob = 0;
+        let totalAlumnosIrregulares = 0;
+        let totalAlumnosEvaluados = 0;
 
         // Filas de alumnos
         let rowIdx = 8;
@@ -1221,9 +1271,9 @@ html, body { margin:0; padding:0; height:100%; }
           ws.getCell(rowIdx, 4).value = stu.nombres || '';
           ws.getCell(rowIdx, 1).alignment = { horizontal: 'center' };
           let sumCal = 0, cntCal = 0;
+          let stuReprobs = 0; // reprobadas DEL ALUMNO (para clasificación alumno-céntrica)
           subs.forEach((s, i) => {
             const gd = (gMap[stu.id] && gMap[stu.id][s.id]) || null;
-            // Regla EPO67: faltas en blanco con captura -> 0; sin captura -> vacío
             const f = gd ? (gd.faltas != null ? Number(gd.faltas) : 0) : null;
             const c = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : null)) : null;
             const colF = 5 + i * 2;
@@ -1232,7 +1282,6 @@ html, body { margin:0; padding:0; height:100%; }
             ws.getCell(rowIdx, colC).value = c;
             ws.getCell(rowIdx, colF).alignment = { horizontal: 'center' };
             ws.getCell(rowIdx, colC).alignment = { horizontal: 'center' };
-            // Resaltar reprobados con rojo claro
             if (c != null && c < passGrade) {
               ws.getCell(rowIdx, colC).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE0E0' } };
               ws.getCell(rowIdx, colC).font = { bold: true, color: { argb: 'FFB91C1C' } };
@@ -1242,7 +1291,7 @@ html, body { margin:0; padding:0; height:100%; }
               subStats[i].sum += c;
               subStats[i].cnt++;
               if (c >= passGrade) subStats[i].aprob++;
-              else subStats[i].reprob++;
+              else { subStats[i].reprob++; stuReprobs++; }
             }
           });
           const prom = cntCal > 0 ? +(sumCal / cntCal).toFixed(2) : '';
@@ -1251,7 +1300,13 @@ html, body { margin:0; padding:0; height:100%; }
           ws.getCell(rowIdx, promCol).font = { bold: true };
           ws.getCell(rowIdx, promCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
 
-          // Para cuadro de honor
+          // Contar alumno como evaluado (con al menos 1 cal) y clasificar
+          if (cntCal > 0) {
+            totalAlumnosEvaluados++;
+            if (stuReprobs === 0) totalAlumnosAprob++;
+            else totalAlumnosIrregulares++;
+          }
+
           if (cntCal > 0 && prom !== '') {
             allBest.push({
               grupo: grp.nombre,
@@ -1268,23 +1323,19 @@ html, body { margin:0; padding:0; height:100%; }
           rowIdx++;
         });
 
-        // ─── 5 FILAS ESTADÍSTICAS AL PIE (PROMEDIO / APROB / %APROB / REPROB / %REPROB) ───
-        // Cada fila: cols 1..4 merged con el label; por materia, F vacío + C con valor;
-        // promCol con el total/global del grupo.
+        // ─── 5 FILAS ESTADÍSTICAS AL PIE ───
+        // Por materia (columnas): conteo correcto (1 cal por alumno por materia).
+        // TOTAL (última columna): alumno-céntrico — el grupo cuadra contra
+        // sus alumnos reales evaluados.
+        const groupPctAprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosAprob * 100 / totalAlumnosEvaluados).toFixed(1) : '';
+        const groupPctReprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosIrregulares * 100 / totalAlumnosEvaluados).toFixed(1) : '';
         const statRows = [
           { label: 'PROMEDIO', valFn: s => s.cnt > 0 ? +(s.sum / s.cnt).toFixed(2) : '', total: groupCntProm > 0 ? +(groupSumProm / groupCntProm).toFixed(2) : '', bg: 'FFF1F5F9', fg: 'FF1F2937' },
-          { label: 'ALUMNOS APROBADOS', valFn: s => s.cnt > 0 ? s.aprob : '', total: subStats.reduce((a, s) => a + s.aprob, 0), bg: 'FFD4EDDA', fg: 'FF155724' },
-          { label: '% APROBACIÓN', valFn: s => s.cnt > 0 ? +(s.aprob * 100 / s.cnt).toFixed(1) : '', total: '', bg: 'FFE8F5E9', fg: 'FF155724', isPct: true },
-          { label: 'ALUMNOS REPROBADOS', valFn: s => s.cnt > 0 ? s.reprob : '', total: subStats.reduce((a, s) => a + s.reprob, 0), bg: 'FFFFD3DF', fg: 'FFAA0000' },
-          { label: '% REPROBACIÓN', valFn: s => s.cnt > 0 ? +(s.reprob * 100 / s.cnt).toFixed(1) : '', total: '', bg: 'FFFEE2E2', fg: 'FFAA0000', isPct: true },
+          { label: 'ALUMNOS APROBADOS', valFn: s => s.cnt > 0 ? s.aprob : '', total: totalAlumnosAprob, bg: 'FFD4EDDA', fg: 'FF155724' },
+          { label: '% APROBACIÓN', valFn: s => s.cnt > 0 ? +(s.aprob * 100 / s.cnt).toFixed(1) : '', total: groupPctAprob, bg: 'FFE8F5E9', fg: 'FF155724', isPct: true },
+          { label: 'ALUMNOS REPROBADOS', valFn: s => s.cnt > 0 ? s.reprob : '', total: totalAlumnosIrregulares, bg: 'FFFFD3DF', fg: 'FFAA0000' },
+          { label: '% REPROBACIÓN', valFn: s => s.cnt > 0 ? +(s.reprob * 100 / s.cnt).toFixed(1) : '', total: groupPctReprob, bg: 'FFFEE2E2', fg: 'FFAA0000', isPct: true },
         ];
-
-        // Calcular totales globales de % aprob/reprob
-        const totalAprobAll = subStats.reduce((a, s) => a + s.aprob, 0);
-        const totalReprobAll = subStats.reduce((a, s) => a + s.reprob, 0);
-        const totalCntAll = totalAprobAll + totalReprobAll;
-        statRows[2].total = totalCntAll > 0 ? +(totalAprobAll * 100 / totalCntAll).toFixed(1) : '';
-        statRows[4].total = totalCntAll > 0 ? +(totalReprobAll * 100 / totalCntAll).toFixed(1) : '';
 
         statRows.forEach(stat => {
           // Label mergeado en cols 1..4
@@ -1692,14 +1743,15 @@ html, body { margin:0; padding:0; height:100%; }
           </thead>
           <tbody>`;
 
-      // Acumuladores por materia para el footer estadístico del grupo:
-      // - sum: suma de calificaciones (para promedio)
-      // - cnt: número de alumnos con calificación capturada
-      // - aprob: alumnos con cal >= passGrade
-      // - reprob: alumnos con cal < passGrade
+      // Acumuladores por materia para el footer estadístico del grupo
       const subStats = subs.map(() => ({ sum: 0, cnt: 0, aprob: 0, reprob: 0 }));
-      // Acumuladores globales del grupo (para columnas M.R y PROM al final)
       let groupSumProm = 0, groupCntProm = 0, groupSumMR = 0;
+      // Métricas ALUMNO-céntricas (no sumar a través de materias):
+      //   ALUMNOS APROBADOS = alumnos con 0 reprobadas (todas sus cals ≥ 6)
+      //   ALUMNOS IRREGULARES = alumnos con ≥1 reprobada
+      let totalAlumnosAprob = 0;
+      let totalAlumnosIrregulares = 0;
+      let totalAlumnosEvaluados = 0;
 
       stus.forEach((stu, idx) => {
         const isTraslado = !!stu.bajaPendiente;
@@ -1707,13 +1759,11 @@ html, body { margin:0; padding:0; height:100%; }
         let sumCal = 0, cntCal = 0, mr = 0;
         const cells = subs.map((s, i) => {
           const gd = isTraslado ? null : ((gMap[stu.id] && gMap[stu.id][s.id]) || null);
-          // Regla EPO67: faltas en blanco con captura -> 0; sin captura/traslado -> vacío
           const f = gd ? (gd.faltas != null ? Number(gd.faltas) : 0) : '';
           const c = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : '')) : '';
           if (c !== '' && !isNaN(c)) {
             sumCal += Number(c); cntCal++;
             if (Number(c) < passGrade) mr++;
-            // Acumular para stats del footer (solo alumnos con captura, sin traslado)
             subStats[i].sum += Number(c);
             subStats[i].cnt++;
             if (Number(c) >= passGrade) subStats[i].aprob++;
@@ -1737,6 +1787,9 @@ html, body { margin:0; padding:0; height:100%; }
           <td class="num bold" style="${promFail ? 'background:#ffd3df;color:#a00;' : prom && Number(prom) >= 9 ? 'background:#d4edda;color:#155724;' : ''}">${prom}</td>
         </tr>`;
         if (cntCal > 0) {
+          totalAlumnosEvaluados++;
+          if (mr === 0) totalAlumnosAprob++;
+          else totalAlumnosIrregulares++;
           allBest.push({
             grupo: grp.nombre, grado: grp.grado,
             apellido1: stu.apellido1 || '', apellido2: stu.apellido2 || '',
@@ -1772,17 +1825,15 @@ html, body { margin:0; padding:0; height:100%; }
       const pctReprobPerSub = subStats.map(s => s.cnt > 0 ? ((s.reprob * 100 / s.cnt).toFixed(1) + '%') : '—');
 
       const groupProm = groupCntProm > 0 ? (groupSumProm / groupCntProm).toFixed(2) : '—';
-      const groupAprob = subStats.reduce((acc, s) => acc + s.aprob, 0);
-      const groupReprob = subStats.reduce((acc, s) => acc + s.reprob, 0);
-      const groupTotal = groupAprob + groupReprob;
-      const groupPctAprob = groupTotal > 0 ? ((groupAprob * 100 / groupTotal).toFixed(1) + '%') : '—';
-      const groupPctReprob = groupTotal > 0 ? ((groupReprob * 100 / groupTotal).toFixed(1) + '%') : '—';
+      // TOTAL alumno-céntrico (cuadra contra los alumnos reales evaluados del grupo)
+      const groupPctAprob = totalAlumnosEvaluados > 0 ? ((totalAlumnosAprob * 100 / totalAlumnosEvaluados).toFixed(1) + '%') : '—';
+      const groupPctReprob = totalAlumnosEvaluados > 0 ? ((totalAlumnosIrregulares * 100 / totalAlumnosEvaluados).toFixed(1) + '%') : '—';
 
       body += `<tfoot>
         ${stRow('PROMEDIO', promPerSub, [groupSumMR, groupProm], '#f3f4f6', '#1f2937')}
-        ${stRow('ALUMNOS APROBADOS', aprobPerSub, ['', groupAprob], '#d4edda', '#155724')}
+        ${stRow('ALUMNOS APROBADOS', aprobPerSub, ['', totalAlumnosAprob], '#d4edda', '#155724')}
         ${stRow('% APROBACION', pctAprobPerSub, ['', groupPctAprob], '#d4edda', '#155724')}
-        ${stRow('ALUMNOS REPROBADOS', reprobPerSub, ['', groupReprob], '#ffd3df', '#a00')}
+        ${stRow('ALUMNOS REPROBADOS', reprobPerSub, ['', totalAlumnosIrregulares], '#ffd3df', '#a00')}
         ${stRow('% REPROBACION', pctReprobPerSub, ['', groupPctReprob], '#ffd3df', '#a00')}
       </tfoot></table></section>`;
 
@@ -2172,22 +2223,31 @@ html, body { margin:0; padding:0; height:100%; }
   }
 
   // ─── NUEVO: REPORTE DE "MIS GRUPOS" (orientador) ───
-  // Genera 1 archivo combinado con TODOS los grupos del orientador, agrupados por grado.
-  // Si tiene grupos de varios grados, hace zip; si todos son del mismo grado, descarga directo.
+  // Genera 1 archivo combinado con SUS grupos específicos (no todo el turno).
+  // El concentrado de orientación es para los grupos que la orientadora atiende
+  // directamente — no todo el turno.
   async function _generateMyOrientadorReport(format, partial) {
     if (!allGroups.length) await loadData();
     if (!allGroups.length) {
       Toast.show('No tienes grupos asignados como orientador', 'warning');
       return;
     }
+    // Filtrar a SOLO los grupos donde la persona es orientador (no todo el turno)
+    const oriIds = new Set(orientadorGroupIds || []);
+    const myGroups = oriIds.size > 0
+      ? allGroups.filter(g => oriIds.has(g.id))
+      : allGroups;
+    if (myGroups.length === 0) {
+      Toast.show('No tienes grupos asignados como orientador directo', 'warning');
+      return;
+    }
     const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
     const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
     const orientador = (App.currentUser?.displayName || App.currentUser?.email || 'ORIENTADOR').toUpperCase();
-    const turno = allGroups[0]?.turno || 'MATUTINO';
+    const turno = myGroups[0]?.turno || 'MATUTINO';
 
     if (format === 'pdf') {
-      // Genera HTML imprimible con TODOS los grupos del orientador
-      const html = buildOrientacionPrintHTML(orientador, allGroups, partial, partialLabel, cicloEscolar, turno);
+      const html = buildOrientacionPrintHTML(orientador, myGroups, partial, partialLabel, cicloEscolar, turno);
       const w = window.open('', '_blank');
       if (!w) { Toast.show('Permite ventanas emergentes para ver el PDF', 'warning'); return; }
       w.document.write(html);
@@ -2195,9 +2255,8 @@ html, body { margin:0; padding:0; height:100%; }
       return;
     }
 
-    // Excel: genera UN xlsx con todas las hojas del orientador
     Toast.show('Generando Excel…', 'info', 4000);
-    const spec = buildOrientacionWorkbookSpec(allGroups, partial, partialLabel, cicloEscolar, turno);
+    const spec = buildOrientacionWorkbookSpec(myGroups, partial, partialLabel, cicloEscolar, turno);
     const portada = {
       name: 'Portada',
       aoa: [
@@ -2206,8 +2265,8 @@ html, body { margin:0; padding:0; height:100%; }
         [`${partialLabel}   CICLO ${cicloEscolar}   TURNO ${turno}`],
         [],
         [`Orientador(a):`, orientador],
-        [`Grupos asignados:`, allGroups.map(g => g.nombre).join(', ')],
-        [`Total grupos:`, allGroups.length],
+        [`Grupos asignados:`, myGroups.map(g => g.nombre).join(', ')],
+        [`Total grupos:`, myGroups.length],
       ],
       cols: [{ wch: 22 }, { wch: 60 }]
     };
