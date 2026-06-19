@@ -154,6 +154,21 @@ const App = {
       console.log(`🎓 Academia: ${u.academiaGrado}° ${u.academiaTurno} ${u.academiaRol || 'sin rol'} — agregando 'presidente_academia' a roles efectivos`);
     }
 
+    // ═══ AUDITOR (rol aditivo) ═══
+    // Flag users.auditorScope=true permite ver indicadores/concentrados/F1/at-risk
+    // de TODA la escuela (ambos turnos) sin poder editar. Diseñado para usuarios
+    // como Jessica Alcántara que siguen siendo docentes (capturan SUS materias)
+    // pero supervisan el sistema completo. Admin/subdirector/directivo
+    // implícitamente son auditores también.
+    const isAuditor = u.auditorScope === true ||
+                      ['admin', 'subdirector', 'directivo'].includes(role);
+    if (isAuditor) {
+      effectiveRoles.add('auditor');
+      if (u.auditorScope === true && !['admin','subdirector','directivo'].includes(role)) {
+        console.log(`🔍 Auditor: flag auditorScope activo — acceso lectura global concedido`);
+      }
+    }
+
     // IMPORTANTE: usar match EXACTO contra cada rol listado en data-roles.
     // Antes se usaba `[data-roles*="orientador"]` (substring) que coincidía
     // con `orientador_docente` también — un orientador puro veía menús de
@@ -248,7 +263,297 @@ const App = {
     if (!role) return false;
     if (role === targetRole) return true;
     const inherited = (K.ROLE_INHERITS && K.ROLE_INHERITS[role]) || [];
-    return inherited.includes(targetRole);
+    if (inherited.includes(targetRole)) return true;
+    // Rol ADITIVO: 'presidente_academia'. No vive en users.role sino en los
+    // campos academiaGrado + academiaTurno. Cualquier docente con esos campos
+    // seteados puede actuar como presidente_academia ADEMÁS de su rol base.
+    // Misma lógica que applyRoleVisibility usa para mostrar el item del sidebar.
+    if (targetRole === 'presidente_academia') {
+      const u = this.currentUser || {};
+      if (u.academiaGrado && u.academiaTurno) return true;
+    }
+    // Rol ADITIVO: 'auditor'. Flag users.auditorScope = true permite lectura
+    // global (indicadores, concentrados, F1, dashboard de ambos turnos) sin
+    // poder editar nada ni generar boletas. Admin/subdirector/directivo
+    // implícitamente también auditan. Diseñado para usuarios como Jessica que
+    // siguen siendo docentes (capturan SUS materias) pero necesitan supervisar
+    // todo el sistema.
+    if (targetRole === 'auditor') {
+      const u = this.currentUser || {};
+      if (u.auditorScope === true) return true;
+      if (['admin', 'subdirector', 'directivo'].includes(role)) return true;
+    }
+    return false;
+  },
+
+  // ─── DEFAULT PARTIAL ──────────────────────────────────────────
+  // Cache local del "parcial actual de trabajo" para que TODOS los módulos
+  // (dashboard, indicadores, preboletas, cuadros de honor, captura, consultas,
+  // Mi Academia, etc.) abran por defecto en el mismo parcial — el más reciente
+  // capturado/abierto.
+  //
+  // Heurística:
+  //   1. Si hay un parcial NO locked (abierto) → ese es el actual en captura.
+  //   2. Si TODOS están locked → el de `closedAt` más reciente (último que
+  //      se trabajó).
+  //   3. Fallback: P2 (mitad del ciclo).
+  _defaultPartial: null,
+
+  /** Sync: lo último que se calculó. Llamar warmDefaultPartial() para refrescar. */
+  getDefaultPartial() {
+    if (this._defaultPartial) return this._defaultPartial;
+    // Si no hay cache, intentar leer de localStorage (persiste entre sesiones)
+    try {
+      const cached = localStorage.getItem('epo67_default_partial');
+      if (cached && ['P1', 'P2', 'P3'].includes(cached)) {
+        this._defaultPartial = cached;
+        return cached;
+      }
+    } catch (_) {}
+    return 'P2'; // fallback razonable
+  },
+
+  /** Async: refresca el default partial desde Firestore y lo cachea. */
+  async warmDefaultPartial() {
+    // Helper robusto para extraer ms de un valor que puede ser:
+    //   - Firestore Timestamp (objeto con .toDate())
+    //   - ISO string ("2026-05-20T18:03:46.014Z")
+    //   - Date directo
+    //   - Objeto plain {seconds, nanoseconds}
+    //   - null / undefined
+    // Sin este helper, el sort por fecha falla silenciosamente y la heurística
+    // cae al fallback (= P3 por mayor número), bug que reportó Sandra.
+    const _toMs = (v) => {
+      if (v == null) return 0;
+      try {
+        if (typeof v.toDate === 'function') return v.toDate().getTime();
+        if (v instanceof Date) return v.getTime();
+        if (typeof v === 'object' && typeof v.seconds === 'number') {
+          return v.seconds * 1000 + Math.floor((v.nanoseconds || 0) / 1e6);
+        }
+        const d = new Date(v);
+        const t = d.getTime();
+        return isNaN(t) ? 0 : t;
+      } catch (_) { return 0; }
+    };
+    try {
+      const partials = (typeof Store !== 'undefined' && Store.getPartials)
+        ? await Store.getPartials()
+        : [];
+      if (!partials || partials.length === 0) {
+        this._defaultPartial = 'P2';
+        try { localStorage.setItem('epo67_default_partial', 'P2'); } catch (_) {}
+        return 'P2';
+      }
+      const sorted = partials.slice().sort((a, b) => (b.numero || 0) - (a.numero || 0));
+      // 1. Parcial NO locked → en captura activa, ese es el actual
+      const open = sorted.find(p => !p.locked);
+      if (open) {
+        this._defaultPartial = open.id;
+        try { localStorage.setItem('epo67_default_partial', open.id); } catch (_) {}
+        return open.id;
+      }
+      // 2. Todos locked → el de closedAt más reciente
+      const withClosedAt = sorted.filter(p => _toMs(p.closedAt) > 0);
+      if (withClosedAt.length > 0) {
+        withClosedAt.sort((a, b) => _toMs(b.closedAt) - _toMs(a.closedAt));
+        const winner = withClosedAt[0].id;
+        this._defaultPartial = winner;
+        try { localStorage.setItem('epo67_default_partial', winner); } catch (_) {}
+        console.log(`[default-partial] winner=${winner} (closedAt más reciente entre cerrados)`);
+        return winner;
+      }
+      // 3. Fallback: usar P2 (mitad del ciclo, mejor que P3 que no se ha
+      // capturado nada todavía). Solo se llega aquí si Firestore no tiene
+      // closedAt en ningún partial.
+      this._defaultPartial = 'P2';
+      try { localStorage.setItem('epo67_default_partial', 'P2'); } catch (_) {}
+      return 'P2';
+    } catch (e) {
+      console.warn('warmDefaultPartial failed:', e);
+      return this._defaultPartial || 'P2';
+    }
+  },
+
+  // ─── STATUS DE EXTRAORDINARIO (Gaceta Oficial EPO 67) ────────
+  // Estados posibles (ESTRICTO — solo se confirma cuando la regla está
+  // CUMPLIDA matemáticamente; antes, solo se reporta como riesgo):
+  //
+  //   APROBADO       — 3 cals válidas, 0 reprobados (cumple)
+  //   APROBADO_REGLA — 3 cals válidas, 1 reprobado, promedio ≥ 6 (se salva)
+  //   EXTRA_CAL      — DEFINITIVO: 2+ parciales reprobados (no importa P3),
+  //                    o 3 cals con 1 reprobado y promedio < 6
+  //   EXTRA_FALTAS   — DEFINITIVO: 3 cals capturadas y >20% inasistencia
+  //   EXTRA_AMBAS    — DEFINITIVO: ambas causas
+  //   EN_RIESGO_CAL  — POTENCIAL: 1 reprobado pero aún faltan parciales por
+  //                    capturar — el alumno podría salvarse en P3
+  //   EN_RIESGO_FALTAS — POTENCIAL: ya superó 20% de inasistencia con los
+  //                      parciales actuales pero P3 no está capturado todavía
+  //   EN_CAPTURA     — Captura parcial sin reprobadas todavía (sin riesgo)
+  //   SIN_DATOS      — No hay ninguna cal capturada
+  //
+  // Regla de promedio: NO redondear hacia arriba si <6. 5.99 sigue siendo
+  // insuficiente para salvar a quien reprobó 1 parcial.
+  //
+  // Input:
+  //   grades3      = [gradeP1, gradeP2, gradeP3] — cualquiera puede ser null
+  //   hoursByPart  = { P1: hoursDoc, P2: hoursDoc, P3: hoursDoc } — opcional
+  //   passGrade    = umbral de aprobación (default 6)
+  //   umbralFaltas = % máximo de inasistencia permitido (default 20)
+  // Output: { estatus, causa, cals, reprobados, promedio, faltasTotal,
+  //           horasTotal, pctInasistencia }
+  calcStatusExtraordinario({ grades3 = [], hoursByPart = {}, passGrade = 6, umbralFaltas = 20 } = {}) {
+    const MESES = ['febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio'];
+
+    // 1. Extraer cals (cal o value)
+    const cals = [0, 1, 2].map(i => {
+      const g = grades3[i];
+      if (!g) return null;
+      const c = g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null);
+      return (c == null || isNaN(c)) ? null : c;
+    });
+
+    // 2. Contar parciales reprobados (con captura válida)
+    const reprobados = cals.filter(c => c != null && c < passGrade).length;
+    const parcialesReprobados = [];
+    cals.forEach((c, i) => {
+      if (c != null && c < passGrade) parcialesReprobados.push(`P${i + 1}=${c}`);
+    });
+
+    // 3. Promedio sin redondeo (regla EPO 67: <6 no se sube)
+    const valid = cals.filter(c => c != null);
+    const promedio = valid.length > 0
+      ? (valid.reduce((s, c) => s + c, 0) / valid.length)
+      : null;
+
+    // 4. Horas totales (semestrales — desde v8.32 las horas son SEMESTRALES y
+    // se replican en los 3 parciales P1/P2/P3 con el MISMO valor. NO sumar los
+    // 3 docs porque eso triplica el dato real. Tomar UN solo doc cualquiera.
+    let horasTotal = 0;
+    const hSemestral = hoursByPart.SEMESTRE || hoursByPart.P3 || hoursByPart.P2 || hoursByPart.P1;
+    if (hSemestral) {
+      MESES.forEach(m => { horasTotal += Number(hSemestral[m] || 0); });
+    }
+
+    // 5. Faltas totales (suma de los 3 parciales)
+    let faltasTotal = 0;
+    for (const g of grades3) {
+      if (g && g.faltas != null) faltasTotal += Number(g.faltas) || 0;
+    }
+
+    const pctInasistencia = horasTotal > 0 ? (faltasTotal * 100) / horasTotal : 0;
+    const tiene3Cals = valid.length === 3;
+
+    // 6. EVALUACIÓN INDEPENDIENTE DE LAS 3 REGLAS SEP (Gaceta Oficial EPO 67):
+    //   Regla 1 — PROMEDIO REPROBATORIO: promedio de los 3 parciales < 6.
+    //   Regla 2 — DOS PARCIALES REPROBADOS: 2 o más parciales < 6 (sin importar el promedio).
+    //   Regla 3 — INASISTENCIA > 20%: las faltas exceden el 20% de las horas impartidas.
+    // Las 3 reglas son INDEPENDIENTES. Cualquier alumno que cumpla UNA, DOS o LAS TRES
+    // pasa a extraordinario. Las calificaciones < 6 NO se redondean al alza (5.99 sigue
+    // siendo reprobatorio).
+    const reglasActivas = [];     // array con ['PROM_BAJO', 'DOS_REPROB', 'INASIST']
+    const causas = [];
+
+    // Regla 1: promedio < 6 (requiere los 3 parciales para evaluar el promedio final)
+    const reglaPromBajo = (tiene3Cals && promedio !== null && promedio < passGrade);
+    if (reglaPromBajo) {
+      reglasActivas.push('PROM_BAJO');
+      causas.push(`Promedio ${promedio.toFixed(2)} < ${passGrade} (regla SEP)`);
+    }
+
+    // Regla 2: dos o más parciales reprobados (sin importar promedio)
+    const reglaDosReprob = (reprobados >= 2);
+    if (reglaDosReprob) {
+      reglasActivas.push('DOS_REPROB');
+      causas.push(`${reprobados} parciales reprobados (${parcialesReprobados.join(', ')}) — regla SEP`);
+    }
+
+    // Regla 3: inasistencias > 20%
+    const reglaInasist = (horasTotal > 0 && pctInasistencia > umbralFaltas);
+    if (reglaInasist) {
+      reglasActivas.push('INASIST');
+      causas.push(`${faltasTotal} faltas / ${horasTotal}h = ${pctInasistencia.toFixed(1)}% (>${umbralFaltas}%)`);
+    }
+
+    // RIESGO: cuando aún no se puede evaluar definitivamente pero hay señales.
+    // Solo aplica cuando NO se cumple ninguna regla de EXTRA definitiva.
+    let isRiesgoCal = false;
+    let isRiesgoFaltas = false;
+    if (reglasActivas.length === 0) {
+      // Sin extra confirmado. Evaluar riesgos.
+      if (reprobados === 1 && !tiene3Cals) {
+        isRiesgoCal = true;
+        causas.push(`1 parcial reprobado (${parcialesReprobados[0]}) — en riesgo, falta capturar P3`);
+      }
+      if (horasTotal > 0 && pctInasistencia > umbralFaltas && !reglaInasist) {
+        // Imposible, ya cubierto arriba
+      } else if (horasTotal > 0 && pctInasistencia > (umbralFaltas - 5) && pctInasistencia <= umbralFaltas) {
+        // Acercándose al umbral (entre 15% y 20%)
+        isRiesgoFaltas = true;
+        causas.push(`${pctInasistencia.toFixed(1)}% inasistencia — en riesgo de extra por faltas`);
+      }
+    }
+
+    // 7. Compatibilidad con código viejo: derivar `estatus` clásico.
+    // EXTRA_CAL si activó regla 1 o 2; EXTRA_FALTAS si solo activó regla 3;
+    // EXTRA_AMBAS si activó (1 o 2) y 3 juntas.
+    const hayExtraCal = reglaPromBajo || reglaDosReprob;
+    const hayExtraFaltas = reglaInasist;
+    let estatus;
+    if (hayExtraCal && hayExtraFaltas) estatus = 'EXTRA_AMBAS';
+    else if (hayExtraCal)              estatus = 'EXTRA_CAL';
+    else if (hayExtraFaltas)           estatus = 'EXTRA_FALTAS';
+    else if (isRiesgoCal && isRiesgoFaltas) estatus = 'EN_RIESGO_AMBAS';
+    else if (isRiesgoCal)              estatus = 'EN_RIESGO_CAL';
+    else if (isRiesgoFaltas)           estatus = 'EN_RIESGO_FALTAS';
+    else if (valid.length === 0)       estatus = 'SIN_DATOS';
+    else if (!tiene3Cals)              estatus = 'EN_CAPTURA';
+    else if (reprobados === 1)         estatus = 'APROBADO_REGLA';
+    else                               estatus = 'APROBADO';
+
+    const isExtra = reglasActivas.length > 0;
+
+    return {
+      estatus,
+      isExtra,
+      isRiesgo: ['EN_RIESGO_AMBAS', 'EN_RIESGO_CAL', 'EN_RIESGO_FALTAS'].includes(estatus),
+      // NUEVO en v8.58: array con las reglas SEP activas para mostrar TODAS las causas
+      reglasActivas,
+      causa: causas.join('; ') || (estatus === 'APROBADO' || estatus === 'APROBADO_REGLA' ? 'Cumple la regla' : 'Aún sin riesgo'),
+      cals,
+      reprobados,
+      parcialesReprobados,
+      promedio,
+      faltasTotal,
+      horasTotal,
+      pctInasistencia,
+      tiene3Cals,
+    };
+  },
+
+  /**
+   * Determina el SEMESTRE CORRIENTE para un grado escolar, basado en la fecha
+   * actual. Calendario escolar de bachillerato:
+   *   - Agosto-enero → 1er semestre del ciclo → grados 1°, 3°, 5°
+   *   - Febrero-julio → 2do semestre del ciclo → grados 2°, 4°, 6°
+   *
+   * El "grado" del alumno (1, 2, 3) cursa dos semestres en su año escolar:
+   *   1er grado → semestres 1 (ago-ene) y 2 (feb-jul)
+   *   2do grado → semestres 3 y 4
+   *   3er grado → semestres 5 y 6
+   *
+   * Esto evita tener hardcoded "PRIMERO/TERCERO/QUINTO" en las boletas — el
+   * helper devuelve el correcto según mes del año.
+   *
+   * Retorna: { numero: 1..6, texto: 'PRIMERO'..'SEXTO' }
+   */
+  getCurrentSemester(grado) {
+    const g = Number(grado) || 1;
+    const month = new Date().getMonth() + 1; // 1-12
+    const esSegundoSemDelCiclo = month >= 2 && month <= 7; // feb-jul
+    const numSemestre = (g - 1) * 2 + (esSegundoSemDelCiclo ? 2 : 1);
+    const textos = ['', 'PRIMERO', 'SEGUNDO', 'TERCERO', 'CUARTO', 'QUINTO', 'SEXTO'];
+    return { numero: numSemestre, texto: textos[numSemestre] || 'PRIMERO' };
   },
 
   /**
@@ -289,11 +594,13 @@ const App = {
       'partial-close': 'Cierre de Parciales',
       'at-risk': 'Alumnos en Riesgo',
       'my-at-risk': 'Mis Alumnos en Riesgo',
+      'extraordinarios': 'Extraordinarios',
       reports: 'Reportes',
       'users-mgmt': 'Gestión de Usuarios',
       'honor-roll': 'Cuadros de Honor',
       'grades-admin': 'Consulta Calificaciones',
       'bitacora': 'Bitácora del Sistema',
+      'audit-data': 'Auditoría de Datos',
       'captura-progress': 'Monitor de Captura',
       'mi-academia': 'Mi Academia'
     };
@@ -388,6 +695,21 @@ const Auth = {
       this.showApp();
       App.applyRoleVisibility(App.currentUser.role);
 
+      // FIX (mayo 2026): si admin estaba viendo como otro usuario y
+      // refrescó, restaurar esa vista automaticamente. La función esta en
+      // users-mgmt.js — la llamamos defensivamente porque ese modulo carga
+      // con defer y puede que aun no exista al primer login.
+      try {
+        if (typeof UsersMgmt !== 'undefined' && typeof UsersMgmt.restoreImpersonationFromSession === 'function') {
+          UsersMgmt.restoreImpersonationFromSession().catch(() => {});
+        }
+      } catch (_) { /* no critico */ }
+
+      // Pre-cargar el "parcial default" (último capturado/abierto) para que
+      // todos los módulos abran en el mismo parcial sin tener que esperar
+      // queries adicionales. No await — corre en background.
+      App.warmDefaultPartial().catch(() => {});
+
       // Actualizar información del usuario en la UI
       this.updateUserUI();
 
@@ -399,8 +721,13 @@ const Auth = {
         setTimeout(() => this.syncEmailAliases({ silent: true }), 2000);
       }
 
-      // Restaurar la última ruta o ir al dashboard
-      const lastRoute = sessionStorage.getItem('epo67_lastRoute');
+      // v8.19: Restaurar la última ruta — usamos localStorage para sobrevivir
+      // CIERRE de navegador, refresh duro Cmd+Shift+R, y recarga del SW.
+      // Antes era sessionStorage (se borraba al cerrar tab).
+      // Fallback: si por alguna razón localStorage está vacío, leer sessionStorage
+      // por si quedó algo de versiones previas (migración suave).
+      const lastRoute = localStorage.getItem('epo67_lastRoute')
+        || sessionStorage.getItem('epo67_lastRoute');
       const target = (lastRoute && Router.modules[lastRoute]) ? lastRoute : 'dashboard';
       Router.navigate(target);
 
@@ -639,7 +966,9 @@ const Auth = {
       await auth.signOut();
       App.currentUser = null;
       Store.invalidateAll();
-      sessionStorage.removeItem('epo67_lastRoute');
+      // v8.19: limpiar ambos storages al cerrar sesión.
+      try { localStorage.removeItem('epo67_lastRoute'); } catch (_) {}
+      try { sessionStorage.removeItem('epo67_lastRoute'); } catch (_) {}
       this.showLoginScreen();
       Toast.show('Sesión cerrada', 'info');
       console.log('👋 Logout completado');
@@ -1195,30 +1524,47 @@ const Router = {
     'import-students': ['admin', 'subdirector', 'secretario_escolar'],
     'users-mgmt': ['admin'],     // gestión de usuarios SOLO admin
     'bitacora': ['admin', 'directivo', 'subdirector'],
+    'audit-data': ['admin', 'subdirector'],
     // ─── Direccion ───
     'grade-corrections': ['admin', 'directivo', 'subdirector'],
-    'honor-roll': ['admin', 'directivo', 'subdirector', 'orientador'],
+    'honor-roll': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
     // ─── Orientacion ───
+    // Auditor (rol aditivo): acceso DE LECTURA a concentrados/F1/indicadores/at-risk/honor-roll.
+    // Boletas y boleta-oficial NO incluyen 'auditor' — el auditor supervisa pero no imprime
+    // entregables oficiales a padres.
     'boletas': ['admin', 'directivo', 'subdirector', 'orientador'],
     'boleta-oficial': ['admin', 'directivo', 'subdirector', 'orientador'],
-    'concentrado': ['admin', 'directivo', 'subdirector', 'orientador'],
-    'at-risk': ['admin', 'directivo', 'subdirector', 'orientador'],
-    'student-profile': ['admin', 'directivo', 'subdirector', 'secretario_escolar', 'orientador', 'maestro'],
-    'reports': ['admin', 'directivo', 'subdirector', 'orientador'],
-    'reports-comparative': ['admin', 'directivo', 'subdirector', 'orientador'],
+    'concentrado': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
+    'at-risk': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
+    'student-profile': ['admin', 'directivo', 'subdirector', 'secretario_escolar', 'orientador', 'maestro', 'auditor'],
+    'reports': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
+    'reports-comparative': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
     // ─── Docentes ───
     // Subdirector: lectura completa de la seccion (NO captura grades — eso queda al maestro).
     // 'my-grades' (capturar calificaciones) queda fuera del menu para subdirector y directivo:
     // las firestore.rules bloquean writes a quien no sea admin o maestro-con-asignacion.
     'my-grades': ['admin', 'maestro', 'orientador_docente'],
-    'grades-admin': ['admin', 'directivo', 'subdirector', 'orientador', 'maestro'],
+    'grades-admin': ['admin', 'directivo', 'subdirector', 'orientador', 'maestro', 'auditor'],
     'my-lists': ['admin', 'directivo', 'subdirector', 'maestro'],
-    'my-f1': ['admin', 'directivo', 'subdirector', 'maestro', 'orientador_docente'],
-    'indicadores': ['admin', 'directivo', 'subdirector', 'orientador', 'maestro'],
+    'my-f1': ['admin', 'directivo', 'subdirector', 'maestro', 'orientador_docente', 'auditor'],
+    'indicadores': ['admin', 'directivo', 'subdirector', 'orientador', 'maestro', 'auditor'],
     'attendance': ['admin', 'directivo', 'subdirector', 'maestro'],
     'my-at-risk': ['admin', 'directivo', 'subdirector', 'maestro'],
+    // Extraordinarios: visible para TODOS los roles educativos. El módulo
+    // internamente aplica el scope correcto (maestro=sus materias,
+    // orientador=sus grupos, admin/directivo=todos).
+    'extraordinarios': ['admin', 'subdirector', 'directivo', 'secretario_escolar', 'secretario_admin', 'orientador', 'orientador_docente', 'maestro', 'presidente_academia', 'consulta'],
+    // Captura del examen extraordinario: solo quienes capturan calificaciones (maestros)
+    // y administrativos pueden modificar. Los demás roles consultan en boletas.
+    // 'examen-extraordinario' (módulo viejo) quedó deprecado al rediseñar
+    // Extraordinarios con captura inline. Solo admin puede entrar por URL
+    // directa (legacy). Para todos los demás, las firestore.rules siguen
+    // protegiendo igual si por algún medio acceden.
+    'examen-extraordinario': ['admin'],
     // Solicitud de cambio de calificacion (lado del maestro): siempre disponible
     'correction-request': ['admin', 'subdirector', 'maestro', 'orientador_docente'],
+    // Replicación de Calificaciones (orientadora SOLICITA, subdirección autoriza+aplica)
+    'replication-request': ['admin', 'subdirector', 'directivo', 'orientador', 'orientador_docente'],
     // Consulta de calificaciones (solo lectura, todos los roles que ven datos)
     'grades-query': ['admin', 'subdirector', 'directivo', 'secretario_admin', 'secretario_escolar', 'orientador', 'orientador_docente', 'maestro', 'consulta'],
     // ─── Academia (Presidente de Academia) ───
@@ -1252,9 +1598,12 @@ const Router = {
         }
       }
 
-      // Actualizar módulo actual y guardar para restaurar tras refresh
+      // Actualizar módulo actual y guardar para restaurar tras refresh.
+      // v8.19: localStorage para que sobreviva CIERRE de navegador + Cmd+Shift+R.
       this.currentModule = moduleName;
-      sessionStorage.setItem('epo67_lastRoute', moduleName);
+      try { localStorage.setItem('epo67_lastRoute', moduleName); } catch (_) {}
+      // Backup en sessionStorage para compat con código viejo que aún lo lea.
+      try { sessionStorage.setItem('epo67_lastRoute', moduleName); } catch (_) {}
 
       // Body class para CSS condicional (modo solo-lectura por rol+módulo)
       Array.from(document.body.classList).forEach(c => {
@@ -1534,7 +1883,9 @@ const Utils = {
    * @param {Object} [opts] - { keepEmpty: false (no mostrar option vacío si autoselect) }
    */
   restrictTurnoGradoOptions(allowedGroups, turnoSelectId, gradoSelectId, opts = {}) {
-    if (App.currentUser?.role === 'admin') return;
+    // Admin y subdirector ven TODAS las opciones (sin restricción de turno/grado).
+    const _r = App.currentUser?.role;
+    if (_r === 'admin' || _r === 'subdirector') return;
     if (!Array.isArray(allowedGroups) || allowedGroups.length === 0) return;
     const turnoSel = document.getElementById(turnoSelectId);
     const gradoSel = document.getElementById(gradoSelectId);
@@ -1678,6 +2029,27 @@ const Utils = {
   displayName(fullName) {
     const { apellidos, nombres } = this._parseName(fullName);
     return [...nombres, ...apellidos].join(' ');
+  },
+
+  /** v8.40: "APELLIDO1 APELLIDO2 NOMBRES" — formato oficial SEP para boletas,
+   *  solicitudes formales, F1, listas oficiales. Se llama 'oficial' porque es
+   *  el formato que pide la SEP en todos los documentos institucionales
+   *  (apellido paterno primero, luego materno, al final nombre/s).
+   *  Si el input YA viene en formato SEP (de teachers.nombre), lo respeta.
+   *  Si viene en formato cotidiano (users.displayName "Olivia Peña Ramírez"),
+   *  detecta y reordena correctamente. */
+  officialName(fullName) {
+    if (!fullName) return '';
+    // Heurística: si el primer token NO está en mayúsculas-acento (es decir, podría
+    // ser un nombre comun como "Olivia", "Maria") asumimos formato cotidiano.
+    // PERO: muchos nombres en BD vienen todo en mayúsculas, así que mejor confiar
+    // en _parseName que ya tiene la lógica correcta (asume APELLIDOS primero,
+    // que es el orden de la fuente autoritativa: teachers.nombre).
+    const { apellidos, nombres } = this._parseName(fullName);
+    // Si _parseName devolvió apellidos vacíos (input muy corto) o nombres con un
+    // solo token "raro", retornar tal cual.
+    if (apellidos.length === 0) return fullName.trim();
+    return [...apellidos, ...nombres].join(' ');
   },
 
   /**

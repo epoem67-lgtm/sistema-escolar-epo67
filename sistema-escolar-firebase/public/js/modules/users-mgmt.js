@@ -235,11 +235,24 @@ const UsersMgmt = (() => {
         ? '<span class="badge" style="background:#fef3c7;color:#78350f;border:1px solid #d97706;">🔒 Pendiente</span>'
         : '<span class="badge badge-success">✅ Configurada</span>';
 
+      // Badges ADITIVOS: presidente_academia y auditor son flags que SUMAN al
+      // role base. Los mostramos junto al chip de rol para que se vea claramente
+      // que el usuario tiene permisos extra.
+      const isAuditor = user.auditorScope === true;
+      const isAcademia = !!(user.academiaGrado && user.academiaTurno);
+      const adidaPills = [
+        isAuditor   ? '<span class="badge" style="background:#dbeafe;color:#1e40af;border:1px solid #3b82f6;font-size:10px;" title="Acceso lectura global a indicadores/concentrados/F1">🔍 Auditor</span>' : '',
+        isAcademia  ? `<span class="badge" style="background:#fce7f3;color:#9d174d;border:1px solid #ec4899;font-size:10px;" title="Presidente/Secretario de Academia ${user.academiaGrado}° ${user.academiaTurno}">🎓 Academia</span>` : '',
+      ].filter(Boolean).join(' ');
+
       return `
         <tr>
           <td class="font-semibold" style="font-size:13px;">${Utils.sanitize(user.displayName || '-')}</td>
           <td class="text-muted" style="font-size:12px;">${Utils.sanitize(user.email)}</td>
-          <td><span class="badge" style="background-color: ${roleColor}20; color: ${roleColor};">${Utils.sanitize(user.role)}</span></td>
+          <td>
+            <span class="badge" style="background-color: ${roleColor}20; color: ${roleColor};">${Utils.sanitize(user.role)}</span>
+            ${adidaPills ? '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;">' + adidaPills + '</div>' : ''}
+          </td>
           <td>${isActive ? '<span class="badge badge-success">Activo</span>' : '<span class="badge badge-danger">Inactivo</span>'}</td>
           <td>${pwdStatus}</td>
           <td class="text-muted" style="font-size:12px;">${Utils.sanitize(recoveryEmail) || '<em>—</em>'}</td>
@@ -256,6 +269,9 @@ const UsersMgmt = (() => {
               </button>
               <button class="user-icon-btn user-icon-role" data-action="edit-role" data-user-id="${user.id}" title="Editar rol" aria-label="Editar rol">
                 <span class="material-icons-round">badge</span>
+              </button>
+              <button class="user-icon-btn" data-action="toggle-auditor" data-user-id="${user.id}" title="${isAuditor ? 'Quitar acceso de auditor' : 'Otorgar acceso de auditor (lectura global)'}" aria-label="${isAuditor ? 'Quitar auditor' : 'Activar auditor'}" style="${isAuditor ? 'background:#dbeafe;color:#1e40af;' : 'background:#f1f5f9;color:#64748b;'}">
+                <span class="material-icons-round">${isAuditor ? 'visibility' : 'visibility_off'}</span>
               </button>
               <button class="user-icon-btn ${isActive ? 'user-icon-deactivate' : 'user-icon-activate'}" data-action="toggle-status" data-user-id="${user.id}" title="${isActive ? 'Desactivar usuario' : 'Activar usuario'}" aria-label="${isActive ? 'Desactivar usuario' : 'Activar usuario'}">
                 <span class="material-icons-round">${isActive ? 'block' : 'check_circle'}</span>
@@ -305,6 +321,7 @@ const UsersMgmt = (() => {
         case 'add-user': openAddUserModal(); break;
         case 'edit-role': editRole(userId); break;
         case 'toggle-status': toggleStatus(userId); break;
+        case 'toggle-auditor': toggleAuditor(userId); break;
         case 'force-change': forceChangePassword(userId); break;
         case 'reset-password': resetPasswordAdmin(userId); break;
         case 'impersonate': impersonateUser(userId); break;
@@ -519,7 +536,11 @@ const UsersMgmt = (() => {
     }, 100);
   }
 
-  function impersonateUser(userId) {
+  async function impersonateUser(userId) {
+    // Forzar refresh de la lista de usuarios para que `user.auditorScope`
+    // refleje el estado actual. Sin esto, si Olivia acaba de dar el flag
+    // auditor a Jessica y luego impersona, podría leer el cached user sin el flag.
+    try { users = await Store.getUsers(true); } catch (_) { /* sigue con cache */ }
     const user = users.find(u => u.id === userId);
     if (!user) return;
     if (!confirm(`Vista "Ver como": el sistema te mostrará lo que ${user.displayName || user.email} (rol: ${user.role}) puede ver.\n\nSe muestra una barra naranja arriba con un botón para volver a tu sesión normal. Tu sesión real NO se cierra ni se cambia.`)) return;
@@ -528,16 +549,35 @@ const UsersMgmt = (() => {
     if (!sessionStorage.getItem('_originalAdmin')) {
       sessionStorage.setItem('_originalAdmin', JSON.stringify(App.currentUser));
     }
+    // FIX (mayo 2026): guardar el UID impersonado para que sobreviva a refresh.
+    // Sin esto, el admin perdia el contexto al recargar y debia re-iniciar el
+    // proceso de impersonacion completo. Ahora app.js detecta este sessionStorage
+    // en el login flow y re-aplica la impersonacion automaticamente.
+    sessionStorage.setItem('_impersonatedUid', userId);
 
-    // Override App.currentUser con datos del target
+    // Override App.currentUser con datos del target.
+    // Importante: copiamos TODOS los campos ADITIVOS para que el sidebar y los
+    // módulos detecten correctamente los permisos extra del usuario impersonado:
+    //   - academiaGrado/Turno/Rol → sección Academia (12 presidentes/secretarios)
+    //   - auditorScope → sección Orientación + lectura global (auditores)
+    // Sin esto, applyRoleVisibility solo ve el rol base y oculta las secciones
+    // que dependen de flags aditivos.
     App.currentUser = {
       ...App.currentUser, // mantiene uid real, email auth real (para reglas Firestore)
       _impersonating: true,
       _realRole: App.currentUser.role,
       _realDisplay: App.currentUser.displayName,
+      _realAcademiaGrado: App.currentUser.academiaGrado,
+      _realAcademiaTurno: App.currentUser.academiaTurno,
+      _realAcademiaRol: App.currentUser.academiaRol,
+      _realAuditorScope: App.currentUser.auditorScope,
       role: user.role,
       teacherId: user.teacherId || '',
       displayName: user.displayName || user.email,
+      academiaGrado: user.academiaGrado != null ? user.academiaGrado : null,
+      academiaTurno: user.academiaTurno || null,
+      academiaRol: user.academiaRol || null,
+      auditorScope: user.auditorScope === true,
       _impersonatedUid: userId
     };
 
@@ -571,6 +611,86 @@ const UsersMgmt = (() => {
     Router.navigate('dashboard');
   }
 
+  /**
+   * Restaura una impersonacion guardada en sessionStorage al recargar la app.
+   * Llamada desde app.js despues de que App.currentUser se carga con el usuario REAL.
+   * Si no hay impersonacion guardada o el rol real no la permite, no hace nada.
+   */
+  async function restoreImpersonationFromSession() {
+    const impersonatedUid = sessionStorage.getItem('_impersonatedUid');
+    if (!impersonatedUid) return;
+    // Solo admin/subdirector pueden impersonar — si por alguna razon el rol real
+    // no esta entre esos, limpiamos el sessionStorage y salimos.
+    const realRole = App.currentUser?.role;
+    if (realRole !== 'admin' && realRole !== 'subdirector') {
+      sessionStorage.removeItem('_impersonatedUid');
+      sessionStorage.removeItem('_originalAdmin');
+      return;
+    }
+    try {
+      const doc = await db.collection('users').doc(impersonatedUid).get();
+      if (!doc.exists) {
+        sessionStorage.removeItem('_impersonatedUid');
+        return;
+      }
+      const target = { id: doc.id, ...doc.data() };
+      _applyImpersonationOverride(target, /*silent*/ true);
+      console.log('🔍 Impersonacion restaurada tras refresh:', target.displayName || target.email);
+    } catch (e) {
+      console.warn('No se pudo restaurar impersonacion:', e.message);
+      sessionStorage.removeItem('_impersonatedUid');
+    }
+  }
+
+  /**
+   * Aplica el override de App.currentUser para impersonar a `user`.
+   * Comparte la logica entre `impersonateUser` (nuevo) y `restoreImpersonationFromSession` (refresh).
+   * Si silent=true no muestra Toast ni hace Router.navigate (caso refresh).
+   */
+  function _applyImpersonationOverride(user, silent) {
+    // Override App.currentUser con datos del target.
+    App.currentUser = {
+      ...App.currentUser,
+      _impersonating: true,
+      _realRole: App.currentUser._realRole || App.currentUser.role,
+      _realDisplay: App.currentUser._realDisplay || App.currentUser.displayName,
+      _realAcademiaGrado: App.currentUser._realAcademiaGrado !== undefined ? App.currentUser._realAcademiaGrado : App.currentUser.academiaGrado,
+      _realAcademiaTurno: App.currentUser._realAcademiaTurno !== undefined ? App.currentUser._realAcademiaTurno : App.currentUser.academiaTurno,
+      _realAcademiaRol: App.currentUser._realAcademiaRol !== undefined ? App.currentUser._realAcademiaRol : App.currentUser.academiaRol,
+      _realAuditorScope: App.currentUser._realAuditorScope !== undefined ? App.currentUser._realAuditorScope : App.currentUser.auditorScope,
+      role: user.role,
+      teacherId: user.teacherId || '',
+      displayName: user.displayName || user.email,
+      academiaGrado: user.academiaGrado != null ? user.academiaGrado : null,
+      academiaTurno: user.academiaTurno || null,
+      academiaRol: user.academiaRol || null,
+      auditorScope: user.auditorScope === true,
+      _impersonatedUid: user.id
+    };
+    if (Store && typeof Store.invalidateAll === 'function') Store.invalidateAll();
+    App.applyRoleVisibility(user.role);
+    if (typeof App.updateUserUI === 'function') App.updateUserUI();
+
+    // Banner naranja
+    let banner = document.getElementById('impersonateBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'impersonateBanner';
+      banner.style.cssText = 'position:sticky;top:0;left:0;right:0;background:#d97706;color:#fff;padding:8px 16px;z-index:9999;display:flex;justify-content:space-between;align-items:center;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,0.2);';
+      document.body.insertBefore(banner, document.body.firstChild);
+    }
+    banner.innerHTML = `
+      <span>🔍 Viendo como <strong>${Utils.sanitize(user.displayName || user.email || '')}</strong> (rol: ${Utils.sanitize(user.role || '')}) — Tus permisos reales NO han cambiado, solo la vista UI</span>
+      <button class="btn btn-sm" onclick="UsersMgmt.stopImpersonation()" style="background:#fff;color:#d97706;font-weight:700;">Volver a mi sesión</button>
+    `;
+    banner.style.display = 'flex';
+
+    if (!silent) {
+      Toast.show(`Ahora ves como ${user.displayName || user.email}`, 'info');
+      Router.navigate('dashboard');
+    }
+  }
+
   function stopImpersonation() {
     const original = sessionStorage.getItem('_originalAdmin');
     if (original) {
@@ -579,6 +699,9 @@ const UsersMgmt = (() => {
       App.applyRoleVisibility(App.currentUser.role);
       if (typeof App.updateUserUI === 'function') App.updateUserUI();
     }
+    // FIX (mayo 2026): limpiar tambien el UID impersonado del sessionStorage
+    // para que el proximo refresh no reintente la impersonacion ya cerrada.
+    sessionStorage.removeItem('_impersonatedUid');
     // Limpiar cache para volver a leer con la identidad real
     if (Store && typeof Store.invalidateAll === 'function') {
       Store.invalidateAll();
@@ -933,6 +1056,37 @@ const UsersMgmt = (() => {
       Toast.show(`Estado cambiado a ${newStatus === 'active' ? 'activo' : 'inactivo'}`, 'success');
     } catch (error) {
       Toast.show('Error al actualizar estatus', 'error');
+    }
+  }
+
+  // ─── TOGGLE AUDITOR (rol aditivo) ─────────────────────────────
+  // Otorga/quita el flag users.auditorScope. NO toca el rol base — el usuario
+  // mantiene sus permisos de maestro/orientador/etc Y SUMA acceso lectura global
+  // a indicadores, concentrados, F1 y at-risk de ambos turnos. No genera boletas.
+  async function toggleAuditor(userId) {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+    const currently = user.auditorScope === true;
+    const action = currently ? 'QUITAR' : 'OTORGAR';
+    const confirmMsg = currently
+      ? `¿Quitar el acceso de AUDITOR a ${user.displayName || user.email}?\n\nPerderá la visibilidad de indicadores/concentrados/F1 de otros turnos. Mantiene su rol base (${user.role}).`
+      : `¿OTORGAR acceso de AUDITOR a ${user.displayName || user.email}?\n\nPodrá VER (solo lectura) indicadores, concentrados, F1 y at-risk de TODA la escuela en ambos turnos. NO podrá editar nada ni generar boletas.\n\nSu rol base (${user.role}) NO cambia.`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await DB.users().doc(userId).update({ auditorScope: !currently });
+      DB.audit('editar_usuario', 'usuario', userId, {
+        description: `Flag auditor de ${user.displayName || user.email} cambiado a ${!currently}`,
+        before: { auditorScope: currently },
+        after: { auditorScope: !currently }
+      });
+      Store.invalidate('users');
+      users = await Store.getUsers(true);
+      renderTable();
+      Toast.show(`Auditor ${action === 'OTORGAR' ? 'otorgado' : 'quitado'} a ${user.displayName || user.email}`, 'success');
+    } catch (error) {
+      console.error('toggleAuditor:', error);
+      Toast.show('Error al cambiar flag auditor: ' + error.message, 'error');
     }
   }
 
@@ -1514,7 +1668,7 @@ NO te frustres. Está hecho fácil. Te toma 5-10 minutos por grupo.
     }, 100);
   }
 
-  return { render, stopImpersonation };
+  return { render, stopImpersonation, restoreImpersonationFromSession };
 })();
 
 Router.modules['users-mgmt'] = () => UsersMgmt.render();
