@@ -23,6 +23,191 @@ const GradesModule = (function () {
   let selectedGroup = null;
   let selectedSubject = null;
   let currentPartial = 'P1';
+  // v8.10: grado del grupo actual (1, 2 ó 3) — usado por el banner de fechas
+  // críticas para resolver byGrade del config/captureWindow.
+  let _moduleCurrentGrado = null;
+  // Status de extraordinario/riesgo de cada alumno EN LA MATERIA actualmente
+  // seleccionada. Calculado al cargar el editor (loadGrades) y consumido por
+  // el banner de alertas en _renderGradeEditor.
+  let _statusByStudent = {};
+
+  /**
+   * Calcula el estatus (APROBADO / EN_RIESGO_* / EXTRA_*) de cada alumno en
+   * la materia actualmente seleccionada del editor. Carga las horas impartidas
+   * de los 3 parciales (teacherHours) para evaluar la regla de >20% faltas.
+   * Se llama en background — el render lee el resultado cuando esté listo.
+   * Si el cálculo falla, _statusByStudent queda vacío y simplemente no se
+   * muestra el banner (no rompe la captura).
+   */
+  // Estado adicional para el banner: qué parciales tienen horas capturadas
+  // y cuáles están cerrados. _statusByStudent se declaró arriba (línea ~29).
+  let _horasCapturadas = { P1: false, P2: false, P3: false };
+  let _parcialesCerrados = { P1: false, P2: false, P3: false };
+
+  async function _computeStatusForCurrentEditor(groupId, subjectId) {
+    _statusByStudent = {};
+    _horasCapturadas = { P1: false, P2: false, P3: false };
+    if (!groupId || !subjectId || !students.length) return;
+
+    // Cargar horas semestrales. Por compatibilidad puede existir el doc viejo
+    // por parcial (P1/P2/P3) o el nuevo doc canónico SEMESTRE. Para cálculo de
+    // riesgo se usa la mejor captura disponible en los tres parciales, porque
+    // las horas NO son tres capturas distintas.
+    const hoursByPart = {};
+    try {
+      if (window.db) {
+        const hourKeys = ['SEMESTRE', 'P3', 'P2', 'P1'];
+        const docs = await Promise.all(hourKeys.map(p => {
+          const docId = `${groupId}_${subjectId}_${p}`;
+          return window.db.collection('teacherHours').doc(docId).get()
+            .then(d => d.exists ? d.data() : null)
+            .catch(() => null);
+        }));
+        const MESES = ['febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio'];
+        const sumHoras = (data) => data ? MESES.reduce((s, m) => s + Number(data[m] || 0), 0) : 0;
+        let bestHours = null;
+        let bestTotal = 0;
+        docs.forEach(data => {
+          const total = sumHoras(data);
+          if (total > bestTotal) {
+            bestHours = data;
+            bestTotal = total;
+          }
+        });
+        ['P1', 'P2', 'P3'].forEach((p) => {
+          hoursByPart[p] = bestHours;
+          _horasCapturadas[p] = bestTotal > 0;
+        });
+      }
+      // Cargar también qué parciales están cerrados
+      const partials = await Store.getPartials(false);
+      ['P1', 'P2', 'P3'].forEach(pid => {
+        const pdoc = (partials || []).find(p => p.id === pid);
+        _parcialesCerrados[pid] = !!(pdoc && pdoc.locked);
+      });
+    } catch (_) {}
+
+    // Calcular estatus por alumno (con nombre para el banner)
+    const studByDocId = {};
+    students.forEach(s => { studByDocId[s.docId] = s; });
+    for (const stu of students) {
+      const sid = stu.docId;
+      const grades3 = [
+        grades[`${sid}_${subjectId}_P1`] || null,
+        grades[`${sid}_${subjectId}_P2`] || null,
+        grades[`${sid}_${subjectId}_P3`] || null,
+      ];
+      const st = App.calcStatusExtraordinario({ grades3, hoursByPart });
+      _statusByStudent[sid] = { ...st, studentName: stu.nombreCompleto || '' };
+    }
+    // Re-render el editor para mostrar el banner (la primera vez puede que
+    // ya esté renderizado sin los datos de status).
+    try {
+      const container = _container && _container();
+      if (container && container.querySelector('table')) {
+        const oldBanner = document.getElementById('ge-status-banner');
+        const newHtml = _renderStatusBanner();
+        if (oldBanner) oldBanner.outerHTML = newHtml;
+      }
+    } catch (_) {}
+  }
+
+  // REGLA EPO 67 (v8.01, revisada):
+  // Las horas impartidas son SEMESTRALES (febrero–julio) — no cambian entre
+  // parciales. Históricamente los maestros capturan TODOS los meses del
+  // semestre en UN SOLO doc (la auditoría mostró 213/214 docs solo en P2).
+  // El cálculo del % de inasistencias funciona perfecto con el total
+  // semestral, así que basta con que UN parcial tenga horas para considerar
+  // que el semestre está cubierto.
+  //
+  // ANTES: requería P1 && P2 && P3 (forzaba ENCADENAR), pero el sistema
+  // marcaba "falta capturar" aunque el maestro YA había capturado en P2.
+  // AHORA: si hay horas en CUALQUIER parcial, se considera capturado.
+  function _horasCompletasParaExtra() {
+    return _horasCapturadas.P1 || _horasCapturadas.P2 || _horasCapturadas.P3;
+  }
+
+  function _renderStatusBanner() {
+    const vals = Object.values(_statusByStudent);
+    if (vals.length === 0) return '<div id="ge-status-banner"></div>';
+
+    // Clasificación
+    const extraCalList    = vals.filter(s => s.estatus === 'EXTRA_CAL');
+    const extraFaltasList = vals.filter(s => s.estatus === 'EXTRA_FALTAS');
+    const extraAmbasList  = vals.filter(s => s.estatus === 'EXTRA_AMBAS');
+    const riesgoCalList    = vals.filter(s => s.estatus === 'EN_RIESGO_CAL');
+    const riesgoFaltasList = vals.filter(s => s.estatus === 'EN_RIESGO_FALTAS');
+    const riesgoAmbasList  = vals.filter(s => s.estatus === 'EN_RIESGO_AMBAS');
+
+    const horasOk = _horasCompletasParaExtra();
+    // Las horas son SEMESTRALES — basta con que UN parcial las tenga. El chip
+    // de alerta solo aparece cuando NINGÚN parcial tiene horas capturadas.
+    const parcialesSinHoras = horasOk ? [] : ['P1', 'P2', 'P3'].filter(pid => !_horasCapturadas[pid]);
+    const showFaltas = horasOk;
+
+    // Conteos para el chip principal
+    const totExtra = extraCalList.length + extraAmbasList.length + (showFaltas ? extraFaltasList.length : 0);
+    const totRiesgo = riesgoCalList.length + riesgoAmbasList.length + (showFaltas ? riesgoFaltasList.length : 0);
+
+    // Sin alertas y horas OK → chip verde compacto
+    if (totExtra === 0 && totRiesgo === 0 && horasOk) {
+      return `<div id="ge-status-banner" style="background:#dcfce7;border-left:3px solid #16a34a;padding:6px 12px;margin-bottom:10px;border-radius:5px;font-size:12px;color:#166534;">
+        ✓ Sin alertas — todos los alumnos cumplen la regla.
+      </div>`;
+    }
+
+    // Helpers para la sección expandible
+    const fmtName = (n) => Utils.displayName ? Utils.displayName(n) : (n || '');
+    const renderList = (list, color) => list.length === 0 ? '' :
+      `<ul style="margin:2px 0 6px 18px;padding:0;font-size:11.5px;color:${color};line-height:1.45;">
+        ${list.map(s => `<li><strong>${Utils.sanitize(fmtName(s.studentName))}</strong> <span style="color:#64748b;">— ${Utils.sanitize(s.causa || '')}</span></li>`).join('')}
+      </ul>`;
+
+    // Construir secciones (solo las que tienen contenido)
+    const secciones = [];
+    if (extraCalList.length)    secciones.push({ titulo: 'Extraordinario por calificación', list: extraCalList, color: '#991b1b' });
+    if (showFaltas && extraFaltasList.length) secciones.push({ titulo: 'Extraordinario por faltas', list: extraFaltasList, color: '#991b1b' });
+    if (showFaltas && extraAmbasList.length)  secciones.push({ titulo: 'Extraordinario por calificación y faltas', list: extraAmbasList, color: '#991b1b' });
+    if (!showFaltas && extraAmbasList.length) secciones.push({ titulo: 'Extraordinario por calificación', subtitulo: '(faltas no evaluadas)', list: extraAmbasList, color: '#991b1b' });
+    if (riesgoCalList.length)    secciones.push({ titulo: 'Riesgo de extraordinario por calificación', list: riesgoCalList, color: '#b45309' });
+    if (showFaltas && riesgoFaltasList.length) secciones.push({ titulo: 'Riesgo de extraordinario por faltas', list: riesgoFaltasList, color: '#b45309' });
+    if (showFaltas && riesgoAmbasList.length)  secciones.push({ titulo: 'Riesgo por calificación y faltas', list: riesgoAmbasList, color: '#b45309' });
+    if (!showFaltas && riesgoAmbasList.length) secciones.push({ titulo: 'Riesgo de extraordinario por calificación', subtitulo: '(faltas no evaluadas)', list: riesgoAmbasList, color: '#b45309' });
+
+    const detallesHtml = secciones.map(s => `
+      <div style="margin-top:6px;padding-top:6px;border-top:1px dashed #e2e8f0;">
+        <div style="font-size:12px;font-weight:700;color:${s.color};margin-bottom:2px;">
+          ${s.titulo} <span style="font-weight:400;color:#64748b;">(${s.list.length})</span>
+          ${s.subtitulo ? `<span style="font-weight:400;color:#94a3b8;font-size:11px;"> ${s.subtitulo}</span>` : ''}
+        </div>
+        ${renderList(s.list, s.color)}
+      </div>
+    `).join('');
+
+    // Chips de conteo (1 línea)
+    const chips = [];
+    if (totExtra > 0) chips.push(`<span style="background:#fee2e2;color:#991b1b;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;">🚨 ${totExtra} EXTRA</span>`);
+    if (totRiesgo > 0) chips.push(`<span style="background:#fef3c7;color:#92400e;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;">⚠️ ${totRiesgo} RIESGO</span>`);
+    if (!horasOk) chips.push(`<span style="background:#fef3c7;color:#92400e;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;">📅 falta capturar horas impartidas</span>`);
+
+    // Banner ULTRA COMPACTO: una sola línea, expandible
+    return `<div id="ge-status-banner" style="background:#fffbeb;border-left:3px solid #d97706;border-radius:5px;margin-bottom:10px;font-size:12px;">
+      <details>
+        <summary style="cursor:pointer;padding:6px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;list-style:none;">
+          <span style="font-weight:700;color:#78350f;">Alertas en esta materia:</span>
+          ${chips.join('')}
+          <span style="margin-left:auto;color:#78350f;font-size:11px;text-decoration:underline;">ver detalles ▾</span>
+        </summary>
+        <div style="padding:0 12px 8px;">
+          ${!horasOk ? `<div style="font-size:11px;color:#78350f;padding:4px 0 2px;line-height:1.45;">
+            <strong>Cómo desbloquear avisos por inasistencias:</strong> baja al panel naranja <strong>"Horas impartidas"</strong> al final de la lista y captura las horas del semestre (basta con un parcial — las horas son semestrales).
+          </div>` : ''}
+          ${detallesHtml}
+        </div>
+      </details>
+    </div>`;
+  }
+
   let students = [];
   let assignments = [];
   let grades = {};
@@ -68,13 +253,27 @@ const GradesModule = (function () {
         const ok = await _enforceIncidentsBeforeLeave('cambiar de lista');
         if (!ok) return;
 
+        // FIX (v7.83): antes de cambiar de lista, FLUSH del save pendiente.
+        // Asi no se pierde el cambio recien tecleado si el maestro pulso Enter
+        // y de inmediato cambio de materia/grupo (debounce de 3s no disparo).
         if (_isDirty) {
-          if (!confirm('Tienes cambios sin guardar en esta lista. ¿Cambiar de lista sin guardar?')) return;
+          await _flushAutoSaveAndWait();
+          if (_isDirty) {
+            // Si tras el flush sigue dirty (save fallo), preguntar
+            if (!confirm('Hubo un problema guardando. ¿Cambiar de lista sin guardar?')) return;
+          }
         }
         api.openGradeEditor(newAsgId, t.dataset.groupId, t.dataset.subjectId);
       }
-      else if (a === 'switch-partial') api.switchPartial(t.dataset.partial);
+      else if (a === 'switch-partial') {
+        // FIX (v7.83): flush antes de cambiar de parcial — mismo motivo.
+        if (_isDirty) {
+          await _flushAutoSaveAndWait();
+        }
+        api.switchPartial(t.dataset.partial);
+      }
       else if (a === 'save-grades') api.saveGrades();
+      else if (a === 'recover-local-draft') _manualRecoverLocalDraft();
       else if (a === 'refresh-from-server') api.refreshFromServer();
       else if (a === 'clear-grades-list') _confirmClearCurrentList();
       else if (a === 'back-to-list') {
@@ -84,8 +283,12 @@ const GradesModule = (function () {
         const ok = await _enforceIncidentsBeforeLeave('volver a la lista de grupos');
         if (!ok) return;
 
+        // FIX (v7.83): flush antes de salir — protege el cambio recien tecleado.
         if (_isDirty) {
-          if (!confirm('Tienes cambios sin guardar. ¿Deseas salir sin guardar?')) return;
+          await _flushAutoSaveAndWait();
+          if (_isDirty) {
+            if (!confirm('Hubo un problema guardando. ¿Deseas salir sin guardar?')) return;
+          }
         }
         _clearEditorState();
         api.renderTeacher();
@@ -140,7 +343,7 @@ const GradesModule = (function () {
       Toast.show('No hay listas para imprimir', 'warning');
       return;
     }
-    // BLOQUEO: si la lista actual tiene reprobados sin motivo, forzar captura
+    // BLOQUEO 1: si la lista actual tiene reprobados sin motivo, forzar captura
     // antes de imprimir. La lista impresa debe llevar TODOS los motivos.
     const ok = await _enforceIncidentsBeforeLeave('imprimir tus listas');
     if (!ok) return;
@@ -261,7 +464,7 @@ const GradesModule = (function () {
     const body = `
       <div style="font-size:13px;color:#374151;margin-bottom:12px;line-height:1.5;">
         Marca las listas que quieres incluir en el PDF del <strong>${Utils.sanitize(activeP.nombre)}</strong>.
-        Vas a obtener un solo documento con todas las listas que marques.
+        Solo se revisarán las listas marcadas; si necesitas una sola hoja, deja marcada únicamente esa.
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
         <div style="font-size:12px;color:#64748b;">
@@ -382,6 +585,14 @@ const GradesModule = (function () {
   // capturarla antes de cambiar de lista. Si captura, persiste y permite seguir.
   // Si cancela, NO permite el cambio.
   async function _enforceIncidentsBeforeLeave(actionLabel) {
+    // v8.33: NO bloqueamos nada por motivos de reprobación faltantes.
+    // Olivia: el sistema tenía bloqueos demasiado intrusivos que impedían
+    // a los maestros moverse entre listas o imprimir aunque la captura
+    // estuviera bien. Ahora esto es solo un retorno true (sin bloqueo).
+    // Si se necesita pedir motivos de reprobación, hay que hacerlo en un
+    // flujo dedicado, no como gate de cada acción.
+    return true;
+    // —— código viejo deshabilitado ——
     if (!_isTeacherCaptureRole() || _listCleared) return true;
     if (!selectedSubject || !selectedGroup) return true;
     try {
@@ -460,7 +671,9 @@ const GradesModule = (function () {
       // Para maestros, getStudents() es rechazado por las reglas. Usar query
       // filtrada por groupIds (los grupos del maestro) que sí está permitida.
       const role = App.currentUser?.role;
-      const fetchStudents = (role === 'admin' || role === 'orientador' || role === 'directivo')
+      // Roles con visibilidad global usan getStudents() (más eficiente).
+      // Subdirector cuenta como global (autoridad académica equivalente a admin).
+      const fetchStudents = (role === 'admin' || role === 'subdirector' || role === 'orientador' || role === 'directivo')
         ? Store.getStudents()
         : Store.getStudentsByGroups(groupIds);
 
@@ -514,9 +727,212 @@ const GradesModule = (function () {
     if (assignmentId) delete _assignmentStatusCache[assignmentId];
   }
 
-  /** Lista ordenada de asignaciones del maestro (matutino primero, luego por grado, grupo, materia). */
+  // ─── v8.32: VALIDACIÓN DE IMPRESIÓN ──────────────────────────────
+  // La impresión solo se bloquea si faltan alumnos por calificar. Las horas
+  // impartidas son semestrales y sirven para reportes/riesgo por faltas, pero
+  // NO deben impedir guardar ni imprimir una lista capturada.
+
+  /**
+   * Verifica si las asignaciones dadas están listas para imprimir.
+   * @param {Array<{id,groupId,subjectId,subjectName,groupName}>} asgs - asignaciones a validar
+   * @param {string} partialId - 'P1' | 'P2' | 'P3'
+   * @returns {Promise<{ok:boolean, issues:Array<{label,missingHours:Array<string>,missingStudents:number,total:number}>}>}
+   */
+  function _getCurrentEditorCompletionStat() {
+    const rows = [...document.querySelectorAll('tbody tr[data-student-id]')]
+      .filter(row => row.dataset.traslado !== '1');
+    if (rows.length === 0) return null;
+    const rubros = K.getRubros(currentTurno);
+    let filled = 0;
+
+    rows.forEach(row => {
+      const studentId = row.dataset.studentId;
+      const key = `${studentId}_${selectedSubject}_${currentPartial}`;
+      const stored = grades[key] || {};
+      const hasValue = rubros.some(r => {
+        const input = row.querySelector(`input[data-field="${r.key}"]`);
+        const raw = input ? input.value.trim() : '';
+        return raw !== '' || (stored[r.key] !== undefined && stored[r.key] !== null && stored[r.key] !== '');
+      });
+      if (hasValue || stored.cal !== undefined || stored.value !== undefined) filled++;
+    });
+
+    if (_listCleared) {
+      return { filled: rows.length, total: rows.length, status: 'complete', blankList: true };
+    }
+
+    return {
+      filled,
+      total: rows.length,
+      status: filled === rows.length && rows.length > 0 ? 'complete' : (filled > 0 ? 'partial' : 'empty'),
+      fromEditor: true
+    };
+  }
+
+  async function _validatePrintReadiness(asgs, partialId) {
+    if (!asgs || asgs.length === 0) return { ok: true, issues: [] };
+
+    // 1. Garantizar status cache fresco si las asignaciones a validar coinciden
+    // con _capAssignments (caso típico del editor maestro). Si vienen de fuera
+    // (admin, contexto cascada) el cache puede no contenerlas — abajo hay fallback.
+    const allInCap = asgs.every(a => _capAssignments.some(c => c.id === a.id));
+    if (allInCap && _assignmentStatusForPartial !== partialId) {
+      await _loadAssignmentStatuses(partialId);
+    }
+
+    // 2. Para cada asignación, leer teacherHours y validar calificaciones.
+    // Cuando no hay entry en _assignmentStatusCache, consultamos Firestore
+    // directamente (alumnos del grupo + grades del grupo+materia+parcial).
+    const checks = await Promise.all(asgs.map(async (a) => {
+      // Las horas ya no son bloqueo de impresión. Se dejan como arreglo vacío
+      // para conservar la estructura de retorno usada por el modal.
+      let missingHours = [];
+
+      // 2b. Alumnos calificados vs total
+      const isCurrentEditorList = partialId === currentPartial
+        && a.groupId === selectedGroup
+        && a.subjectId === selectedSubject;
+      let stat = isCurrentEditorList ? _getCurrentEditorCompletionStat() : null;
+      if (stat && stat.blankList) missingHours = [];
+      if (!stat) stat = _assignmentStatusCache[a.id];
+      if (!stat) {
+        // Fallback: query directo. Cuenta alumnos activos del grupo y grades
+        // con al menos un rubro o cal/value para esta materia y parcial.
+        try {
+          const [allStudents, allGrades] = await Promise.all([
+            Store.getStudentsByGroup ? Store.getStudentsByGroup(a.groupId) : Store.getStudentsByGroups([a.groupId]),
+            Store.getGradesByGroupAndPartial(a.groupId, partialId).catch(() => []),
+          ]);
+          const total = (allStudents || []).filter(s => !s.bajaPendiente).length;
+          const filled = new Set();
+          for (const g of (allGrades || [])) {
+            if (g.subjectId !== a.subjectId) continue;
+            const has = ['ec','tr','ex','pe','cal','value'].some(k =>
+              g[k] !== undefined && g[k] !== null && g[k] !== ''
+            );
+            if (has) filled.add(g.studentId);
+          }
+          stat = { filled: filled.size, total };
+        } catch (_) {
+          stat = { filled: 0, total: 0 };
+        }
+      }
+
+      return { asg: a, missingHours, stat };
+    }));
+
+    // v8.33: bloqueo de impresión SOLO por HORAS faltantes.
+    // Olivia: "no me pongas bloqueos por alumnos sin captura, eso ya queda a
+    // responsabilidad del maestro." El único bloqueo real es por horas porque
+    // SIN horas, el cálculo de % faltas (y por tanto reprobados por inasistencias)
+    // queda mal y eso sí compromete la integridad de la lista oficial.
+    const issues = [];
+    for (const { asg, missingHours, stat } of checks) {
+      const hasIssues = missingHours.length > 0;
+      if (hasIssues) {
+        const subjectName = K.getUACNombre(asg.subjectName || asg.subjectId);
+        const label = `${asg.groupName || asg.groupId} · ${subjectName}`;
+        const missingStudents = Math.max(0, (stat.total || 0) - (stat.filled || 0));
+        issues.push({ assignmentId: asg.id, label, missingHours, missingStudents, total: stat.total || 0 });
+      }
+    }
+
+    return { ok: issues.length === 0, issues };
+  }
+
+  /**
+   * Muestra modal explicando por qué no se puede imprimir y bloquea.
+   * Si el usuario es admin/subdirector, ofrece botón "Imprimir de todas formas".
+   * Devuelve true si el flujo de impresión debe continuar, false si se cancela.
+   */
+  async function _enforcePrintReadiness(asgs, partialId, actionLabel, options = {}) {
+    const res = await _validatePrintReadiness(asgs, partialId);
+    if (res.ok) return true;
+    try { _saveDraft(); } catch (_) { /* no bloquear el modal por el respaldo local */ }
+
+    const isAdmin = _hasAdminPower();
+    const issueIds = new Set(res.issues.map(it => it.assignmentId));
+    const readyOnlyIds = (asgs || []).filter(a => !issueIds.has(a.id)).map(a => a.id);
+
+    // v8.33: el bloqueo es SOLO por horas — el mensaje refleja eso.
+    const listasConHorasFaltantes = res.issues.length;
+
+    const puntos = [];
+    if (listasConHorasFaltantes > 0) {
+      const txt = listasConHorasFaltantes === 1
+        ? `Te faltan capturar las <strong>horas del semestre</strong> en esta materia`
+        : `Te faltan capturar las <strong>horas del semestre</strong> en <strong>${listasConHorasFaltantes}</strong> listas`;
+      puntos.push(`<li style="margin-bottom:8px;">⏱ ${txt}.</li>`);
+    }
+    const detalles = res.issues.slice(0, 6).map(it => {
+      return `<li>${Utils.sanitize(it.label)}</li>`;
+    }).join('');
+    const extra = res.issues.length > 6
+      ? `<li>Y ${res.issues.length - 6} lista(s) más.</li>`
+      : '';
+
+    const adminBtn = isAdmin
+      ? `<button class="btn" id="print-force-btn" style="background:#d97706;color:#fff;border:none;font-weight:700;">Imprimir de todas formas</button>`
+      : '';
+    const readyOnlyBtn = options.allowReadyOnly && readyOnlyIds.length > 0
+      ? `<button class="btn btn-primary" id="print-ready-only-btn" style="background:#16a34a;border-color:#15803d;">Imprimir solo completas (${readyOnlyIds.length})</button>`
+      : '';
+
+    const body = `
+      <div style="font-size:15px;line-height:1.6;color:#1e293b;">
+        <div style="background:#fee2e2;border-left:4px solid #dc2626;padding:14px;border-radius:6px;margin-bottom:14px;">
+          <strong style="color:#991b1b;font-size:15px;">No puedes imprimir todavía.</strong>
+        </div>
+        <ul style="margin:0 0 0 22px;padding:0;">
+          ${puntos.join('')}
+        </ul>
+        <details style="margin-top:12px;font-size:12.5px;color:#475569;">
+          <summary style="cursor:pointer;font-weight:700;">Ver listas pendientes</summary>
+          <ul style="margin:8px 0 0 18px;padding:0;">
+            ${detalles}${extra}
+          </ul>
+        </details>
+        <p style="margin-top:14px;font-size:12.5px;color:#64748b;">
+          No se borra ninguna captura. Puedes cerrar este aviso, corregir lo pendiente o imprimir solo una hoja que sí esté completa.
+        </p>
+      </div>`;
+
+    const footer = `
+      <button class="btn btn-outline" data-action="modal-cancel">Cerrar</button>
+      ${readyOnlyBtn}
+      ${adminBtn}`;
+
+    return new Promise((resolve) => {
+      Modal.open('⚠ Faltan datos para imprimir', body, footer);
+      const mf = document.getElementById('modalFooter');
+      if (!mf) { resolve(false); return; }
+      mf.addEventListener('click', (e) => {
+        if (e.target.closest('[data-action="modal-cancel"]')) { Modal.close(); resolve(false); return; }
+        if (e.target.closest('#print-ready-only-btn')) {
+          Modal.close();
+          resolve({ readyOnlyIds });
+          return;
+        }
+        if (e.target.closest('#print-force-btn')) {
+          Modal.close();
+          Toast.show('Imprimiendo con override administrativo — lista incompleta', 'warning');
+          resolve(true);
+        }
+      });
+    });
+  }
+
+  /** Lista ordenada de asignaciones del maestro: turno → grado → grupo → orden SEP de materias. */
   function _orderedAssignments() {
     const turnoOrd = { 'MATUTINO': 1, 'VESPERTINO': 2, 'AMBOS': 3 };
+    const _norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+    const _sepIndex = (subjectName, grado) => {
+      const order = K.SUBJECT_ORDER[Number(grado)] || [];
+      if (order.length === 0) return 999;
+      const n = _norm(subjectName);
+      const idx = order.findIndex(o => _norm(o) === n || n.includes(_norm(o)) || _norm(o).includes(n));
+      return idx === -1 ? 999 : idx;
+    };
     return [..._capAssignments].sort((a, b) => {
       const ta = turnoOrd[(a.turno || '').toUpperCase()] || 9;
       const tb = turnoOrd[(b.turno || '').toUpperCase()] || 9;
@@ -526,6 +942,10 @@ const GradesModule = (function () {
       if (ga !== gb) return ga - gb;
       const gna = (a.groupName || '').localeCompare(b.groupName || '');
       if (gna !== 0) return gna;
+      // Mismo grupo: ordenar materias por SEP del grado en lugar de alfabético.
+      const ia = _sepIndex(a.subjectName, a.grado);
+      const ib = _sepIndex(b.subjectName, b.grado);
+      if (ia !== ib) return ia - ib;
       return (a.subjectName || '').localeCompare(b.subjectName || '');
     });
   }
@@ -555,69 +975,41 @@ const GradesModule = (function () {
     const prevLabel = prev ? `${prev.groupName || ''} ${K.getUACNombre(prev.subjectName || '').slice(0, 28)}` : 'Sin anterior';
     const nextLabel = next ? `${next.groupName || ''} ${K.getUACNombre(next.subjectName || '').slice(0, 28)}` : 'Última lista';
 
-    const navHint = `
-      <div style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:2px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;">
-        <span class="material-icons-round" style="font-size:30px;color:#b45309;flex-shrink:0;">swap_horiz</span>
-        <div style="flex:1;font-size:14px;color:#78350f;line-height:1.4;">
-          <strong>Tienes ${ordered.length} listas en total.</strong> Usa los botones <strong style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #b45309;">◀ ANTERIOR</strong> y <strong style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #b45309;">SIGUIENTE ▶</strong> de abajo para moverte entre ellas — tu trabajo NO se pierde al cambiar.
-        </div>
-      </div>`;
-
+    // Navegación COMPACTA: una sola fila con ◀ [posición + dropdown] ▶
     const nav = `
-      <div class="ge-nav ge-nav-pulse" style="display:flex;align-items:stretch;gap:12px;flex-wrap:wrap;background:#f8fafc;padding:14px;border-radius:10px;margin-top:8px;border:2px dashed #94a3b8;">
-        <button class="btn btn-primary ge-nav-prev" ${!prev ? 'disabled' : ''}
+      <div style="display:flex;align-items:center;gap:8px;background:#f1f5f9;padding:8px 10px;border-radius:8px;margin-bottom:10px;flex-wrap:wrap;">
+        <button class="btn btn-sm btn-primary" ${!prev ? 'disabled' : ''}
           data-action="switch-assignment"
           data-assignment-id="${prev?.id || ''}"
           data-group-id="${prev?.groupId || ''}"
           data-subject-id="${prev?.subjectId || ''}"
-          title="${prev ? 'Ir a la lista anterior: ' + Utils.sanitize(prevLabel) : 'Ya estás en la primera lista'}"
-          style="display:flex;align-items:center;gap:10px;padding:14px 18px;text-align:left;flex:1;min-width:220px;max-width:320px;font-size:14px;">
-          <span style="font-size:28px;line-height:1;font-weight:700;">◀</span>
-          <span style="display:flex;flex-direction:column;align-items:flex-start;line-height:1.2;">
-            <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;opacity:0.9;">Anterior</span>
-            <span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px;">${Utils.sanitize(prevLabel)}</span>
-          </span>
-        </button>
+          title="${prev ? 'Anterior: ' + Utils.sanitize(prevLabel) : 'Primera lista'}"
+          style="padding:6px 10px;font-size:13px;font-weight:700;">◀ Anterior</button>
 
-        <div style="flex:0 0 auto;text-align:center;padding:10px 14px;background:#3182ce;color:#fff;border-radius:8px;font-weight:700;display:flex;flex-direction:column;justify-content:center;">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.85;">Lista actual</div>
-          <div style="font-size:16px;margin-top:2px;">${idx + 1} de ${ordered.length}</div>
-          <div style="font-size:11px;opacity:0.92;margin-top:2px;">${Utils.sanitize(currentLabel)}</div>
-        </div>
+        <span style="background:#3182ce;color:#fff;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;white-space:nowrap;">${idx + 1}/${ordered.length}</span>
 
-        <button class="btn btn-primary ge-nav-next" ${!next ? 'disabled' : ''}
+        <select id="assignment-jump" aria-label="Cambiar de lista" style="flex:1;min-width:180px;font-size:13px;padding:6px 8px;">${options}</select>
+
+        <button class="btn btn-sm btn-primary" ${!next ? 'disabled' : ''}
           data-action="switch-assignment"
           data-assignment-id="${next?.id || ''}"
           data-group-id="${next?.groupId || ''}"
           data-subject-id="${next?.subjectId || ''}"
-          title="${next ? 'Ir a la siguiente lista: ' + Utils.sanitize(nextLabel) : 'Ya estás en la última lista'}"
-          style="display:flex;align-items:center;gap:10px;padding:14px 18px;text-align:right;flex:1;min-width:220px;max-width:320px;justify-content:flex-end;font-size:14px;">
-          <span style="display:flex;flex-direction:column;align-items:flex-end;line-height:1.2;">
-            <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;opacity:0.9;">Siguiente</span>
-            <span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px;">${Utils.sanitize(nextLabel)}</span>
-          </span>
-          <span style="font-size:28px;line-height:1;font-weight:700;">▶</span>
-        </button>
+          title="${next ? 'Siguiente: ' + Utils.sanitize(nextLabel) : 'Última lista'}"
+          style="padding:6px 10px;font-size:13px;font-weight:700;">Siguiente ▶</button>
+
+        <details style="font-size:11px;color:#475569;">
+          <summary style="cursor:pointer;">⓵ Leyenda</summary>
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+            <span class="ge-status-pill ge-status-complete">Completa</span>
+            <span class="ge-status-pill ge-status-partial">En captura</span>
+            <span class="ge-status-pill ge-status-empty">Sin captura</span>
+          </div>
+        </details>
       </div>`;
 
     return `
       <div class="ge-tabs-container ge-assignment-nav">
-        ${navHint}
-        <div class="ge-assignment-nav-header">
-          <div>
-            <h3 style="font-size:15px;font-weight:700;color:#1e293b;display:flex;align-items:center;gap:6px;">
-              <span class="material-icons-round" style="font-size:20px;color:#3182ce;">list_alt</span>
-              Cambiar de lista
-            </h3>
-            <p>O escoge directo de este menú; el avance indica cuántos alumnos ya tienen captura en este parcial.</p>
-          </div>
-          <select id="assignment-jump" aria-label="Cambiar de lista">${options}</select>
-        </div>
-        <div class="ge-status-legend">
-          <span class="ge-status-pill ge-status-complete">Completa: todos los alumnos tienen captura</span>
-          <span class="ge-status-pill ge-status-partial">En captura: faltan alumnos por capturar</span>
-          <span class="ge-status-pill ge-status-empty">Sin captura: todavía no hay registros</span>
-        </div>
         ${nav}
       </div>`;
   }
@@ -664,7 +1056,7 @@ const GradesModule = (function () {
           <div class="bulk-print-actions">
             <select id="bulk-print-partial" aria-label="Parcial para imprimir">${partialOptions}</select>
             <button class="btn btn-outline" data-action="print-selected-assignments">
-              <span class="material-icons-round">download</span> Solo las marcadas
+              <span class="material-icons-round">download</span> Solo marcadas (puede ser 1)
             </button>
             <button class="btn btn-warning" data-action="print-all-assignments" style="background:#d97706;color:#fff;border:none;">
               <span class="material-icons-round">picture_as_pdf</span> Obtener TODAS en un PDF
@@ -692,12 +1084,16 @@ const GradesModule = (function () {
 
     container.innerHTML = UI.moduleContainer(UI.loadingState('Cargando asignaciones...'));
     const role = App.currentUser?.role;
-    const isAdmin = role === 'admin';
+    // Subdirector tiene autoridad académica igual que admin (puede capturar para cualquiera).
+    const isAdmin = role === 'admin' || role === 'subdirector';
 
     try {
-      // Para maestros, getMyAssignments hace una query con where('teacherId','==', myId)
-      // que respeta las firestore.rules. Para admin, retorna todas.
-      _capAssignments = await Store.getMyAssignments();
+      // v8.09: para captura usamos getOwnAssignments() STRICT — devuelve SOLO
+      // las assignments donde teacherId==este user, ignorando auditorScope y
+      // presidente_academia. Solo admin/subdirector ven el universo completo.
+      _capAssignments = isAdmin
+        ? await Store.getAssignments()
+        : await Store.getOwnAssignments();
       if (!isAdmin && _capAssignments.length === 0) {
         // Verificar si el problema es falta de vínculo o que no tiene asignaciones
         const teacherDocId = await Store.getTeacherDocId();
@@ -708,7 +1104,7 @@ const GradesModule = (function () {
       }
 
       // Deep-link desde dashboard O restauración tras refresh: el editor
-      // guarda su estado en sessionStorage. Si hay un target válido (asignación
+      // guarda su estado en localStorage. Si hay un target válido (asignación
       // del maestro), reabrimos el editor directamente.
       const pendingOrSaved = _pendingOpen || _readEditorState();
       if (!isAdmin && pendingOrSaved) {
@@ -718,13 +1114,37 @@ const GradesModule = (function () {
         );
         _pendingOpen = null;
         if (target) {
-          if (pendingOrSaved.partial) currentPartial = pendingOrSaved.partial;
+          // v8.24 FIX: solo respetar el partial guardado si SIGUE ABIERTO para
+          // el grado del maestro. Si está cerrado (caso típico: capturó P1 hace
+          // semanas, ahora P1 está cerrado y P2 está abierto), descartar el
+          // partial guardado y dejar que openGradeEditor auto-detecte el primer
+          // abierto. Antes: el maestro siempre caía en P1 cerrado porque era
+          // lo último guardado, aunque P2 estuviera abierto.
+          let shouldPreserve = false;
+          if (pendingOrSaved.partial) {
+            try {
+              const partials = await Store.getPartials(true);
+              const myGrado = K.gradeFromGroupId(target.groupId);
+              const pdoc = (partials || []).find(p => p.id === pendingOrSaved.partial);
+              const lockedForMe = K.isPartialLockedForGrade(pdoc, myGrado);
+              if (!lockedForMe) {
+                currentPartial = pendingOrSaved.partial;
+                shouldPreserve = true;
+              } else {
+                // Limpiar el partial obsoleto del estado guardado
+                currentPartial = '';
+              }
+            } catch (_) {
+              // Si la validación falla por cualquier motivo, respetar lo guardado
+              currentPartial = pendingOrSaved.partial;
+              shouldPreserve = true;
+            }
+          }
           assignments = _capAssignments;
-          // preservePartial=true porque ya fijamos currentPartial arriba con el
-          // valor guardado. Si NO pasamos el flag, openGradeEditor lo resetearía
-          // al primer parcial abierto y el maestro acabaría en una pantalla
-          // distinta a la que tenía abierta antes del refresh.
-          api.openGradeEditor(target.id, target.groupId, target.subjectId, { preservePartial: true });
+          // preservePartial=true SOLO si el parcial guardado sigue abierto.
+          // Cuando es false, openGradeEditor hace el auto-detect (v8.13) que
+          // busca el primer parcial NO bloqueado para el grado del maestro.
+          api.openGradeEditor(target.id, target.groupId, target.subjectId, { preservePartial: shouldPreserve });
           return;
         }
         // Estado obsoleto (cambió la asignación, fue revocada, etc.): limpiar.
@@ -867,11 +1287,18 @@ const GradesModule = (function () {
         return;
       }
       const filtered = _capAssignments.filter(a => a.groupId === groupId);
-      filtered.sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
+      // Orden oficial SEP del grado en lugar de alfabético.
+      // Cada asignación expone subjectName; envolvemos en {nombre} para que el
+      // helper de constants.js pueda compararlo correctamente.
+      const _gradeNum = Number(grado);
+      const sortedAsgs = K.sortSubjectsByGrado(
+        filtered.map(a => ({ ...a, nombre: a.subjectName || a.subjectId })),
+        _gradeNum
+      );
       materiaEl.innerHTML = '<option value="">Selecciona materia</option>' +
-        filtered.map(a => `<option value="${a.subjectId}">${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId))}</option>`).join('');
+        sortedAsgs.map(a => `<option value="${a.subjectId}">${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId))}</option>`).join('');
       materiaEl.disabled = false;
-      if (filtered.length === 1) { materiaEl.value = filtered[0].subjectId; materiaEl.dispatchEvent(new Event('change')); }
+      if (sortedAsgs.length === 1) { materiaEl.value = sortedAsgs[0].subjectId; materiaEl.dispatchEvent(new Event('change')); }
     });
 
     materiaEl.addEventListener('change', () => {
@@ -920,35 +1347,41 @@ const GradesModule = (function () {
   // TEACHER — GRADE EDITOR con rubros
   // ═══════════════════════════════════════════════════════════════
 
-  // Clave en sessionStorage para que un refresh devuelva al maestro al
-  // editor exacto donde estaba (no a la cascada). Se limpia solo cuando
-  // el usuario explícitamente sale con "Salir sin guardar" / Volver.
+  // v8.19: localStorage para que el editor exacto sobreviva al CIERRE de
+  // navegador y al refresh duro Cmd+Shift+R — antes era sessionStorage.
+  // Se limpia solo cuando el usuario explícitamente sale con "Volver".
   const _EDITOR_STATE_KEY = 'epo67_editorState';
   function _saveEditorState(assignmentId, groupId, subjectId) {
-    try {
-      sessionStorage.setItem(_EDITOR_STATE_KEY, JSON.stringify({
-        assignmentId, groupId, subjectId, partial: currentPartial
-      }));
-    } catch (_) { /* sessionStorage puede fallar en private mode; no es crítico */ }
+    const payload = JSON.stringify({
+      assignmentId, groupId, subjectId, partial: currentPartial
+    });
+    try { localStorage.setItem(_EDITOR_STATE_KEY, payload); } catch (_) {}
+    // Backup en sessionStorage para compat con código viejo.
+    try { sessionStorage.setItem(_EDITOR_STATE_KEY, payload); } catch (_) {}
   }
   function _readEditorState() {
     try {
-      const raw = sessionStorage.getItem(_EDITOR_STATE_KEY);
+      const raw = localStorage.getItem(_EDITOR_STATE_KEY)
+        || sessionStorage.getItem(_EDITOR_STATE_KEY);
       return raw ? JSON.parse(raw) : null;
     } catch (_) { return null; }
   }
   function _clearEditorState() {
-    try { sessionStorage.removeItem(_EDITOR_STATE_KEY); } catch (_) { /* */ }
+    try { localStorage.removeItem(_EDITOR_STATE_KEY); } catch (_) {}
+    try { sessionStorage.removeItem(_EDITOR_STATE_KEY); } catch (_) {}
   }
 
   // ¿El usuario tiene poder de admin REAL? Considera el caso de impersonación:
   // si admin está usando "Ver como" otro usuario, su rol REAL sigue siendo admin
   // y debe poder escribir sin restricciones aunque la UI muestre rol falso.
+  // El SUBDIRECTOR también tiene "admin power" (autoridad académica equivalente,
+  // puede capturar/corregir sin restricción igual que admin — petición directa
+  // de Olivia: el profe Octavio no tiene ninguna limitación).
   function _hasAdminPower() {
     const u = App.currentUser;
     if (!u) return false;
-    if (u.role === 'admin') return true;
-    if (u._impersonating === true && u._realRole === 'admin') return true;
+    if (u.role === 'admin' || u.role === 'subdirector') return true;
+    if (u._impersonating === true && (u._realRole === 'admin' || u._realRole === 'subdirector')) return true;
     return false;
   }
 
@@ -986,9 +1419,10 @@ const GradesModule = (function () {
     try {
       // Para maestros, getStudents() global es rechazado por reglas. Usar query
       // filtrada por groupId (que sí está permitida porque el maestro tiene
-      // assignment de ese grupo). Para admin/orientador/directivo, usar global.
+      // assignment de ese grupo). Para admin/subdirector/orientador/directivo,
+      // usar global (visibilidad total).
       const role = App.currentUser?.role;
-      const fetchStudents = (role === 'admin' || role === 'orientador' || role === 'directivo')
+      const fetchStudents = (role === 'admin' || role === 'subdirector' || role === 'orientador' || role === 'directivo')
         ? Store.getStudents()
         : Store.getStudentsByGroup(groupId);
 
@@ -1025,12 +1459,20 @@ const GradesModule = (function () {
       //   - currentPartial vacío (primera carga): siempre resetea
       const shouldResetPartial = !preservePartial && (assignmentId || !currentPartial);
       if (shouldResetPartial) {
+        // v8.13: usar isPartialLockedForGrade — la apertura/cierre puede ser
+        // PARCIAL POR GRADO (admin abrió P2 solo para 3°). El maestro de 3°
+        // debe entrar a P2 (abierto para él), no a P1 (cerrado globalmente).
+        // Antes solo miraba doc.locked plano, ignorando lockedByGrade.
+        const myGrado = K.gradeFromGroupId(groupId);
         const sorted = K.PARCIALES.map(kp => {
           const doc = partials.find(p => p.id === kp.id);
-          return { id: kp.id, locked: doc ? (doc.locked || false) : false };
+          return { id: kp.id, locked: K.isPartialLockedForGrade(doc, myGrado) };
         });
         const open = sorted.find(p => !p.locked);
-        currentPartial = open ? open.id : 'P1';
+        // Si hay parcial abierto PARA MI GRADO, usar ese (en captura activa).
+        // Si todos están cerrados, usar el último capturado (App.getDefaultPartial),
+        // así el maestro entra directo al parcial donde más recientemente trabajó.
+        currentPartial = open ? open.id : (App.getDefaultPartial() || 'P1');
       }
 
       // Filter grades to this subject only (already cached per-group)
@@ -1039,6 +1481,12 @@ const GradesModule = (function () {
         const key = `${g.studentId}_${g.subjectId}_${g.partial}`;
         grades[key] = g;
       });
+
+      // Calcular estatus de extra/riesgo de cada alumno EN ESTA materia
+      // para mostrar alertas al maestro en el editor.
+      // AWAITED para que cuando _renderGradeEditor corra, ya sepamos el
+      // estatus de riesgo/extraordinario por horas e inasistencias.
+      try { await _computeStatusForCurrentEditor(groupId, subjectId); } catch (_) {}
 
       // Pre-cargar estado de TODAS las asignaciones del maestro para las pestañas
       // (no bloquea — usa cache si ya está cargado para este parcial).
@@ -1119,14 +1567,94 @@ const GradesModule = (function () {
       if (_isDirty && !_isSaving) {
         _autoSaveGrades().catch(err => {
           console.warn('Auto-save falló:', err);
-          _showSaveStatus('error', err?.message || 'Error al guardar — reintentaremos');
-          // Reintentar 1 vez después de 5 segundos
-          setTimeout(() => { if (_isDirty && !_isSaving) _scheduleAutoSave(); }, 5000);
+          _showSaveStatus('error', err?.message || 'Error al guardar — reintentaremos automaticamente');
+          // FIX (v7.83): reintentos con backoff exponencial (5s, 15s, 60s)
+          // en lugar de UN solo reintento que pierde el dato si vuelve a fallar.
+          _scheduleRetryWithBackoff(0);
         });
       }
     }, AUTO_SAVE_DELAY_MS);
 
     _showSaveStatus('pending', 'Se guardará en unos segundos…');
+  }
+
+  // FIX (v7.83): FLUSH inmediato del auto-save pendiente.
+  // Se llama desde:
+  //   1) focusout de input (cuando el maestro cambia de celda)
+  //   2) pagehide / visibilitychange=hidden (cierra pestaña, cambia app)
+  //   3) Antes de navegar dentro del SPA (cambio de materia/grupo/modulo)
+  // Cancela el debounce y guarda YA. Si _isSaving, no interrumpe.
+  function _flushAutoSave() {
+    if (!_draftKey) return;
+    if (!_isDirty || _isSaving) return;
+    if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
+    _autoSaveGrades().catch(err => {
+      console.warn('Flush auto-save falló:', err);
+      _showSaveStatus('error', err?.message || 'Error al guardar — reintentando');
+      _scheduleRetryWithBackoff(0);
+    });
+  }
+
+  // FIX (v7.83): version AWAITABLE de _flushAutoSave para usar antes de
+  // navegar dentro del SPA. Espera a que el commit termine (o falle) antes
+  // de continuar, asi el cambio recien tecleado no se pierde al cambiar de
+  // materia/grupo/parcial.
+  async function _flushAutoSaveAndWait() {
+    if (!_draftKey || !_isDirty) return;
+    if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
+    if (_isSaving) {
+      // Esperar a que termine el save en curso (max 10s)
+      const start = Date.now();
+      while (_isSaving && (Date.now() - start) < 10000) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (!_isDirty) return; // ya quedó limpio
+    }
+    try {
+      await _autoSaveGrades();
+    } catch (e) {
+      console.warn('Flush sync falló:', e);
+    }
+  }
+
+  // FIX (v7.83): instalar UNA SOLA VEZ los listeners de pagehide/visibilitychange.
+  // Si el maestro reabre el editor varias veces, no acumulamos N handlers (memory leak).
+  // Los handlers son inocuos cuando _isDirty=false (no hacen nada).
+  let _unloadHandlersInstalled = false;
+  function _onVisibilityHidden() {
+    if (document.visibilityState === 'hidden') _flushAutoSave();
+  }
+  function _installUnloadHandlers() {
+    if (_unloadHandlersInstalled) return;
+    _unloadHandlersInstalled = true;
+    window.addEventListener('pagehide', _flushAutoSave);
+    document.addEventListener('visibilitychange', _onVisibilityHidden);
+  }
+
+  // FIX (v7.83): reintentos exponenciales tras un fallo de auto-save.
+  // Intentos: t+5s, t+15s, t+60s. Después de 3 fallos, mostrar TOAST
+  // de error prominente (no silencioso) y pedir al maestro recargar.
+  const _RETRY_DELAYS = [5000, 15000, 60000];
+  let _retryAttempt = 0;
+  let _retryTimer = null;
+  function _scheduleRetryWithBackoff(attemptIdx) {
+    if (_retryTimer) clearTimeout(_retryTimer);
+    if (attemptIdx >= _RETRY_DELAYS.length) {
+      _showSaveStatus('error', '⚠️ No se pudo guardar tras 3 intentos. NO cierres ni recargues; usa Guardar o Recuperar borrador.');
+      if (typeof Toast !== 'undefined') {
+        Toast.show('⚠️ Falló el guardado automatico. NO cierres la pagina: tus datos quedan en el editor y en borrador local.', 'error', 30000);
+      }
+      _retryAttempt = 0;
+      return;
+    }
+    _retryTimer = setTimeout(() => {
+      _retryTimer = null;
+      _retryAttempt = attemptIdx + 1;
+      if (!_isDirty || _isSaving) { _retryAttempt = 0; return; }
+      _autoSaveGrades()
+        .then(() => { _retryAttempt = 0; })
+        .catch(() => _scheduleRetryWithBackoff(attemptIdx + 1));
+    }, _RETRY_DELAYS[attemptIdx]);
   }
 
   /** Muestra el estado del auto-save al lado del título del editor. */
@@ -1171,8 +1699,12 @@ const GradesModule = (function () {
     try {
       const cachedPartials = await Store.getPartials(true);
       const pDoc = cachedPartials.find(p => p.id === currentPartial);
-      if (pDoc && pDoc.locked && !_hasAdminPower() && !_editorOverrideActive) {
-        // Cliente bloqueado: mostrar mensaje claro y desactivar más auto-save
+      // v8.34 BUG FIX: usar isPartialLockedForGrade con el grado del maestro,
+      // NO el flag global pDoc.locked. Antes: P3 con locked=true global pero
+      // lockedByGrade[3]=false impedía guardar a maestros de 3° aunque para
+      // ellos estuviera abierto.
+      const grado = K.gradeFromGroupId(selectedGroup);
+      if (pDoc && K.isPartialLockedForGrade(pDoc, grado) && !_hasAdminPower() && !_editorOverrideActive) {
         _showSaveStatus('error', '🔒 Parcial cerrado — tus cambios NO se están guardando. Recarga la página.');
         return;
       }
@@ -1207,7 +1739,13 @@ const GradesModule = (function () {
       const doc = await db.collection('partials').doc(currentPartial).get();
       if (!doc.exists) return;
       const data = doc.data() || {};
-      if (data.locked === true) {
+      // v8.34 BUG FIX: antes verificaba `data.locked === true` GLOBAL, lo que
+      // disparaba el modal "Parcial cerrado" a TODOS los maestros incluso
+      // cuando el parcial estaba abierto para SU grado (ej. P3 cerrado para
+      // 1°/2° pero abierto para 3°). Resultado: maestros de 3° capturaban y
+      // se desactivaban sus inputs cada 30s. Ahora usa isPartialLockedForGrade.
+      const grado = K.gradeFromGroupId(selectedGroup);
+      if (K.isPartialLockedForGrade(data, grado)) {
         _onPartialClosedMidEdit();
       }
     } catch (e) { /* network blip, ignorar — el próximo ciclo lo intenta */ }
@@ -1256,12 +1794,166 @@ const GradesModule = (function () {
     Modal.open('Parcial cerrado', body, footer);
   }
 
+  // v8.36: respaldo a la NUBE además de localStorage.
+  // Razón: si el navegador del maestro se pierde, los datos no se rescatan.
+  // Ahora cada draft también se escribe a Firestore (colección gradeDrafts)
+  // con docId determinístico {teacherId}_{groupId}_{subjectId}_{partial}.
+  // El admin puede leer estos drafts en caso de pérdida.
+  let _cloudDraftTimer = null;
   function _saveDraft() {
     if (!_isDirty || !_draftKey) return;
+    let snapshot;
     try {
-      const snapshot = _captureSnapshot('draft');
-      localStorage.setItem(_draftKey, JSON.stringify({ time: Date.now(), values: snapshot.values }));
+      snapshot = _captureSnapshot('draft');
+      localStorage.setItem(_draftKey, JSON.stringify({
+        time: Date.now(),
+        groupId: selectedGroup,
+        subjectId: selectedSubject,
+        partial: currentPartial,
+        values: snapshot.values
+      }));
     } catch(e) { /* localStorage may be full or disabled */ }
+
+    // Respaldo a Firestore con debounce de 5s (para no saturar la red).
+    // Se hace mejor-esfuerzo; si falla, no afecta el flujo del maestro.
+    if (!snapshot) return;
+    if (_cloudDraftTimer) clearTimeout(_cloudDraftTimer);
+    _cloudDraftTimer = setTimeout(async () => {
+      try {
+        const teacherDocId = await Store.getTeacherDocId();
+        if (!teacherDocId) return;
+        const docId = `${teacherDocId}_${selectedGroup}_${selectedSubject}_${currentPartial}`;
+        await db.collection('gradeDrafts').doc(docId).set({
+          teacherId: teacherDocId,
+          groupId: selectedGroup,
+          subjectId: selectedSubject,
+          partial: currentPartial,
+          values: snapshot.values,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedBy: auth.currentUser?.uid || null,
+          userAgent: navigator.userAgent.slice(0, 200),
+        }, { merge: true });
+      } catch (e) {
+        console.warn('[cloudDraft] falló respaldo a nube:', e?.message || e);
+      }
+    }, 5000);
+  }
+
+  function _draftValueCount(values, rows) {
+    let count = 0;
+    rows.forEach(row => {
+      const vals = values?.[row.dataset.studentId];
+      if (!vals) return;
+      Object.keys(vals).forEach(k => {
+        if (vals[k] !== undefined && vals[k] !== null && String(vals[k]).trim() !== '') count++;
+      });
+    });
+    return count;
+  }
+
+  function _findLocalDraftCandidates() {
+    const rows = [...document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]')];
+    const candidates = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith('grade_draft_')) continue;
+        let draft;
+        try { draft = JSON.parse(localStorage.getItem(key) || '{}'); } catch (_) { continue; }
+        if (!draft || !draft.values) continue;
+
+        const count = _draftValueCount(draft.values, rows);
+        if (count === 0) continue;
+
+        const keyLower = key.toLowerCase();
+        const exact = key === _draftKey;
+        const groupMatch = selectedGroup && key.includes(selectedGroup);
+        const subjectMatch = selectedSubject && keyLower.includes(String(selectedSubject).toLowerCase());
+        const partialMatch = currentPartial && key.endsWith(`_${currentPartial}`);
+        const score = (exact ? 100 : 0) + (groupMatch ? 20 : 0) + (subjectMatch ? 20 : 0) + (partialMatch ? 10 : 0) + Math.min(count, 50);
+        candidates.push({ key, draft, count, score, exact, groupMatch, subjectMatch, partialMatch });
+      }
+    } catch (_) { /* localStorage bloqueado */ }
+    return candidates.sort((a, b) => b.score - a.score || (b.draft.time || 0) - (a.draft.time || 0));
+  }
+
+  function _applyDraftValues(draft, sourceLabel) {
+    const rows = document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]');
+    _pushUndo('Antes de recuperar borrador');
+    rows.forEach(row => {
+      const sid = row.dataset.studentId;
+      const vals = draft.values?.[sid];
+      if (!vals) return;
+      row.querySelectorAll('.ge-input').forEach(input => {
+        const field = input.dataset.field;
+        if (vals[field] !== undefined) input.value = vals[field];
+      });
+      const firstRubro = row.querySelector('.grade-rubro');
+      if (firstRubro) _recalcRow(firstRubro);
+    });
+    _updateStats();
+    _markDirty();
+    try { _saveDraft(); } catch (_) {}
+    Toast.show(`Borrador recuperado${sourceLabel ? ': ' + sourceLabel : ''}. Revisa y guarda.`, 'success', 9000);
+  }
+
+  function _manualRecoverLocalDraft() {
+    const candidates = _findLocalDraftCandidates();
+    if (candidates.length === 0) {
+      Toast.show('No se encontró un borrador local para esta hoja en este navegador.', 'warning', 9000);
+      return;
+    }
+
+    if (candidates.length === 1 && candidates[0].exact) {
+      _applyDraftValues(candidates[0].draft, 'esta misma hoja');
+      return;
+    }
+
+    const rowsHtml = candidates.slice(0, 8).map((c, idx) => {
+      const when = c.draft.time ? new Date(c.draft.time).toLocaleString('es-MX') : 'sin fecha';
+      const badges = [
+        c.exact ? 'misma hoja' : '',
+        c.groupMatch ? 'grupo' : '',
+        c.subjectMatch ? 'materia' : '',
+        c.partialMatch ? 'parcial' : ''
+      ].filter(Boolean).join(' · ');
+      return `
+        <label style="display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;cursor:pointer;background:${idx === 0 ? '#eff6ff' : '#fff'};">
+          <input type="radio" name="draft-recovery-choice" value="${idx}" ${idx === 0 ? 'checked' : ''} style="margin-top:3px;">
+          <span style="flex:1;">
+            <strong>${Utils.sanitize(c.key.replace('grade_draft_', ''))}</strong>
+            <span style="display:block;color:#475569;font-size:12px;margin-top:2px;">${Utils.sanitize(when)} · ${c.count} dato(s) recuperables${badges ? ' · ' + Utils.sanitize(badges) : ''}</span>
+          </span>
+        </label>`;
+    }).join('');
+
+    const body = `
+      <div style="font-size:14px;color:#1e293b;line-height:1.5;">
+        <p style="margin:0 0 10px;">Encontré borradores locales en este navegador. Elige uno para colocarlo en la hoja actual.</p>
+        <div style="background:#fff7ed;border-left:4px solid #d97706;border-radius:6px;padding:8px 10px;margin-bottom:12px;color:#78350f;font-size:12.5px;">
+          Esto no borra nada de Firestore. Solo rellena el editor; después debes revisar y presionar Guardar.
+        </div>
+        ${rowsHtml}
+      </div>`;
+    const footer = `
+      <button class="btn btn-outline" data-action="modal-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="apply-local-draft-btn">Recuperar seleccionado</button>`;
+
+    Modal.open('Recuperar borrador local', body, footer);
+    setTimeout(() => {
+      document.getElementById('modalFooter')?.addEventListener('click', (e) => {
+        if (e.target.closest('[data-action="modal-cancel"]')) { Modal.close(); return; }
+        if (e.target.closest('#apply-local-draft-btn')) {
+          const selected = document.querySelector('input[name="draft-recovery-choice"]:checked');
+          const idx = Number(selected?.value || 0);
+          const chosen = candidates[idx];
+          if (chosen) {
+            Modal.close();
+            _applyDraftValues(chosen.draft, chosen.exact ? 'esta misma hoja' : chosen.key.replace('grade_draft_', ''));
+          }
+        }
+      }, { once: false });
+    }, 30);
   }
 
   function _checkDraftRecovery() {
@@ -1270,60 +1962,103 @@ const GradesModule = (function () {
       const raw = localStorage.getItem(_draftKey);
       if (!raw) return;
       const draft = JSON.parse(raw);
-      // Only offer recovery if draft is less than 24h old
-      if (Date.now() - draft.time > 86400000) {
-        localStorage.removeItem(_draftKey);
-        return;
-      }
       // Check if draft has any values different from current
       let hasDiffs = false;
+      let diffCount = 0;
       const rows = document.querySelectorAll('.grade-editor-table tbody tr[data-student-id]');
       rows.forEach(row => {
         const sid = row.dataset.studentId;
         const vals = draft.values[sid];
         if (!vals) return;
+        let rowHasDiff = false;
         row.querySelectorAll('.ge-input').forEach(input => {
           const field = input.dataset.field;
-          if (vals[field] !== undefined && vals[field] !== input.value) hasDiffs = true;
+          if (vals[field] !== undefined && vals[field] !== '' && vals[field] !== input.value) {
+            hasDiffs = true;
+            rowHasDiff = true;
+          }
         });
+        if (rowHasDiff) diffCount++;
       });
-      if (!hasDiffs) { localStorage.removeItem(_draftKey); return; }
+      if (!hasDiffs) {
+        // v8.35: NO borrar el draft automáticamente — conservar 30 días por
+        // si el sistema cargó datos vacíos pero el draft tiene info válida.
+        return;
+      }
 
-      // Show recovery banner
+      // v8.35: banner MUY prominente — antes era discreto y los maestros lo
+      // ignoraban. Ahora es modal-banner rojo grande con texto urgente.
+      const fechaDraft = draft.time ? new Date(draft.time).toLocaleString('es-MX', {
+        day: '2-digit', month: 'long', hour: '2-digit', minute: '2-digit'
+      }) : 'sesión anterior';
+
       const banner = document.createElement('div');
       banner.className = 'draft-recovery-banner';
+      banner.style.cssText = `
+        background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);
+        border:3px solid #d97706;
+        border-radius:12px;
+        padding:18px 22px;
+        margin:14px 0;
+        box-shadow:0 8px 20px rgba(217,119,6,0.25);
+        position:relative;
+      `;
       banner.innerHTML = `
-        <span class="material-icons-round" style="font-size:20px;color:#d69e2e;">warning</span>
-        <span>Se encontraron datos sin guardar de una sesión anterior.</span>
-        <button class="btn btn-sm btn-primary" id="recover-draft-btn">Recuperar</button>
-        <button class="btn btn-sm btn-outline" id="discard-draft-btn">Descartar</button>`;
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <span class="material-icons-round" style="font-size:36px;color:#b45309;flex-shrink:0;">restore</span>
+          <div style="flex:1;">
+            <h3 style="margin:0 0 6px;color:#78350f;font-size:17px;font-weight:900;">
+              🟡 Tienes calificaciones sin guardar en este navegador
+            </h3>
+            <p style="margin:0 0 10px;color:#92400e;font-size:14px;line-height:1.5;">
+              Detecté <strong>${diffCount}</strong> ${diffCount === 1 ? 'alumno' : 'alumnos'} con valores capturados
+              que NO están en el servidor. Es probable que un bloqueo silencioso impidió que se guardaran.
+              <strong>Recupera para no perder tu trabajo.</strong>
+            </p>
+            <p style="margin:0 0 12px;color:#78350f;font-size:12px;font-style:italic;">
+              Capturados el ${Utils.sanitize(fechaDraft)}.
+            </p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn" id="recover-draft-btn" style="background:#16a34a;color:#fff;border:none;padding:10px 22px;font-weight:800;font-size:14px;border-radius:8px;cursor:pointer;">
+                ✅ RECUPERAR mis calificaciones
+              </button>
+              <button class="btn btn-outline" id="discard-draft-btn" style="padding:10px 18px;font-size:13px;">
+                Descartar (perder)
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      // Insertar arriba del editor para que sea lo primero que vean
       const editor = document.querySelector('.grade-editor-table');
-      if (editor) editor.parentNode.insertBefore(banner, editor);
+      const targetParent = editor ? editor.closest('.module-container, .card')?.parentNode || editor.parentNode : null;
+      if (targetParent && editor) {
+        targetParent.insertBefore(banner, editor.closest('.card') || editor);
+        // Scroll suave al banner
+        setTimeout(() => banner.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+      }
 
       document.getElementById('recover-draft-btn')?.addEventListener('click', () => {
-        _pushUndo('Antes de recuperar borrador');
-        rows.forEach(row => {
-          const sid = row.dataset.studentId;
-          const vals = draft.values[sid];
-          if (!vals) return;
-          row.querySelectorAll('.ge-input').forEach(input => {
-            const field = input.dataset.field;
-            if (vals[field] !== undefined) input.value = vals[field];
-          });
-          const firstRubro = row.querySelector('.grade-rubro');
-          if (firstRubro) _recalcRow(firstRubro);
-        });
-        _updateStats();
-        _markDirty();
+        _applyDraftValues(draft, 'sesión anterior');
         banner.remove();
-        Toast.show('Datos recuperados. Recuerda guardar.', 'success');
+        // Auto-guardar inmediatamente después de recuperar
+        Toast.show('✓ Calificaciones recuperadas. Guardando…', 'success');
+        setTimeout(() => {
+          if (typeof saveGrades === 'function') {
+            saveGrades({ silent: false }).catch(e => {
+              console.error('Error al guardar después de recuperar:', e);
+            });
+          }
+        }, 500);
       });
 
       document.getElementById('discard-draft-btn')?.addEventListener('click', () => {
-        localStorage.removeItem(_draftKey);
-        banner.remove();
+        if (confirm('¿Seguro que quieres DESCARTAR las calificaciones sin guardar? Esta acción NO se puede deshacer.')) {
+          localStorage.removeItem(_draftKey);
+          banner.remove();
+        }
       });
-    } catch(e) { /* ignore parse errors */ }
+    } catch(e) { console.warn('Error en draft recovery:', e); }
   }
 
   // ─── BEFOREUNLOAD GUARD ───
@@ -1489,19 +2224,41 @@ const GradesModule = (function () {
     // SOLICITAR cambio formal via "Cambios de Calificaci\u00F3n".
     // Admin S\u00CD puede editar (acceso administrativo de emergencia).
     const _currentPartialDoc = partials.find(p => p.id === currentPartial);
-    const isLocked = _currentPartialDoc ? (_currentPartialDoc.locked || false) : false;
+    // v8.07: el cierre puede ser por grado individual (lockedByGrade) o global.
+    // Inferimos el grado desde selectedGroup (formato MATUTINO_2-3 → 2).
+    const _currentGrado = K.gradeFromGroupId(selectedGroup);
+    // v8.10: exponer al scope del módulo para que el banner de fechas
+    // críticas lo use al resolver byGrade del config/captureWindow.
+    _moduleCurrentGrado = _currentGrado;
+    const isLocked = K.isPartialLockedForGrade(_currentPartialDoc, _currentGrado);
     const userRole = App.currentUser?.role;
     const isAdminUser = userRole === 'admin' || _hasAdminPower();
     // Si el maestro tiene override activo del admin (acceso de emergencia),
     // NO se considera solo-lectura aunque el parcial esté cerrado.
     // _hasAdminPower() también cubre el caso de admin impersonando.
     const isReadOnlyForUser = isLocked && !isAdminUser && !_editorOverrideActive;
-    const lockedDisabled = isReadOnlyForUser ? ' disabled' : '';
 
-    // Partial buttons
+    // v8.25: YA NO bloqueamos la captura de P3 por falta de horas semestrales.
+    // El bloqueo original (v7.95) era demasiado estricto y generaba frustración:
+    // si el maestro quería capturar primero calificaciones y luego horas, no
+    // podía. Ahora dejamos que capture libremente — el bloqueo se aplica al
+    // INTENTAR IMPRIMIR (v8.20: _enforcePrintReadiness exige horas + alumnos
+    // completos antes de imprimir). Esto preserva la integridad de la lista
+    // oficial sin estorbar el flujo de captura.
+    const _p3CapturaLocked = false;
+    const _p3SinHoras = ['P1', 'P2', 'P3'].filter(pid => !_horasCapturadas[pid]);
+    // Cal/rubros/faltas: bloqueado SOLO por parcial cerrado (regla por grado)
+    const lockedDisabled = isReadOnlyForUser ? ' disabled' : '';
+    // Inputs de HORAS impartidas: solo bloqueados por parcial cerrado, NUNCA
+    // por el bloqueo P3-sin-horas (justamente queremos que las capture).
+    const horasInputDisabled = isReadOnlyForUser ? ' disabled' : '';
+
+    // Partial buttons — v8.13: el candado refleja el estado PARA EL GRADO
+    // del maestro, no el global. Antes mostraba candado de P2 (cerrado global)
+    // aunque para 3° estuviera abierto.
     const partialsHtml = K.PARCIALES.map(kp => {
       const doc = partials.find(p => p.id === kp.id);
-      const locked = doc ? (doc.locked || false) : false;
+      const locked = K.isPartialLockedForGrade(doc, _currentGrado);
       const cls = currentPartial === kp.id ? 'btn-primary' : 'btn-outline';
       return `<button class="btn btn-sm ${cls}" data-action="switch-partial" data-partial="${kp.id}">${kp.nombre}${locked ? ' \uD83D\uDD12' : ''}</button>`;
     }).join(' ');
@@ -1522,39 +2279,109 @@ const GradesModule = (function () {
       const gradeData = grades[key] || {};
       const isTraslado = !!s.bajaPendiente;
 
-      // Calcular si la regla EPO67 del PE aplica para resaltar el input al renderizar
-      const peIgnoredInitial = !isTraslado && K.isPEIgnored(rubros.reduce((acc, r) => {
+      // Contexto para la regla socioemocional: si la materia es del bloque,
+      // el PE NO aplica en NINGÚN parcial (P1, P2, P3) — input gris + badge.
+      const _peCtx = { subjectId: selectedSubject, partial: currentPartial };
+      const peBlockedSocio = !K.subjectAllowsPE(selectedSubject);
+
+      // v8.18: RESPETAR LO GUARDADO EN FIRESTORE — protección de históricos.
+      // La regla "PE no rescata reprobados" (calcSuma) se introdujo el 13 mayo 2026.
+      // Calificaciones capturadas ANTES de esa fecha tienen suma+cal guardados
+      // que pueden NO coincidir con el recálculo actual. Al renderizar usamos
+      // el dato guardado tal cual; el recálculo solo dispara al EDITAR un rubro.
+      const storedSuma = gradeData.suma;
+      const storedCal = gradeData.cal !== undefined ? gradeData.cal : (gradeData.value !== undefined ? gradeData.value : null);
+      const hasStoredCalc = storedCal !== null && storedCal !== undefined && storedSuma !== undefined && storedSuma !== null;
+
+      // Solo computamos "PE ignorado" para el badge si NO hay datos guardados
+      // (captura nueva) o si el guardado coincide con el recálculo. Para datos
+      // históricos donde la suma guardada incluye el PE, NO mostramos el badge
+      // porque crea la falsa impresión de que la cal cambió.
+      const rubrosDataMap = rubros.reduce((acc, r) => {
         if (gradeData[r.key] !== undefined) acc[r.key] = gradeData[r.key];
         return acc;
-      }, {}));
+      }, {});
+      const recalcSuma = K.calcSuma(rubrosDataMap, _peCtx);
+      // Si el doc guardado ya tiene suma+cal Y difieren del recálculo actual,
+      // significa que se capturó bajo una regla anterior — respetar lo guardado
+      // y NO marcar PE como ignorado en la UI.
+      const historicValueDiffers = hasStoredCalc && Math.abs(Number(storedSuma) - recalcSuma) > 0.01;
+      const peIgnoredInitial = !isTraslado && !historicValueDiffers &&
+        K.isPEIgnored(rubrosDataMap, _peCtx);
 
       const inputCells = rubros.map(r => {
         const val = isTraslado ? '' : (gradeData[r.key] !== undefined ? gradeData[r.key] : '');
         const peClass = (r.key === 'pe' && peIgnoredInitial) ? ' pe-input-ignored' : '';
-        const cellDisabled = (isTraslado || isReadOnlyForUser) ? ' disabled' : '';
+        // Deshabilitar el input PE si la materia tiene PE bloqueado (socioemocional)
+        const isPEBlocked = r.key === 'pe' && peBlockedSocio;
+        const cellDisabled = (isTraslado || isReadOnlyForUser || isPEBlocked) ? ' disabled' : '';
+        const blockedTitle = isPEBlocked ? ' title="No aplica Punto Extra — Componente Socioemocional (Gaceta EPO 67)"' : '';
+        const blockedStyle = isPEBlocked ? ' style="background:#f3f4f6;color:#9ca3af;cursor:not-allowed;"' : '';
         return `<td class="cell-rubro" data-field="${r.key}">
-          <input type="number" min="0" max="${r.max}" step="${r.step}" value="${val}" placeholder="${isTraslado ? '' : '-'}"
-            class="ge-input grade-rubro${peClass}" data-student-id="${s.docId}" data-field="${r.key}"${cellDisabled}>
+          <input type="number" min="0" max="${r.max}" step="${r.step}" value="${val}" placeholder="${isTraslado ? '' : (isPEBlocked ? '—' : '-')}"
+            class="ge-input grade-rubro${peClass}" data-student-id="${s.docId}" data-field="${r.key}"${cellDisabled}${blockedTitle}${blockedStyle}>
         </td>`;
       }).join('');
 
-      const suma = _calcRowSuma(gradeData, rubros);
-      const storedCal = gradeData.cal !== undefined ? gradeData.cal : (gradeData.value !== undefined ? gradeData.value : null);
-      const hasStoredData = storedCal !== null || rubros.some(r => gradeData[r.key] !== undefined);
-      const peIgnoredBadge = peIgnoredInitial
-        ? ' <span class="pe-ignored-badge" title="Regla EPO67: el Punto Extra no se aplica porque la suma base (sin PE) es menor a 6. Ingresa rubros suficientes para aprobar y el PE comenzara a sumar.">PE no aplica</span>'
-        : '';
+      // v8.18: usar SIEMPRE el valor guardado en Firestore si existe.
+      // Si no existe (captura nueva), recalcular con regla actual.
+      const suma = hasStoredCalc ? Number(storedSuma) : recalcSuma;
+      const hasStoredData = hasStoredCalc || rubros.some(r => gradeData[r.key] !== undefined);
+      // Badge informativo cuando el PE no aplica — pero NUNCA en valores históricos
+      // (peIgnoredInitial ya considera historicValueDiffers).
+      let peIgnoredBadge = '';
+      if (peIgnoredInitial) {
+        const motivo = peBlockedSocio
+          ? 'Esta materia (componente socioemocional) NO acepta Punto Extra en ningún parcial — Gaceta oficial EPO 67.'
+          : 'Regla EPO67: el Punto Extra no se aplica porque la suma base (sin PE) es menor a 6. Ingresa rubros suficientes para aprobar y el PE comenzara a sumar.';
+        const labelBadge = peBlockedSocio ? 'PE no aplica (Socioemocional)' : 'PE no aplica';
+        peIgnoredBadge = ` <span class="pe-ignored-badge" title="${motivo}">${labelBadge}</span>`;
+      }
       const sumaDisplay = isTraslado ? '' : (hasStoredData ? suma.toFixed(1) + peIgnoredBadge : '');
-      const cal = isTraslado ? '' : (hasStoredData ? (K.calcCal(suma) || storedCal || 5) : '');
+      // CAL: si hay valor guardado en Firestore, usarlo TAL CUAL. Solo si no
+      // existe, calcularlo desde la suma actual (captura nueva).
+      const cal = isTraslado ? '' : (hasStoredCalc ? Number(storedCal) : (hasStoredData ? K.calcCal(suma) : ''));
       const calClass = cal !== '' && cal < 6 ? 'cal-fail' : (cal !== '' ? 'cal-pass' : '');
-      const rowClass = (cal !== '' && Number(cal) < 6 ? ' row-reprobado' : '') + (isTraslado ? ' row-traslado' : '');
+      // Estatus del alumno en ESTA materia (calculado por _computeStatusForCurrentEditor)
+      // Pinta la fila para que el maestro vea de un vistazo quién ya está en extra
+      // y quién está en riesgo, aun cuando la cal actual del parcial no lo refleje.
+      const _stStu = _statusByStudent[s.docId];
+      let _statusRowClass = '';
+      let _statusBadge = '';
+      let _statusTooltip = '';
+      if (_stStu) {
+        if (_stStu.isExtra) {
+          _statusRowClass = ' row-extra-confirmed';
+          const lbl = _stStu.estatus === 'EXTRA_AMBAS' ? 'EXTRA · cal+faltas'
+                   : _stStu.estatus === 'EXTRA_CAL' ? 'EXTRA · calif'
+                   : 'EXTRA · faltas';
+          _statusBadge = ` <span class="badge-extra-row" title="${Utils.sanitize(_stStu.causa)}" style="background:#dc2626;color:#fff;font-size:0.6rem;padding:2px 7px;border-radius:8px;margin-left:6px;vertical-align:middle;font-weight:700;letter-spacing:.3px;">${lbl}</span>`;
+          _statusTooltip = ` — ${_stStu.causa}`;
+        } else if (_stStu.isRiesgo) {
+          _statusRowClass = ' row-riesgo';
+          const lbl = _stStu.estatus === 'EN_RIESGO_AMBAS' ? 'RIESGO · ambas'
+                   : _stStu.estatus === 'EN_RIESGO_CAL' ? 'RIESGO · calif'
+                   : 'RIESGO · faltas';
+          _statusBadge = ` <span class="badge-riesgo-row" title="${Utils.sanitize(_stStu.causa)}" style="background:#d97706;color:#fff;font-size:0.6rem;padding:2px 7px;border-radius:8px;margin-left:6px;vertical-align:middle;font-weight:700;letter-spacing:.3px;">${lbl}</span>`;
+          _statusTooltip = ` — ${_stStu.causa}`;
+        }
+      }
+      const rowClass = (cal !== '' && Number(cal) < 6 ? ' row-reprobado' : '') + (isTraslado ? ' row-traslado' : '') + _statusRowClass;
       const faltas = isTraslado ? '' : (gradeData.faltas !== undefined ? gradeData.faltas : '');
-      const trasladoStyle = isTraslado ? ' style="background:#fff7ed;opacity:0.75;"' : '';
+      // Color de fondo según estatus (gana sobre traslado pendiente)
+      let _rowStyle = '';
+      if (isTraslado) {
+        _rowStyle = ' style="background:#fff7ed;opacity:0.75;"';
+      } else if (_stStu?.isExtra) {
+        _rowStyle = ' style="background:#fef2f2;border-left:4px solid #dc2626;"';
+      } else if (_stStu?.isRiesgo) {
+        _rowStyle = ' style="background:#fffbeb;border-left:4px solid #d97706;"';
+      }
       const trasladoBadge = isTraslado ? ' <span class="badge" style="background:#f97316;color:#fff;font-size:0.65rem;padding:1px 6px;margin-left:6px;vertical-align:middle;">TRASLADO PENDIENTE</span>' : '';
 
-      rowsHtml += `<tr data-student-id="${s.docId}" data-traslado="${isTraslado ? '1' : '0'}" class="${rowClass}"${trasladoStyle}>
+      rowsHtml += `<tr data-student-id="${s.docId}" data-traslado="${isTraslado ? '1' : '0'}" class="${rowClass}"${_rowStyle}>
         <td class="cell-num">${i + 1}</td>
-        <td class="cell-name" title="${Utils.sanitize(s.nombreCompleto || '')}${isTraslado ? ' — Traslado pendiente: no se captura' : ''}">${Utils.sanitize(s.nombreCompleto || '')}${trasladoBadge}</td>
+        <td class="cell-name" title="${Utils.sanitize(s.nombreCompleto || '')}${isTraslado ? ' — Traslado pendiente: no se captura' : ''}${_statusTooltip}">${Utils.sanitize(s.nombreCompleto || '')}${_statusBadge}${trasladoBadge}</td>
         ${inputCells}
         <td class="cell-suma col-suma">${sumaDisplay}</td>
         <td class="cell-cal ${calClass} col-cal">${cal}</td>
@@ -1591,38 +2418,64 @@ const GradesModule = (function () {
     const currentAsg = assignments.find(a => a.groupId === selectedGroup && a.subjectId === selectedSubject);
     const tabsHtml = currentAsg ? _renderAssignmentTabs(currentAsg.id) : '';
 
-    // Banner de cobertura temporal
+    // Banner de cobertura temporal (compacto, colapsable)
     const interimBanner = currentAsg && currentAsg.interim ? `
-      <div class="card" style="background:#fffbeb;border-left:6px solid #d97706;padding:14px 18px;margin-bottom:12px;">
-        <div style="font-weight:700;font-size:14px;color:#78350f;margin-bottom:4px;">
-          \ud83d\udfe0 Esta lista es una cobertura temporal
-        </div>
-        <div style="font-size:13px;color:#78350f;line-height:1.4;">
-          Est\u00e1s cubriendo esta materia mientras se asigna al docente oficial.
-          Todo lo que captures (calificaciones, faltas, horas) <strong>se transferir\u00e1 autom\u00e1ticamente</strong>
-          cuando administraci\u00f3n apruebe la transici\u00f3n al docente definitivo.
+      <details style="background:#fffbeb;border-left:4px solid #d97706;border-radius:6px;padding:6px 12px;margin-bottom:8px;font-size:12px;color:#78350f;">
+        <summary style="cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
+          \ud83d\udfe0 Cobertura temporal <span style="opacity:0.75;font-weight:400;font-size:11px;">\u00b7 clic para detalles</span>
+        </summary>
+        <div style="margin-top:6px;line-height:1.5;">
+          Est\u00e1s cubriendo esta materia. Lo que captures se transferir\u00e1 al docente definitivo cuando administraci\u00f3n apruebe la transici\u00f3n.
           ${currentAsg.interimNote ? `<br><em style="opacity:0.85;">Nota: ${Utils.sanitize(currentAsg.interimNote)}</em>` : ''}
         </div>
-      </div>` : '';
+      </details>` : '';
 
+    const teacherNameForHeader = currentAsg && currentAsg.teacherName
+      ? (Utils.displayName ? Utils.displayName(currentAsg.teacherName) : currentAsg.teacherName)
+      : '';
     container.innerHTML = `
       <div class="module-container">
         <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
-          <div>
-            <h2 class="module-title">${Utils.sanitize(subjectName)}</h2>
-            <p class="module-subtitle">${Utils.sanitize(groupName)} \u00b7 ${Utils.sanitize(currentTurno)} \u00b7 ${hCount}H / ${mCount}M = ${students.length} alumnos</p>
+          <div style="flex:1;min-width:280px;">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
+              <h2 class="module-title" style="margin:0;">${Utils.sanitize(subjectName)}</h2>
+              <span style="background:#3182ce;color:#fff;padding:4px 14px;border-radius:8px;font-size:15px;font-weight:800;letter-spacing:0.5px;white-space:nowrap;">${Utils.sanitize(groupName)}</span>
+              <!-- v8.10: badge MUY visible del parcial activo para que el maestro NO se confunda -->
+              <span style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#d97706 0%,#b45309 100%);color:#fff;padding:5px 14px;border-radius:8px;font-size:14px;font-weight:800;letter-spacing:0.5px;white-space:nowrap;box-shadow:0 2px 6px rgba(180,83,9,0.35);">
+                <span class="material-icons-round" style="font-size:16px;">assignment</span>
+                ${Utils.sanitize(_currentPartialDoc?.nombre || ('Parcial ' + (currentPartial || '').replace('P','')))}
+              </span>
+              ${isReadOnlyForUser ? `
+                <span style="display:inline-flex;align-items:center;gap:4px;background:#ede9fe;color:#5b21b6;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;border:1px solid #c4b5fd;">
+                  <span class="material-icons-round" style="font-size:14px;">lock</span>
+                  Solo lectura
+                </span>
+              ` : `
+                <span style="display:inline-flex;align-items:center;gap:4px;background:#dcfce7;color:#166534;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;">
+                  <span class="material-icons-round" style="font-size:14px;">bolt</span>
+                  Autoguardado activo
+                </span>
+                <span id="autosave-hero-state" style="background:#dbeafe;color:#1e3a8a;padding:4px 12px;border-radius:12px;font-weight:600;display:none;font-size:11px;"></span>
+              `}
+            </div>
+            <p class="module-subtitle" style="margin:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              ${teacherNameForHeader ? `<span style="display:inline-flex;align-items:center;gap:4px;font-weight:600;color:#1e293b;">
+                <span class="material-icons-round" style="font-size:16px;color:#3182ce;">person</span>
+                ${Utils.sanitize(teacherNameForHeader)}
+              </span>` : ''}
+              <span style="color:#64748b;">${Utils.sanitize(currentTurno)} \u00b7 ${hCount}H / ${mCount}M = ${students.length} alumnos</span>
+            </p>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            ${isReadOnlyForUser ? `
-              <span style="display:inline-flex;align-items:center;gap:6px;background:#ede9fe;color:#5b21b6;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;border:1px solid #c4b5fd;">
-                <span class="material-icons-round" style="font-size:16px;">lock</span>
-                Solo lectura
-              </span>
-            ` : `
+            ${isReadOnlyForUser ? '' : `
               <span id="autosave-status" style="display:none;padding:6px 12px;border-radius:8px;font-size:13px;font-weight:600;"></span>
               <span id="unsaved-indicator" class="unsaved-badge" style="display:none;">
                 <span class="material-icons-round" style="font-size:14px;vertical-align:middle;">edit_note</span> Sin guardar
               </span>
+              <button class="btn btn-outline btn-sm" data-action="recover-local-draft" title="Busca datos capturados en este navegador que no llegaron a guardarse. No borra nada." style="padding:6px 10px;font-size:12px;">
+                <span class="material-icons-round" style="font-size:15px;">restore</span>
+                Recuperar borrador
+              </button>
             `}
             <button class="btn btn-outline" data-action="back-to-list">\u2190 Volver</button>
           </div>
@@ -1656,37 +2509,7 @@ const GradesModule = (function () {
             cerrada la ventana de edici\u00f3n.
           </div>
         </div>
-        ` : `
-        <!-- MENSAJE HERO: NO HAY QUE GUARDAR \u2014 lo primero que ven al entrar -->
-        <div style="background:linear-gradient(135deg,#10b981 0%,#059669 100%);border-radius:14px;padding:18px 22px;margin-bottom:14px;color:#fff;box-shadow:0 6px 18px rgba(16,185,129,0.28);display:flex;align-items:center;gap:18px;">
-          <span class="material-icons-round" style="font-size:48px;flex-shrink:0;background:rgba(255,255,255,0.18);border-radius:50%;padding:8px;">bolt</span>
-          <div style="flex:1;">
-            <div style="font-size:20px;font-weight:900;line-height:1.15;letter-spacing:0.3px;margin-bottom:4px;">
-              NO TIENES QUE GUARDAR \u2014 SE GUARDA SOLO
-            </div>
-            <div style="font-size:13px;opacity:0.95;line-height:1.45;">
-              Cada calificaci\u00f3n, falta o punto extra que escribas se guarda autom\u00e1ticamente <strong>3 segundos</strong> despu\u00e9s de cada cambio. Despreoc\u00fapate del bot\u00f3n "Guardar": <strong>no existe el riesgo de perder lo capturado</strong>. Edita las veces que necesites mientras el parcial siga abierto.
-            </div>
-          </div>
-          <div style="background:rgba(255,255,255,0.18);border-radius:8px;padding:8px 12px;text-align:center;flex-shrink:0;display:none;" id="autosave-hero-state">
-            <div style="font-size:10px;font-weight:700;letter-spacing:0.5px;opacity:0.9;">Estado</div>
-            <div style="font-size:13px;font-weight:800;">Guardado</div>
-          </div>
-        </div>
-
-        <!-- Regla de entrega a Direcci\u00f3n: transl\u00facido + suave -->
-        <div style="background:rgba(243,232,255,0.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border:1px solid rgba(147,51,234,0.35);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:12px;">
-          <span class="material-icons-round" style="font-size:26px;color:#7e22ce;flex-shrink:0;margin-top:2px;opacity:0.85;">assignment_turned_in</span>
-          <div style="flex:1;font-size:12.5px;color:#5b21b6;line-height:1.5;">
-            <div style="font-size:13.5px;font-weight:700;margin-bottom:3px;color:#4c1d95;">
-              Tu lista impresa es tu responsabilidad
-            </div>
-            <div>
-              Direcci\u00f3n recibe <strong>UNA sola lista</strong> por grupo y materia, con TODAS las firmas. No se acepta entregar una lista con errores y luego otra firmada solo por los corregidos. Si imprimes y luego cambias algo, <strong>reimprime completa y vuelve a recoger todas las firmas</strong>. Imprime solo al final, cuando ya capturaste todas tus listas.
-            </div>
-          </div>
-        </div>
-        `}
+        ` : ''}
 
         ${tabsHtml}
 
@@ -1695,6 +2518,25 @@ const GradesModule = (function () {
         ${lockWarning}
 
         <div id="capture-deadline-banner"></div>
+
+        ${isReadOnlyForUser ? '' : `
+        <!-- v8.14: Banner recordatorio SIEMPRE expandido — antes era <details> colapsable
+             pero los maestros lo ignoraban; ahora la info crítica queda visible directo. -->
+        <div style="background:linear-gradient(90deg,#eff6ff 0%,#ecfeff 100%);border-left:4px solid #3182ce;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:12.5px;color:#1e3a8a;">
+          <div style="display:flex;align-items:center;gap:8px;font-weight:800;line-height:1.4;color:#1e3a8a;">
+            <span class="material-icons-round" style="font-size:18px;color:#3182ce;">tips_and_updates</span>
+            Recordatorios para captura
+          </div>
+          <ul style="margin:8px 0 0 24px;padding:0;line-height:1.65;color:#1e293b;">
+            <li><strong>Guardado automático.</strong> No te preocupes por guardar — entra y sale las veces que quieras, lo capturado queda guardado.</li>
+            <li><strong>Corrige libremente mientras esté abierta la ventana de captura</strong> — no necesitas solicitud formal.</li>
+            <li><strong>Antes de imprimir:</strong> verifica con tus alumnos que las calificaciones sean las correctas. Imprime una sola vez.</li>
+            <li><strong>La impresión de la lista es tu responsabilidad.</strong> Dirección recibe <u>UNA sola lista con TODAS las firmas</u>. Si corriges algo después de firmar, debes <u>volver a recolectar todas las firmas</u> y entregar la versión más actualizada.</li>
+            <li>Si ya cerró la ventana de captura y necesitas un cambio, espera a la <strong>ventana de correcciones</strong> y haz la solicitud formal desde el módulo "Solicitar Corrección".</li>
+            <li><strong>Respeta los tiempos</strong> de captura y correcciones — los atrasos afectan todas las líneas administrativas (boletas, certificados, entrega de documentos a alumnos).</li>
+          </ul>
+        </div>
+        `}
 
         <div id="risk-banner-faltas"></div>
 
@@ -1706,47 +2548,34 @@ const GradesModule = (function () {
         </div>
 
         ${isReadOnlyForUser ? '' : `
-        <!-- ═══ TIP + UNDO BAR (sin modos, sin paneles confusos) ═══ -->
-        <div class="input-mode-bar" style="background:#ebf8ff;border:1px solid #bee3f8;border-radius:8px;flex-wrap:wrap;">
-          <span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#2b6cb0;font-weight:500;">
-            <span class="material-icons-round" style="font-size:20px;color:#3182ce;">lightbulb</span>
-            <span><strong>Tip:</strong> escribe directo en cada celda, o pega con <kbd style="padding:2px 6px;background:#fff;border:1px solid #cbd5e0;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;">Ctrl + V</kbd> desde tu Excel — los valores llenan hacia abajo desde donde haces clic</span>
-          </span>
-          <div style="margin-left:auto;">
-            <button class="btn btn-outline btn-sm" id="undo-btn" disabled title="Nada que deshacer" style="position:relative;">
-              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;">undo</span>
-              Deshacer
-              <span id="undo-count" style="position:absolute;top:-6px;right:-6px;background:#e53e3e;color:#fff;font-size:10px;font-weight:700;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;"></span>
-            </button>
-            <button class="btn btn-outline btn-sm btn-danger-soft" data-action="clear-grades-list" title="Deja en blanco calificaciones y faltas de esta lista. No borra alumnos ni horas.">
-              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;">backspace</span>
-              Dejar lista en blanco
-            </button>
-          </div>
+        <!-- BARRA COMPACTA: solo botones de acción (sin tip redundante) -->
+        <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;margin:6px 0;flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" id="undo-btn" disabled title="Deshacer último cambio (Ctrl+Z)" style="position:relative;padding:4px 10px;font-size:12px;">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">undo</span>
+            Deshacer
+            <span id="undo-count" style="position:absolute;top:-6px;right:-6px;background:#e53e3e;color:#fff;font-size:10px;font-weight:700;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;"></span>
+          </button>
+          <button class="btn btn-outline btn-sm btn-danger-soft" data-action="clear-grades-list" title="Deja en blanco calificaciones y faltas de esta lista. No borra alumnos ni horas." style="padding:4px 10px;font-size:12px;">
+            <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">backspace</span>
+            Limpiar lista
+          </button>
         </div>
         `}
 
         ${isReadOnlyForUser ? '' : `
-        <!-- ═══ CARD: REGLAS PARA PEGAR DESDE EXCEL (visible por defecto, colapsable) ═══ -->
-        <div id="paste-help-card" style="background:linear-gradient(135deg,#fff7ed 0%,#fed7aa 100%);border:3px solid #ea580c;border-radius:14px;padding:0;margin:14px 0 16px;box-shadow:0 6px 18px rgba(234,88,12,0.18);overflow:hidden;">
-          <!-- HEADER llamativo, siempre visible -->
-          <button data-action="toggle-paste-help" style="width:100%;background:linear-gradient(135deg,#ea580c 0%,#c2410c 100%);border:none;color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-family:inherit;text-align:left;">
-            <div style="display:flex;align-items:center;gap:12px;">
-              <span class="material-icons-round" style="font-size:30px;background:rgba(255,255,255,0.18);border-radius:8px;padding:6px;">content_paste</span>
-              <div>
-                <div style="font-size:17px;font-weight:900;letter-spacing:0.3px;line-height:1.15;">
-                  📋 REGLAS PARA PEGAR DESDE EXCEL
-                </div>
-                <div style="font-size:12px;opacity:0.92;margin-top:2px;font-weight:500;">
-                  Léelas antes de pegar — turno ${Utils.sanitize(currentTurno)} · clic para ocultar
-                </div>
-              </div>
-            </div>
-            <span class="material-icons-round" id="paste-help-chevron" style="font-size:28px;transition:transform 0.2s;">expand_more</span>
+        <!-- CARD discreta: ayuda para pegar desde Excel (colapsada por default) -->
+        <div id="paste-help-card" style="background:#fff;border:1px solid #fed7aa;border-radius:8px;margin:6px 0 10px;overflow:hidden;">
+          <button data-action="toggle-paste-help" style="width:100%;background:#fff7ed;border:none;color:#9a3412;padding:6px 12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-family:inherit;text-align:left;font-size:12px;">
+            <span style="display:flex;align-items:center;gap:6px;">
+              <span class="material-icons-round" style="font-size:16px;color:#ea580c;">content_paste</span>
+              <span style="font-weight:600;">Ayuda para pegar desde Excel</span>
+              <span style="font-weight:400;color:#9a3412;opacity:0.75;">— ${Utils.sanitize(currentTurno)}</span>
+            </span>
+            <span class="material-icons-round" id="paste-help-chevron" style="font-size:18px;transition:transform 0.2s;color:#9a3412;">expand_more</span>
           </button>
 
           <!-- COLAPSADO por defecto (display:none). El maestro lo abre cuando lo necesita. -->
-          <div id="paste-help-body" style="padding:16px 18px;background:#fff;display:none;">
+          <div id="paste-help-body" style="padding:14px 16px;background:#fff;display:none;border-top:1px solid #fed7aa;">
 
             <!-- NUEVO: aviso de pegado inteligente -->
             <div style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:2px solid #f59e0b;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
@@ -1834,6 +2663,24 @@ const GradesModule = (function () {
         `}
 
 
+        ${_p3CapturaLocked ? `
+          <!-- v8.22: mensaje simplificado — las horas son SEMESTRALES (una sola
+               vez para todo el semestre). Antes decía "captúralas en P1, P2, P3"
+               que confundía porque parecía que había horas distintas por parcial. -->
+          <div style="background:linear-gradient(135deg,#7c2d12 0%,#b91c1c 100%);color:#fff;border-radius:12px;padding:14px 20px;margin-bottom:12px;box-shadow:0 4px 12px rgba(0,0,0,0.18);">
+            <div style="display:flex;align-items:center;gap:14px;">
+              <span class="material-icons-round" style="font-size:32px;flex-shrink:0;background:rgba(255,255,255,0.18);border-radius:50%;padding:8px;">lock</span>
+              <div style="flex:1;">
+                <div style="font-size:16px;font-weight:800;margin-bottom:4px;">Primero captura las horas del semestre</div>
+                <div style="font-size:13px;line-height:1.55;opacity:0.95;">
+                  Baja al panel naranja <strong>"Horas impartidas del semestre"</strong> al final de la lista y captura los meses de Febrero a Julio. Aplican a los 3 parciales automáticamente.
+                </div>
+              </div>
+            </div>
+          </div>
+        ` : ''}
+        ${_renderStatusBanner()}
+
         <div class="table-container" style="overflow-x:auto;max-height:65vh;">
           <table class="grade-editor-table" style="min-width:750px;">
             <thead>
@@ -1860,15 +2707,23 @@ const GradesModule = (function () {
 
         <div class="card horas-card">
           <div class="horas-card-header">
-            <h3>Horas impartidas</h3>
+            <h3>Horas impartidas del semestre <span style="font-size:11px;font-weight:600;color:#3182ce;background:#dbeafe;padding:2px 8px;border-radius:8px;margin-left:6px;vertical-align:middle;">Febrero a Julio</span></h3>
             <span>Obligatorio antes de guardar</span>
+          </div>
+          <!-- v8.15: aclaración para los maestros — las horas son SEMESTRALES,
+               se capturan una sola vez y aplican a los 3 parciales. Antes había
+               confusión porque el doc se guardaba por parcial. -->
+          <div style="font-size:12px;color:#475569;background:#f1f5f9;border-left:3px solid #3182ce;padding:6px 10px;border-radius:4px;margin-bottom:10px;line-height:1.45;">
+            <strong>Captúralas una sola vez.</strong> El semestre completo abarca de febrero a julio.
+            Las horas que pongas aquí se aplicarán automáticamente a los <strong>tres parciales</strong>
+            — no tienes que volver a capturarlas en P2 ni P3.
           </div>
           <div class="horas-grid">
             ${['Febrero','Marzo','Abril','Mayo','Junio','Julio'].map(m =>
               `<div class="horas-month">
                 <label>${m}</label>
                 <input type="number" min="0" max="99" step="1" id="horas-${m.toLowerCase()}"
-                  class="ge-input horas-input" data-month="${m.toLowerCase()}"${lockedDisabled}>
+                  class="ge-input horas-input" data-month="${m.toLowerCase()}"${horasInputDisabled}>
               </div>`
             ).join('')}
             <div class="horas-total-box">
@@ -2041,6 +2896,11 @@ const GradesModule = (function () {
       // incidencias pendientes (debounced 400ms). Si el alumno quedó reprobado
       // y sin motivo capturado, el maestro lo verá enseguida.
       _scheduleFailureBannerUpdate();
+      // FIX (v7.83): save INMEDIATO al perder foco si hay cambios pendientes.
+      // Antes solo se confiaba en el debounce de 3s del auto-save. Si el maestro
+      // editaba y cerraba la pestaña (o cambiaba de vista) en menos de 3s,
+      // el cambio se perdía. Ahora cada Tab/Enter/click-fuera fuerza commit.
+      _flushAutoSave();
     });
 
     container.addEventListener('input', (e) => {
@@ -2145,6 +3005,13 @@ const GradesModule = (function () {
     // ═══ BEFOREUNLOAD GUARD ═══
     window.addEventListener('beforeunload', _beforeUnloadGuard);
 
+    // FIX (v7.83): FLUSH al cerrar/cambiar pestaña.
+    // Listeners idempotentes (solo se registran 1 vez globalmente).
+    // - pagehide: cierra/recarga/navega — mas confiable que beforeunload en moviles
+    // - visibilitychange=hidden: cambio de pestaña/app, bloqueo de pantalla
+    //   (el caso típico "edito → cambio a WhatsApp → vuelvo 10 min → debounce nunca disparo")
+    _installUnloadHandlers();
+
     // ═══ AUTO-SAVE DRAFT every 30 seconds ═══
     if (_draftTimer) clearInterval(_draftTimer);
     _draftTimer = setInterval(_saveDraft, 30000);
@@ -2168,6 +3035,13 @@ const GradesModule = (function () {
         _updateHorasTotal();
         _markDirty();
         _scheduleRiskBannerUpdate();
+        // v8.22: si el maestro empieza a teclear horas, asumimos que va a
+        // capturar — desbloqueamos el banner rojo de P3 inmediatamente.
+        // El autoguardado persistirá los valores en los 3 parciales en breve.
+        const horasData = _getHorasData();
+        if (Object.keys(horasData).length > 0) {
+          _horasCapturadas = { P1: true, P2: true, P3: true };
+        }
       });
     });
     _loadHoras().then(() => _updateRiskBanner());
@@ -2760,15 +3634,25 @@ const GradesModule = (function () {
     let data = null;
 
     try {
-      // 1) Intentar el parcial actual
-      const docId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
-      const doc = await db.collection('teacherHours').doc(docId).get();
+      // 1) Intentar el doc canónico semestral
+      let docId = `${selectedGroup}_${selectedSubject}_SEMESTRE`;
+      let doc = await db.collection('teacherHours').doc(docId).get();
       if (doc.exists && hasAnyHoras(doc.data())) {
         data = doc.data();
         source = 'current';
       }
 
-      // 2) Fallback: buscar en los OTROS parciales del mismo grupo+materia
+      // 2) Fallback: intentar el parcial actual
+      if (!data) {
+        docId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
+        doc = await db.collection('teacherHours').doc(docId).get();
+        if (doc.exists && hasAnyHoras(doc.data())) {
+          data = doc.data();
+          source = 'current';
+        }
+      }
+
+      // 3) Fallback: buscar en los OTROS parciales del mismo grupo+materia
       if (!data) {
         const otherPartials = K.PARCIALES
           .map(p => p.id)
@@ -2788,7 +3672,7 @@ const GradesModule = (function () {
         }
       }
 
-      // 3) Aplicar los datos a los inputs (si encontramos algo).
+      // 4) Aplicar los datos a los inputs (si encontramos algo).
       //    Si vinieron de fallback, marcar el input para que NO se guarden
       //    automáticamente en el parcial actual al guardar grades (el admin
       //    podría sobrescribir P1 con horas de P2 sin querer).
@@ -2807,32 +3691,21 @@ const GradesModule = (function () {
         _updateHorasTotal();
       }
 
-      // 4) Si vino de otro parcial, mostrar nota informativa
+      // 5) Si vino de otro parcial, mostrar nota informativa
       _showHorasSourceNote(source);
     } catch (e) { console.warn('Error loading horas:', e); }
   }
 
-  // Inserta una nota arriba de la sección de horas indicando de qué parcial
-  // vienen las horas mostradas (solo cuando NO son del parcial actual).
+  // v8.15: ya NO mostramos "estas horas se tomaron del Segundo Parcial..."
+  // porque las horas son SEMESTRALES — se capturan una sola vez y aplican a
+  // los 3 parciales. El banner causaba confusión: parecía un error cuando en
+  // realidad era el flujo correcto. La función queda como no-op para no
+  // romper a los callers; cualquier nota previa se borra al pasar por aquí.
   function _showHorasSourceNote(source) {
     const existing = document.getElementById('horas-source-note');
     if (existing) existing.remove();
-    if (!source || source === 'current') return;
-
-    const partialName = K.PARCIALES.find(p => p.id === source)?.nombre || source;
-    const currentName = K.PARCIALES.find(p => p.id === currentPartial)?.nombre || currentPartial;
-    const horasCard = document.querySelector('.horas-card');
-    if (!horasCard) return;
-
-    const note = document.createElement('div');
-    note.id = 'horas-source-note';
-    note.style.cssText = 'background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:13px;color:#1e40af;line-height:1.4;display:flex;gap:10px;align-items:flex-start;';
-    note.innerHTML = `
-      <span class="material-icons-round" style="font-size:20px;color:#3b82f6;flex-shrink:0;margin-top:1px;">info</span>
-      <div>
-        Estas horas se tomaron del <strong>${Utils.sanitize(partialName)}</strong> porque no se capturaron horas específicas para el <strong>${Utils.sanitize(currentName)}</strong>. El cálculo de riesgo por faltas usa estas horas como referencia.
-      </div>`;
-    horasCard.parentNode.insertBefore(note, horasCard);
+    // No-op intencional: las horas semestrales se reflejan en los 3 parciales
+    // automáticamente, no hay nada que aclarar.
   }
 
   function _updateHorasTotal() {
@@ -2848,15 +3721,33 @@ const GradesModule = (function () {
 
   async function _saveHorasData(horasData) {
     if (!horasData || Object.keys(horasData).length === 0) return false;
-    const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
-    await db.collection('teacherHours').doc(horasDocId).set({
+    // v8.32: las horas son una sola captura del SEMESTRE. Guardamos un doc
+    // canónico y reflejos por parcial para compatibilidad con reportes viejos.
+    // Se hacen escrituras independientes para que una regla/corte de red en un
+    // reflejo no ponga en riesgo las calificaciones ya guardadas.
+    const base = {
       ...horasData,
       groupId: selectedGroup,
       subjectId: selectedSubject,
-      partial: currentPartial,
       updatedBy: auth.currentUser.uid,
       updatedAt: new Date()
-    }, { merge: true });
+    };
+    const targets = ['SEMESTRE', 'P1', 'P2', 'P3'];
+    const writes = targets.map(partial => {
+      const docId = `${selectedGroup}_${selectedSubject}_${partial}`;
+      return db.collection('teacherHours').doc(docId).set({
+        ...base,
+        partial,
+        semesterHours: true
+      }, { merge: true });
+    });
+    const results = await Promise.allSettled(writes);
+    const ok = results.some(r => r.status === 'fulfilled');
+    if (!ok) {
+      const reason = results.find(r => r.status === 'rejected')?.reason;
+      throw reason || new Error('No se pudieron guardar horas');
+    }
+    _horasCapturadas = { P1: true, P2: true, P3: true };
     return true;
   }
 
@@ -2885,7 +3776,8 @@ const GradesModule = (function () {
       });
 
       if (!hasData) return;
-      const suma = K.calcSuma(sumaData);
+      // Contexto PE socioemocional: ignora PE en todos los parciales (Gaceta EPO 67)
+      const suma = K.calcSuma(sumaData, { subjectId: selectedSubject, partial: currentPartial });
       const cal = K.calcCal(suma);
       if (cal !== '' && Number(cal) < K.THRESHOLDS.PASS_GRADE) {
         failing.push({
@@ -2931,30 +3823,25 @@ const GradesModule = (function () {
       }
       const missing = await _getMissingFailureIncidents(failing);
       if (missing.length === 0) {
-        // Tiene reprobados pero TODOS con incidencia → mensaje verde discreto
+        // Todos los reprobados con motivo reportado → chip discreto
         container.innerHTML = `
-          <div style="background:#ecfdf5;border:1px solid #10b981;border-radius:8px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:#065f46;">
-            <span class="material-icons-round" style="font-size:18px;color:#059669;">check_circle</span>
-            <div><strong>${failing.length} alumno(s) reprobado(s)</strong> · todos con motivo reportado ✓</div>
+          <div style="display:inline-flex;align-items:center;gap:6px;background:#ecfdf5;border:1px solid #10b981;border-radius:12px;padding:3px 10px;margin-bottom:8px;font-size:11px;color:#065f46;">
+            <span class="material-icons-round" style="font-size:14px;color:#059669;">check_circle</span>
+            <span><strong>${failing.length}</strong> reprobado(s) · todos con motivo ✓</span>
           </div>
         `;
         return;
       }
-      // Hay missing → banner naranja prominente con CTA
+      // Hay missing → banner compacto en una fila con CTA prominente
       container.innerHTML = `
-        <div style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:2px solid #f59e0b;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:flex-start;gap:14px;box-shadow:0 4px 12px rgba(245,158,11,0.18);">
-          <span class="material-icons-round" style="font-size:32px;color:#b45309;flex-shrink:0;">priority_high</span>
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:15px;font-weight:800;color:#78350f;line-height:1.2;margin-bottom:3px;">
-              ${missing.length} alumno(s) reprobado(s) sin motivo reportado
-            </div>
-            <div style="font-size:12.5px;color:#78350f;line-height:1.45;">
-              Reportar el motivo de cada reprobación es <strong>obligatorio</strong>. Le ayuda a orientación cuando los papás vienen. Tienes que reportarlo antes de imprimir o salir de la lista.
-            </div>
+        <div style="background:#fff7ed;border:1px solid #f59e0b;border-left:4px solid #b45309;border-radius:8px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:#78350f;flex-wrap:wrap;">
+          <span class="material-icons-round" style="font-size:18px;color:#b45309;flex-shrink:0;">priority_high</span>
+          <div style="flex:1;min-width:200px;line-height:1.35;">
+            <strong>${missing.length} reprobado(s) sin motivo reportado</strong> · obligatorio antes de imprimir.
           </div>
-          <button data-action="open-failure-incidents-modal" style="background:#b45309;color:#fff;border:none;border-radius:8px;padding:12px 18px;font-weight:800;font-size:13px;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;flex-shrink:0;white-space:nowrap;">
-            <span class="material-icons-round" style="font-size:18px;">flag</span>
-            Reportar ahora (${missing.length})
+          <button data-action="open-failure-incidents-modal" style="background:#b45309;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px;flex-shrink:0;">
+            <span class="material-icons-round" style="font-size:14px;">flag</span>
+            Reportar (${missing.length})
           </button>
         </div>
       `;
@@ -3208,11 +4095,16 @@ const GradesModule = (function () {
     const data = {};
     ['febrero','marzo','abril','mayo','junio','julio'].forEach(m => {
       const el = document.getElementById('horas-' + m);
-      if (!el || el.value.trim() === '') return;
-      // Si el valor vino de FALLBACK de otro parcial y el usuario NO lo modificó,
-      // NO se guarda — evita sobrescribir el parcial actual con datos prestados.
-      if (el.dataset.fromFallback) return;
-      data[m] = parseInt(el.value);
+      if (!el) return; // input no existe (caso raro)
+      // FIX bug-horas-feb-mar (Mayo 2026): antes "saltabamos" los meses con
+      // input vacio (return early), lo que con merge:true dejaba esos campos
+      // INEXISTENTES en Firestore. Resultado: maestros que capturaban abril
+      // primero quedaban con feb/mar ausentes para siempre, y aunque luego
+      // los completaran, el bug recurria si volvian a guardar.
+      // Ahora persistimos los 6 meses SIEMPRE: vacio se guarda como 0.
+      const raw = el.value.trim();
+      const num = raw === '' ? 0 : parseInt(raw, 10);
+      data[m] = isNaN(num) ? 0 : num;
     });
     return data;
   }
@@ -3285,12 +4177,11 @@ const GradesModule = (function () {
   }
 
   function _canLeaveEditor() {
-    if (!_isTeacherCaptureRole()) return true;
-    if (!_isDirty) return true;
-    if (_listCleared) return true;
-    if (_hasRequiredHoras()) return true;
-    _showHorasRequiredReminder();
-    return false;
+    // v8.26: ya no impedimos salir del editor por falta de horas.
+    // El maestro puede moverse libremente entre listas; las horas pendientes
+    // se recuerdan en el banner de alertas (chip amarillo) y bloquean solo
+    // la impresión oficial vía _enforcePrintReadiness (v8.20).
+    return true;
   }
 
   /** Auto-recalculate SUMA and CAL for a row when any rubro changes */
@@ -3307,9 +4198,11 @@ const GradesModule = (function () {
     });
 
     // Always show suma/cal — vacío = 0, si todo es 0 la cal es 5
-    const suma = K.calcSuma(data);
+    // Contexto socioemocional: materias del bloque no permiten PE en ningún parcial (Gaceta EPO 67)
+    const _peCtx = { subjectId: selectedSubject, partial: currentPartial };
+    const suma = K.calcSuma(data, _peCtx);
     const cal = K.calcCal(suma);
-    const peIgnored = K.isPEIgnored(data); // Regla EPO67: el PE no rescata reprobados
+    const peIgnored = K.isPEIgnored(data, _peCtx); // Regla EPO67: el PE no rescata reprobados / bloqueado en materias socioemocionales
 
     const sumaCell = row.querySelector('.col-suma');
     const calCell = row.querySelector('.col-cal');
@@ -3337,10 +4230,14 @@ const GradesModule = (function () {
   function _calcRowSuma(gradeData, rubros) {
     const data = {};
     rubros.forEach(r => { data[r.key] = gradeData[r.key]; });
-    return K.calcSuma(data);
+    // Pasa contexto para que K.calcSuma aplique la regla socioemocional
+    // (ignora PE si la materia está en SUBJECTS_SIN_PE — en todos los parciales).
+    return K.calcSuma(data, { subjectId: selectedSubject, partial: currentPartial });
   }
 
-  // Banner con fechas críticas leídas de config/captureWindow (admin las programa)
+  // Banner con fechas críticas leídas de config/captureWindow (admin las programa).
+  // v8.10: usa K.captureWindowForGrade() con _currentGrado del editor para que
+  // cada maestro vea las fechas de SU grado (3° puede entregar antes que 1°/2°).
   let _captureWindowCache = null;
   async function _updateCaptureDeadlineBanner() {
     const root = document.getElementById('capture-deadline-banner');
@@ -3350,7 +4247,16 @@ const GradesModule = (function () {
         const doc = await db.collection('config').doc('captureWindow').get();
         _captureWindowCache = doc.exists ? doc.data() : {};
       }
-      const cfg = _captureWindowCache;
+      const cfgRaw = _captureWindowCache;
+      // Resolver al grado actual del editor (fallback al global si no hay override).
+      // _moduleCurrentGrado se setea en _renderGradeEditor al cargar el grupo.
+      // Si entró por la cabecera (sin grupo aún), grado=null → fallback global.
+      const cfg = K.captureWindowForGrade(cfgRaw, _moduleCurrentGrado);
+      // Detectar si las fechas vienen del override por grado para mostrar el
+      // chip "Fechas para tu grado (N°)" — confianza extra para el docente.
+      const g = String(_moduleCurrentGrado || '').trim();
+      const hasGradeOverride = !!(cfgRaw && cfgRaw.byGrade && g && cfgRaw.byGrade[g] && Object.keys(cfgRaw.byGrade[g]).length > 0);
+
       const fmtDate = (ts) => {
         if (!ts) return null;
         const d = ts.toDate ? ts.toDate() : new Date(ts);
@@ -3361,50 +4267,41 @@ const GradesModule = (function () {
         const d = ts.toDate ? ts.toDate() : new Date(ts);
         return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
       };
+      const opensStr = fmtDate(cfg.opensAt);
       const closesStr = fmtDate(cfg.closesAt);
       const deliveryStr = fmtJustDate(cfg.deliveryDate);
       const corrStartStr = fmtJustDate(cfg.correctionsStart);
       const corrEndStr = fmtJustDate(cfg.correctionsEnd);
 
-      // Si no hay nada configurado, mostrar banner genérico de recordatorio
-      if (!closesStr && !deliveryStr) {
-        root.innerHTML = `
-          <div class="card" style="background:#eff6ff;border-left:5px solid #3182ce;margin-bottom:12px;">
-            <div style="display:flex;gap:12px;align-items:flex-start;">
-              <span class="material-icons-round" style="color:#3182ce;font-size:28px;">info</span>
-              <div style="flex:1;">
-                <strong style="font-size:14px;color:#1e40af;">Recordatorio importante</strong>
-                <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;color:#1e293b;">
-                  <li><strong>Imprime tus listas</strong> al terminar la captura para recolectar las firmas de los alumnos y entregarlas en Dirección antes de la fecha límite.</li>
-                  <li>Los <strong>cambios de calificación</strong> solo pueden solicitarse durante los <strong>2 días hábiles</strong> posteriores al cierre de captura.</li>
-                </ul>
-              </div>
-            </div>
-          </div>`;
+      // Si no hay nada configurado, NO mostrar nada
+      if (!closesStr && !deliveryStr && !opensStr) {
+        root.innerHTML = '';
         return;
       }
 
-      const items = [];
-      if (closesStr) items.push(`<li>📅 <strong>Cierre de captura:</strong> ${closesStr}</li>`);
-      if (deliveryStr) items.push(`<li>📋 <strong>Entrega de listas firmadas en Dirección:</strong> ${deliveryStr}</li>`);
+      // v8.14: banner SIEMPRE expandido — todas las fechas en UN solo renglón.
+      // Cada chip es atómico (icono + label + fecha) y se separa con un divisor
+      // sutil. Si la pantalla es muy angosta, hace wrap suave (gap+flex-wrap).
+      const chips = [];
+      if (opensStr) chips.push(`<span style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;"><span style="font-size:13px;">🟢</span><strong>Apertura:</strong> ${opensStr}</span>`);
+      if (closesStr) chips.push(`<span style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;"><span style="font-size:13px;">📅</span><strong>Cierre:</strong> ${closesStr}</span>`);
+      if (deliveryStr) chips.push(`<span style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;"><span style="font-size:13px;">📋</span><strong>Entrega listas firmadas:</strong> ${deliveryStr}</span>`);
       if (corrStartStr && corrEndStr) {
-        items.push(`<li>✏️ <strong>Ventana de cambios de calificación:</strong> del ${corrStartStr} al ${corrEndStr} (días hábiles posteriores al cierre)</li>`);
+        chips.push(`<span style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;"><span style="font-size:13px;">✏️</span><strong>Correcciones:</strong> ${corrStartStr} → ${corrEndStr}</span>`);
       }
 
+      const gradeChip = hasGradeOverride && _moduleCurrentGrado
+        ? `<span style="background:#d97706;color:#fff;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:800;white-space:nowrap;">Fechas para ${_moduleCurrentGrado}° grado</span>`
+        : '';
+
       root.innerHTML = `
-        <div class="card" style="background:#fff7ed;border-left:5px solid #d97706;margin-bottom:12px;">
-          <div style="display:flex;gap:12px;align-items:flex-start;">
-            <span class="material-icons-round" style="color:#d97706;font-size:28px;">event</span>
-            <div style="flex:1;">
-              <strong style="font-size:14px;color:#92400e;">Fechas importantes — Recuerda:</strong>
-              <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;color:#1e293b;">
-                ${items.join('')}
-              </ul>
-              <div style="margin-top:8px;font-size:12px;color:#78350f;font-style:italic;">
-                Imprime tus listas para recolectar las firmas de los alumnos y entrégalas en Dirección antes de la fecha límite.
-              </div>
-            </div>
-          </div>
+        <div style="background:#fff7ed;border-left:4px solid #d97706;border-radius:6px;padding:8px 14px;margin-bottom:8px;font-size:12.5px;color:#78350f;display:flex;align-items:center;gap:14px;flex-wrap:wrap;line-height:1.4;">
+          <span style="display:inline-flex;align-items:center;gap:5px;font-weight:800;white-space:nowrap;">
+            <span class="material-icons-round" style="font-size:18px;color:#d97706;">event</span>
+            Fechas:
+          </span>
+          ${chips.join('<span style="color:#d97706;opacity:0.5;">·</span>')}
+          ${gradeChip}
         </div>`;
     } catch (e) {
       console.warn('captureWindow banner:', e.message);
@@ -3420,11 +4317,10 @@ const GradesModule = (function () {
     const totalHoras = totalEl ? (parseInt(totalEl.textContent) || 0) : 0;
 
     if (totalHoras === 0) {
-      container.innerHTML = `<div class="risk-banner risk-info">
-        <span class="material-icons-round">info</span>
-        <div>
-          <strong>Captura primero las horas impartidas</strong> de este parcial para que el sistema te avise de alumnos en riesgo de extraordinario por faltas.
-        </div>
+      // Mensaje muy discreto cuando aún no hay horas (no satura)
+      container.innerHTML = `<div style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;border:1px solid #93c5fd;border-radius:12px;padding:3px 10px;margin-bottom:8px;font-size:11px;color:#1e40af;">
+        <span class="material-icons-round" style="font-size:14px;color:#3b82f6;">info</span>
+        Captura horas impartidas (abajo) para detectar riesgo de faltas
       </div>`;
       return;
     }
@@ -3530,8 +4426,58 @@ const GradesModule = (function () {
   // excepción no controlada deja el flag pegado.
   let _saveStartedAt = 0;
 
+  // ═══ ANTI-BURST GUARD (v8.04) ═══
+  // El 7 mayo 2026 02:29 AM hubo 53 saves consecutivos en 4 segundos a la
+  // misma lista (Ciencias Sociales 1-2 P1). Eso sobrescribió valores del
+  // cuadro firmado por la maestra. Causa probable: bucle de script o
+  // paste-bulk descontrolado. Este guard previene que vuelva a pasar:
+  // si la MISMA lista se intenta guardar >3 veces en <10s, BLOQUEA.
+  //
+  // El historial se guarda por entityId (`${turno}_${grupo}_${subj}_${parcial}`),
+  // solo en memoria del navegador. NO bloquea cambios espaciados (típico
+  // del autosave debounce 3s que dispara como máximo 1 save / 3s).
+  const _saveHistory = new Map();  // entityId → [timestamps]
+  const BURST_WINDOW_MS = 10000;   // 10 segundos
+  const BURST_MAX_SAVES = 3;       // máximo 3 saves en esa ventana
+
+  function _bumpSaveHistory(entityId) {
+    const now = Date.now();
+    let arr = _saveHistory.get(entityId) || [];
+    // Limpiar timestamps fuera de la ventana
+    arr = arr.filter(t => now - t < BURST_WINDOW_MS);
+    arr.push(now);
+    _saveHistory.set(entityId, arr);
+    return arr.length;
+  }
+
+  function _isBurstViolation(entityId) {
+    const now = Date.now();
+    const arr = (_saveHistory.get(entityId) || []).filter(t => now - t < BURST_WINDOW_MS);
+    return arr.length >= BURST_MAX_SAVES;
+  }
+
+  function _currentEntityId() {
+    const turno = (currentTurno || '').toUpperCase();
+    const grupo = (selectedGroup || '').replace(/^MATUTINO_|^VESPERTINO_/, '');
+    return `${turno}_${grupo}_${selectedSubject || ''}_${currentPartial || ''}`;
+  }
+
   async function saveGrades(opts) {
     const silent = !!(opts && opts.silent);
+
+    // ═══ ANTI-BURST GUARD ═══
+    // Detecta saves repetidos al mismo doc en ventana de 10s. Si supera el
+    // umbral, BLOQUEA con error visible (silent o no, registra en consola).
+    const entityId = _currentEntityId();
+    if (entityId && _isBurstViolation(entityId)) {
+      console.error('[saveGrades] ANTI-BURST: bloqueado save #' + ((_saveHistory.get(entityId) || []).length + 1) +
+        ' a ' + entityId + ' en <10s. Intento sospechoso (¿script en bucle?).');
+      if (!silent) {
+        Toast.show('🛡️ Bloqueado: demasiados guardados a la misma lista en poco tiempo. Espera 10 segundos.', 'error', 6000);
+      }
+      throw new Error('ANTI-BURST: máximo ' + BURST_MAX_SAVES + ' saves cada ' + (BURST_WINDOW_MS/1000) + 's a la misma lista.');
+    }
+
     // ═══ PREVENT DOUBLE-CLICK + AUTO-RESCUE DE GUARDADO ATASCADO ═══
     if (_isSaving) {
       const stuckSeconds = (Date.now() - _saveStartedAt) / 1000;
@@ -3551,6 +4497,9 @@ const GradesModule = (function () {
       return;
     }
 
+    // Registrar el intento de save (solo cuando llegamos aquí, no en pruebas burst)
+    if (entityId) _bumpSaveHistory(entityId);
+
     const saveBtn = document.querySelector('[data-action="save-grades"]');
 
     // ═══ CHECK NETWORK CONNECTIVITY ═══
@@ -3559,12 +4508,13 @@ const GradesModule = (function () {
       throw new Error('Sin conexión a internet');
     }
 
-    // ═══ VALIDAR HORAS IMPARTIDAS — solo si NO es silent (auto-save no bloquea por horas) ═══
-    // El auto-save guarda calificaciones aunque falten horas. El recordatorio
-    // de horas se muestra en pantalla pero NO bloquea el guardado automático.
+    // v8.26: YA NO bloqueamos el guardado por falta de horas. Antes el guardado
+    // MANUAL (no silent) abortaba con un modal "NO se guardaron" si los inputs
+    // de horas estaban vacíos. Esto frustraba al maestro que quería capturar
+    // calificaciones primero. Ahora el guardado SIEMPRE procede; las horas se
+    // recuerdan con un toast suave porque son semestrales y no bloquean.
     if (!silent && _isTeacherCaptureRole() && !_listCleared && !_hasRequiredHoras()) {
-      _showHorasRequiredReminder();
-      return;
+      Toast.show('⏱ Recuerda capturar las horas del semestre antes de imprimir', 'warning');
     }
 
     // ═══ CHECK PARTIAL LOCK + OVERRIDE (force fresh read) ═══
@@ -3574,7 +4524,9 @@ const GradesModule = (function () {
     try {
       const cachedPartials = await Store.getPartials(true);
       const partialDoc = cachedPartials.find(p => p.id === currentPartial);
-      if (partialDoc && partialDoc.locked) {
+      // v8.07: usar isPartialLockedForGrade — el cierre puede ser por grado
+      const _saveGrado = K.gradeFromGroupId(selectedGroup);
+      if (partialDoc && K.isPartialLockedForGrade(partialDoc, _saveGrado)) {
         // 1) Admin (incluido cuando impersona) siempre puede.
         // 2) Si no, ya pre-resolvimos el override en openGradeEditor (_editorOverrideActive).
         // 3) Fallback final: consultar Firestore por si el override se acaba de otorgar
@@ -3620,6 +4572,16 @@ const GradesModule = (function () {
       // Re-lanzar errores propios; ignorar errores de lectura
       if (e?.message?.includes('Parcial cerrado')) throw e;
       console.warn('Error verificando parcial:', e);
+    }
+
+    // v8.27: Las horas ya no bloquean el guardado de P3.
+    // Se mantienen como requisito de impresion/reportes, pero la captura debe guardarse.
+    if (currentPartial === 'P3' && !silent && !_hasAdminPower() && !_editorOverrideActive
+        && !_horasCompletasParaExtra()) {
+      const faltan = ['P1', 'P2', 'P3'].filter(pid => !_horasCapturadas[pid]);
+      if (faltan.length) {
+        Toast.show('P3 se puede guardar. Recuerda capturar horas para poder imprimir. Faltan: ' + faltan.join(', '), 'warning', 8000);
+      }
     }
 
     // ═══ VALIDATE ALL INPUTS BEFORE SAVE ═══
@@ -3742,6 +4704,7 @@ const GradesModule = (function () {
 
       let hasData = false;
       let hasChanges = false;
+      let rubroChanged = false; // ← v8.42: distinguir si los rubros (no faltas) cambiaron
 
       const data = {
         studentId,
@@ -3761,7 +4724,10 @@ const GradesModule = (function () {
           data[r.key] = v;
           // Mark as having data if the user typed anything (including 0)
           if (raw !== '' || stored[r.key] !== undefined) hasData = true;
-          if (stored[r.key] === undefined || Math.abs((stored[r.key] || 0) - v) > 0.001) hasChanges = true;
+          if (stored[r.key] === undefined || Math.abs((stored[r.key] || 0) - v) > 0.001) {
+            hasChanges = true;
+            rubroChanged = true; // ← v8.42: marca solo si rubros cambiaron, no faltas
+          }
         }
       });
 
@@ -3769,15 +4735,31 @@ const GradesModule = (function () {
       if (faltasInput && faltasInput.value.trim() !== '') {
         const f = parseInt(faltasInput.value);
         data.faltas = f;
-        if ((stored.faltas || 0) !== f) hasChanges = true;
+        // FIX bug recuperación 3-3 P3: cuando stored.faltas era undefined y maestro
+        // escribe 0, antes (undefined || 0) !== 0 → false → no se guardaba.
+        // Ahora detectamos cambio cuando no había valor previo o difiere del nuevo.
+        if (stored.faltas === undefined || Number(stored.faltas) !== f) hasChanges = true;
+        // hasData se marca también: el maestro tecleó algo (incluido 0)
+        hasData = true;
       }
 
       if (hasData && hasChanges) {
-        const sumaData = {};
-        rubros.forEach(r => { sumaData[r.key] = data[r.key]; });
-        data.suma = K.calcSuma(sumaData);
-        data.cal = K.calcCal(data.suma);
-        data.value = data.cal;
+        // v8.42 FIX BLINDAJE: solo recalcular suma/cal si los rubros cambiaron.
+        // Si solo cambió `faltas`, NO sobrescribir cal/suma — evita el caso donde
+        // los inputs de ec/tr/ex/pe estaban vacíos al guardar (race/render parcial)
+        // y la suma quedaba en 0 → cal=5 → SOBRESCRIBÍA la cal correcta.
+        if (rubroChanged) {
+          const sumaData = {};
+          rubros.forEach(r => { sumaData[r.key] = data[r.key]; });
+          // Contexto PE socioemocional: bloquea PE en materias específicas en TODOS los parciales (Gaceta EPO 67)
+          data.suma = K.calcSuma(sumaData, { subjectId: selectedSubject, partial: currentPartial });
+          data.cal = K.calcCal(data.suma);
+          data.value = data.cal;
+        } else {
+          // Solo cambió faltas: limpiar campos de rubros del payload para que el merge
+          // NO sobrescriba lo que ya está bien en Firestore.
+          rubros.forEach(r => { delete data[r.key]; });
+        }
 
         const ref = db.collection('grades').doc(key);
         batch.set(ref, data, { merge: true });
@@ -3814,17 +4796,6 @@ const GradesModule = (function () {
     });
 
     const horasData = _getHorasData();
-    if (Object.keys(horasData).length > 0) {
-      const horasDocId = `${selectedGroup}_${selectedSubject}_${currentPartial}`;
-      batch.set(db.collection('teacherHours').doc(horasDocId), {
-        ...horasData,
-        groupId: selectedGroup,
-        subjectId: selectedSubject,
-        partial: currentPartial,
-        updatedBy: auth.currentUser.uid,
-        updatedAt: new Date()
-      }, { merge: true });
-    }
 
     // Nothing to save?
     if (count === 0 && incidentCount === 0) {
@@ -3896,6 +4867,9 @@ const GradesModule = (function () {
                   'Avisa al admin con este mensaje y un screenshot para que lo revise.';
           } else if (code === 'unauthenticated' || (error && (error.message||'').toLowerCase().includes('unauthenticated'))) {
             msg = '🔒 Tu sesión expiró. Cierra sesión, vuelve a entrar e intenta de nuevo.';
+          } else if (code === 'failed-precondition') {
+            msg = '⚠️ El guardado fue rechazado por una condición del sistema, no por falta de internet. ' +
+                  'Tus datos siguen en el editor. Actualiza la página e intenta de nuevo; si vuelve a pasar, pide al admin revisar que P3 esté abierto para 3er grado y que tu asignación esté activa.';
           } else if (code === 'unavailable' || (error && (error.message||'').toLowerCase().includes('unavailable'))) {
             msg = '📡 Servicio no disponible momentaneamente. Espera 1 minuto e intenta de nuevo.';
           } else if (error && (error.message||'').toLowerCase().includes('timeout')) {
@@ -3915,6 +4889,16 @@ const GradesModule = (function () {
 
     // ═══ SUCCESS — unlock UI immediately, audit in background ═══
     const wasListCleared = _listCleared;
+    let horasSaved = false;
+    let horasSaveFailed = false;
+    if (Object.keys(horasData).length > 0) {
+      try {
+        horasSaved = await _saveHorasData(horasData);
+      } catch (horasError) {
+        horasSaveFailed = true;
+        console.warn('Calificaciones guardadas; horas no guardadas:', horasError);
+      }
+    }
     Store.invalidateGradesForGroup(selectedGroup);
     Store.invalidate('allGrades');
     if (typeof Store.invalidateTeacherHours === 'function') Store.invalidateTeacherHours();
@@ -3935,7 +4919,11 @@ const GradesModule = (function () {
     if (wasListCleared) successParts.push(`${count} registros dejados en blanco`);
     else if (count > 0) successParts.push(`${count} calificaciones guardadas`);
     if (incidentCount > 0) successParts.push(`${incidentCount} incidencias registradas`);
-    if (!silent) Toast.show(successParts.length ? successParts.join(' y ') : 'Cambios guardados', 'success');
+    if (horasSaved) successParts.push('horas guardadas');
+    if (!silent) {
+      Toast.show(successParts.length ? successParts.join(' y ') : 'Cambios guardados', 'success');
+      if (horasSaveFailed) Toast.show('Las calificaciones sí se guardaron. Las horas no se pudieron guardar; intenta guardar horas de nuevo después.', 'warning', 9000);
+    }
 
     // Audit in background (don't block UI)
     const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
@@ -4298,12 +5286,19 @@ html, body { margin:0; padding:0; }
       Toast.show('No hay datos para imprimir', 'warning');
       return;
     }
-    // BLOQUEO: si hay reprobados sin motivo en esta lista, forzar captura
+    // BLOQUEO 1: si hay reprobados sin motivo en esta lista, forzar captura
     // antes de imprimir. La lista impresa no debe salir sin todos los motivos.
     const ok = await _enforceIncidentsBeforeLeave('imprimir esta lista');
     if (!ok) return;
 
     const asg = assignments.find(a => a.subjectId === selectedSubject && a.groupId === selectedGroup);
+
+    // v8.20 BLOQUEO 2: horas semestrales completas + todos los alumnos calificados.
+    // Solo aplica para maestros — admin/subdirector pueden imprimir con override.
+    if (asg) {
+      const ready = await _enforcePrintReadiness([asg], currentPartial, 'imprimir esta lista');
+      if (!ready) return;
+    }
     const subjectName = asg ? K.getUACNombre(asg.subjectName || asg.subjectId) : selectedSubject;
     const groupName = asg ? (asg.groupName || asg.groupId) : selectedGroup;
     const teacherName = (asg?.teacherName || '').toUpperCase();
@@ -4353,8 +5348,11 @@ html, body { margin:0; padding:0; }
     });
 
     const printWindow = window.open('', '_blank');
-    printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Control Parcial - ' +
-      Utils.sanitize(groupName) + ' - ' + Utils.sanitize(subjectName) + '</title></head><body>' +
+    // v8.10: el título de la pestaña incluye PARCIAL N para evitar que el
+    // docente imprima la lista del parcial equivocado al tener varias pestañas
+    // abiertas. El nombre del job en la cola de impresión también lo lleva.
+    printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>PARCIAL ' +
+      parcialNum + ' · ' + Utils.sanitize(groupName) + ' · ' + Utils.sanitize(subjectName) + '</title></head><body>' +
       html + _PRINT_TRIGGER_SCRIPT + '</body></html>');
     printWindow.document.close();
   }
@@ -4386,15 +5384,43 @@ html, body { margin:0; padding:0; }
       return;
     }
 
-    Toast.show(`Generando ${assignmentIds.length} lista(s)…`, 'info');
-
     // Filtrar las assignments solicitadas
-    const myAsg = await Store.getMyAssignments();
-    const targetAsgs = assignmentIds.map(id => myAsg.find(a => a.id === id)).filter(Boolean);
+    // v8.09: usar getOwnAssignments() para que auditor/presidente_academia
+    // solo puedan imprimir SUS propias listas (no las de toda la escuela).
+    // v8.23 FIX: era `Auth.userDoc?.role` (no existe esa property) — lo correcto
+    // es `App.currentUser?.role`. El bug causaba que isAdminLike siempre fuera
+    // false, así que admin/subdirector terminaban llamando getOwnAssignments.
+    const role = App.currentUser?.role;
+    const isAdminLike = (role === 'admin' || role === 'subdirector');
+    const myAsg = isAdminLike
+      ? await Store.getAssignments()
+      : await Store.getOwnAssignments();
+    let targetAsgs = assignmentIds.map(id => myAsg.find(a => a.id === id)).filter(Boolean);
     if (targetAsgs.length === 0) {
       Toast.show('No se encontraron las asignaciones solicitadas', 'error');
       return;
     }
+
+    // v8.20: BLOQUEO — horas semestrales completas + todos los alumnos calificados.
+    // El validador necesita acceso a _assignmentStatusCache; si esta función se
+    // llama desde fuera del editor (p.ej. desde imprimir múltiples desde la
+    // cascada), el cache puede estar vacío para esta lista → recargar primero.
+    if (!isAdminLike || _capAssignments.length > 0) {
+      const readyOk = await _enforcePrintReadiness(targetAsgs, partialId, 'imprimir esta(s) lista(s)', {
+        allowReadyOnly: targetAsgs.length > 1
+      });
+      if (!readyOk) return;
+      if (readyOk.readyOnlyIds) {
+        const allowed = new Set(readyOk.readyOnlyIds);
+        targetAsgs = targetAsgs.filter(a => allowed.has(a.id));
+        if (targetAsgs.length === 0) {
+          Toast.show('No hay listas completas para imprimir.', 'warning');
+          return;
+        }
+      }
+    }
+
+    Toast.show(`Generando ${targetAsgs.length} lista(s)…`, 'info');
 
     const parcialObj = K.PARCIALES.find(p => p.id === partialId);
     const parcialNum = parcialObj?.numero || 1;
@@ -4482,7 +5508,7 @@ html, body { margin:0; padding:0; }
     const printWindow = window.open('', '_blank');
     printWindow.document.write(
       '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
-      '<title>Listas de calificaciones — ' + targetAsgs.length + ' grupos</title>' +
+      '<title>PARCIAL ' + parcialNum + ' · ' + targetAsgs.length + ' listas</title>' +
       '</head><body>' + allHtml.join('') +
       _PRINT_TRIGGER_SCRIPT +
       '</body></html>'
@@ -4553,8 +5579,11 @@ html, body { margin:0; padding:0; }
     });
 
     const printWindow = window.open('', '_blank');
-    printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Control Parcial - ' +
-      Utils.sanitize(groupName) + ' - ' + Utils.sanitize(subjectName) + '</title></head><body>' +
+    // v8.10: el título de la pestaña incluye PARCIAL N para evitar que el
+    // docente imprima la lista del parcial equivocado al tener varias pestañas
+    // abiertas. El nombre del job en la cola de impresión también lo lleva.
+    printWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>PARCIAL ' +
+      parcialNum + ' · ' + Utils.sanitize(groupName) + ' · ' + Utils.sanitize(subjectName) + '</title></head><body>' +
       html + _PRINT_TRIGGER_SCRIPT + '</body></html>');
     printWindow.document.close();
   }
@@ -4565,7 +5594,8 @@ html, body { margin:0; padding:0; }
 
   async function renderAdmin() {
     const role = App.currentUser?.role;
-    if (role !== 'admin' && !App.canActAs('orientador') && !App.canActAs('maestro')) {
+    // Subdirector tiene autoridad académica equivalente a admin (entra como admin).
+    if (role !== 'admin' && role !== 'subdirector' && !App.canActAs('orientador') && !App.canActAs('maestro')) {
       _container().innerHTML = UI.moduleContainer(UI.emptyState('block', 'Acceso denegado'));
       return;
     }
@@ -4612,7 +5642,8 @@ html, body { margin:0; padding:0; }
   function _renderAdminUI() {
     const container = _container();
     const role = App.currentUser?.role;
-    const isMaestro = App.canActAs('maestro') && role !== 'admin';
+    // Subdirector cuenta como admin (vista global sin filtrar a sus grupos).
+    const isMaestro = App.canActAs('maestro') && role !== 'admin' && role !== 'subdirector';
     const subtitle = isMaestro
       ? 'Consulta de calificaciones de tus grupos y materias asignadas'
       : 'Consulta de calificaciones por grupo (solo lectura)';
@@ -4740,7 +5771,23 @@ html, body { margin:0; padding:0; }
         subs = [..._admin.allSubjects];
       }
     }
-    subs.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    // Orden oficial SEP del grado seleccionado (en lugar de alfabético).
+    // Si hay grado filtrado en _admin.grado, usar ese; si no, agrupar por grado.
+    if (_admin.grado) {
+      subs = K.sortSubjectsByGrado(subs, Number(_admin.grado));
+    } else {
+      // Sin grado: ordenar por grado primero, luego SEP dentro del grado.
+      subs.sort((a, b) => {
+        const ga = Number(a.grado) || 9; const gb = Number(b.grado) || 9;
+        if (ga !== gb) return ga - gb;
+        return 0; // dentro del grado se mantiene el orden (K.sort no aplica para mixto)
+      });
+      subs = subs.flatMap((_, i, arr) => {
+        if (i > 0 && arr[i].grado === arr[i - 1].grado) return [];
+        const grupoDeGrado = arr.filter(s => s.grado === arr[i].grado);
+        return K.sortSubjectsByGrado(grupoDeGrado, Number(arr[i].grado));
+      });
+    }
     el.innerHTML = '<option value="">Todas las materias</option>' + subs.map(s => `<option value="${s.id}">${Utils.sanitize(K.getUACNombre(s.nombre || s.id))}</option>`).join('');
   }
 
@@ -4882,7 +5929,7 @@ html, body { margin:0; padding:0; }
         ${rubroCells}
         <td style="text-align:center;background:rgba(49,130,206,0.04);">${suma}</td>
         <td style="text-align:center;${calColor}">${cal}</td>
-        <td style="text-align:center;">${g.faltas !== undefined ? g.faltas : '-'}</td>
+        <td style="text-align:center;">${(g.faltas !== undefined && g.faltas !== null) ? g.faltas : (cal !== '' && cal !== '-' && cal !== undefined ? 0 : '-')}</td>
       </tr>`;
     });
 

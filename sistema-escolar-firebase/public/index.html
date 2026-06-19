@@ -3,7 +3,39 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Version pin: incrementar en cada deploy. El bootstrap de abajo compara
+       contra localStorage; si difiere, fuerza purga total + reload. -->
+  <meta name="app-version" content="v8.08-cierre-programado-por-grado">
   <title>Sistema Escolar</title>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       AUTO-CLEAN PRE-BOOT (SÍNCRONO antes de cargar nada más).
+       Detecta versión vieja en localStorage y limpia SW + caches + IDB
+       + storage automáticamente. La página se reinicia con el código nuevo.
+       Si la versión coincide, no hace nada.
+       ════════════════════════════════════════════════════════════════ -->
+  <script>
+    // VERSION TRACKING (sin auto-clean destructivo).
+    // El auto-clean anterior borraba TODA la IndexedDB y localStorage en cada
+    // bump de versión — eso destruía la sesión de Firebase Auth (que vive en
+    // IDB `firebaseLocalStorageDb` + key `firebase:authUser:*` en localStorage).
+    // Resultado: CADA DEPLOY sacaba a todos los usuarios. Pésima UX.
+    //
+    // Ahora SOLO guardamos la versión para diagnóstico. Los assets se
+    // refrescan vía `?v=X.Y` en cada <script src> (cache busting natural por
+    // URL), no necesitamos purgar nada. El Service Worker ya es persistente
+    // (sw.js v7.48+ mantiene cache entre versiones).
+    (function () {
+      try {
+        const APP_VERSION = document.querySelector('meta[name="app-version"]').content;
+        const lastVersion = localStorage.getItem('epo67_app_version');
+        if (lastVersion !== APP_VERSION) {
+          console.log('[version-track]', lastVersion || '(primera vez)', '→', APP_VERSION);
+          localStorage.setItem('epo67_app_version', APP_VERSION);
+        }
+      } catch (_) { /* localStorage bloqueado: ignorar */ }
+    })();
+  </script>
   <link rel="stylesheet" href="/css/styles.css?v=6.67">
 
   <!-- Preconnect a dominios externos para acelerar el handshake TLS/DNS -->
@@ -18,9 +50,9 @@
 
   <!-- Preload de assets criticos (anticipa descarga de los core scripts del body) -->
   <link rel="preload" href="/js/firebase-config.js?v=6.96" as="script">
-  <link rel="preload" href="/js/constants.js?v=6.90" as="script">
-  <link rel="preload" href="/js/data-store.js?v=6.94" as="script">
-  <link rel="preload" href="/js/app.js?v=7.0" as="script">
+  <link rel="preload" href="/js/constants.js?v=8.12" as="script">
+  <link rel="preload" href="/js/data-store.js?v=8.18" as="script">
+  <link rel="preload" href="/js/app.js?v=7.55" as="script">
   <link rel="preload" href="/js/components.js?v=6.29" as="script">
 
   <!-- Firebase SDKs -->
@@ -122,13 +154,15 @@
       </div>
 
       <div class="sidebar-nav">
-        <a href="#" class="nav-item active" data-module="dashboard" onclick="Router.navigate('dashboard')">
+        <a href="#" class="nav-item active" data-module="dashboard" onclick="Router.navigate('dashboard')"
+           title="Inicio · Resumen general del sistema con métricas del plantel, alumnos en riesgo, captura por parcial y accesos rápidos.">
           <span class="material-icons-round">dashboard</span>
           <span class="nav-label">Inicio</span>
         </a>
 
         <!-- CENTRO DE AYUDA — visible para TODOS los roles, destacado -->
         <a href="#" class="nav-item" data-module="help-center" onclick="Router.navigate('help-center')"
+           title="Centro de Ayuda · Tutoriales, preguntas frecuentes y guías paso a paso para usar el sistema."
            style="background:rgba(34,197,94,0.15);border-left:3px solid #22c55e;margin:6px 0;">
           <span class="material-icons-round" style="color:#22c55e;">help_outline</span>
           <span class="nav-label" style="color:#bbf7d0;font-weight:700;">Centro de Ayuda</span>
@@ -144,41 +178,55 @@
         <!-- ═══════════════════════════════════════════════ -->
         <div class="nav-section" data-roles="admin,directivo,subdirector,secretario_escolar">
           <span class="nav-section-title">Administración</span>
-          <a href="#" class="nav-item" data-module="enrollment" onclick="Router.navigate('enrollment')" data-roles="admin,directivo,subdirector,secretario_escolar">
+          <a href="#" class="nav-item" data-module="enrollment" onclick="Router.navigate('enrollment')" data-roles="admin,directivo,subdirector,secretario_escolar"
+             title="Inscripciones · Registra nuevos alumnos al plantel, captura datos personales, asigna grupo y turno.">
             <span class="material-icons-round">how_to_reg</span>
             <span class="nav-label">Inscripciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="students" onclick="Router.navigate('students')" data-roles="admin,directivo,subdirector,secretario_escolar">
+          <a href="#" class="nav-item" data-module="students" onclick="Router.navigate('students')" data-roles="admin,directivo,subdirector,secretario_escolar"
+             title="Listas de Alumnos · Ver el padrón completo del plantel, editar datos del alumno, dar de baja, hacer traslados, marcar altas.">
             <span class="material-icons-round">groups</span>
             <span class="nav-label">Listas de Alumnos</span>
           </a>
-          <a href="#" class="nav-item" data-module="school-config" onclick="Router.navigate('school-config')" data-roles="admin,directivo,subdirector">
+          <a href="#" class="nav-item" data-module="school-config" onclick="Router.navigate('school-config')" data-roles="admin,directivo,subdirector"
+             title="Datos de la Escuela · Configura nombres de director, subdirector y orientadores; ciclo escolar; ventanas de captura y correcciones.">
             <span class="material-icons-round">settings</span>
             <span class="nav-label">Datos de la Escuela</span>
           </a>
-          <a href="#" class="nav-item" data-module="teachers" onclick="Router.navigate('teachers')" data-roles="admin,directivo,subdirector">
+          <a href="#" class="nav-item" data-module="teachers" onclick="Router.navigate('teachers')" data-roles="admin,directivo,subdirector"
+             title="Docentes y Asignaciones · Lista de todos los maestros del plantel, sus asignaciones por grupo y materia, y los orientadores de cada grupo.">
             <span class="material-icons-round">people</span>
             <span class="nav-label">Docentes y Asignaciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="partial-close" onclick="Router.navigate('partial-close')" data-roles="admin,directivo,subdirector">
+          <a href="#" class="nav-item" data-module="partial-close" onclick="Router.navigate('partial-close')" data-roles="admin,directivo,subdirector"
+             title="Cierre de Parciales · Programa o aplica cierre de un parcial por grado, bloqueando captura para maestros. Se puede abrir y cerrar.">
             <span class="material-icons-round">lock</span>
             <span class="nav-label">Cierre de Parciales</span>
           </a>
-          <a href="#" class="nav-item" data-module="captura-progress" onclick="Router.navigate('captura-progress')" data-roles="admin,directivo,subdirector">
+          <a href="#" class="nav-item" data-module="captura-progress" onclick="Router.navigate('captura-progress')" data-roles="admin,directivo,subdirector"
+             title="Monitor de Captura · Ver en tiempo real qué maestros han capturado y cuáles faltan, para dar seguimiento al cierre de parcial.">
             <span class="material-icons-round">fact_check</span>
             <span class="nav-label">Monitor de Captura</span>
           </a>
-          <a href="#" class="nav-item" data-module="import-students" onclick="Router.navigate('import-students')" data-roles="admin,subdirector,secretario_escolar">
+          <a href="#" class="nav-item" data-module="import-students" onclick="Router.navigate('import-students')" data-roles="admin,subdirector,secretario_escolar"
+             title="Importar Listas · Subir archivo Excel/CSV con alumnos nuevos para alta masiva al sistema.">
             <span class="material-icons-round">upload_file</span>
             <span class="nav-label">Importar Listas</span>
           </a>
-          <a href="#" class="nav-item" data-module="users-mgmt" onclick="Router.navigate('users-mgmt')" data-roles="admin">
+          <a href="#" class="nav-item" data-module="users-mgmt" onclick="Router.navigate('users-mgmt')" data-roles="admin"
+             title="Usuarios · Gestionar cuentas de acceso: crear usuarios, asignar roles, resetear contraseñas, activar/desactivar.">
             <span class="material-icons-round">admin_panel_settings</span>
             <span class="nav-label">Usuarios</span>
           </a>
-          <a href="#" class="nav-item" data-module="bitacora" onclick="Router.navigate('bitacora')" data-roles="admin,directivo,subdirector">
+          <a href="#" class="nav-item" data-module="bitacora" onclick="Router.navigate('bitacora')" data-roles="admin,directivo,subdirector"
+             title="Bitácora de Cambios · Historial cronológico de todas las acciones administrativas del sistema (creaciones, ediciones, eliminaciones).">
             <span class="material-icons-round">history</span>
             <span class="nav-label">Bitácora de Cambios</span>
+          </a>
+          <a href="#" class="nav-item" data-module="audit-data" onclick="Router.navigate('audit-data')" data-roles="admin,subdirector"
+             title="Auditoría de Datos · Detectar inconsistencias en la base de datos: alumnos huérfanos, grades sin materia, números de lista duplicados.">
+            <span class="material-icons-round">fact_check</span>
+            <span class="nav-label">Auditoría de Datos</span>
           </a>
         </div>
 
@@ -189,48 +237,80 @@
         <!-- ═══════════════════════════════════════════════ -->
         <div class="nav-section" data-roles="admin,directivo,subdirector">
           <span class="nav-section-title">Dirección</span>
-          <a href="#" class="nav-item" data-module="grade-corrections" onclick="Router.navigate('grade-corrections')">
+          <a href="#" class="nav-item" data-module="grade-corrections" onclick="Router.navigate('grade-corrections')"
+             title="Correcciones de Calificación · Revisar, aprobar o rechazar las solicitudes de corrección que envían los maestros. Historial completo del ciclo.">
             <span class="material-icons-round">rate_review</span>
             <span class="nav-label">Correcciones de Cal.</span>
           </a>
         </div>
 
         <!-- ═══════════════════════════════════════════════ -->
-        <!-- ORIENTACION (admin/orientador/directivo/subdirector) -->
+        <!-- ORIENTACION (admin/orientador/directivo/subdirector/auditor) -->
+        <!-- Auditor (Jessica) ve toda la sección EXCEPTO Preboletas y -->
+        <!-- Boleta Oficial (esas tienen data-roles propio sin 'auditor'). -->
         <!-- ═══════════════════════════════════════════════ -->
-        <div class="nav-section" data-roles="admin,orientador,directivo,subdirector">
+        <div class="nav-section" data-roles="admin,orientador,directivo,subdirector,auditor">
           <span class="nav-section-title">Orientación</span>
-          <a href="#" class="nav-item" data-module="boletas" onclick="Router.navigate('boletas')">
+          <a href="#" class="nav-item" data-module="boletas" onclick="Router.navigate('boletas')" data-roles="admin,orientador,directivo,subdirector"
+             title="Preboletas · Genera e imprime las boletas individuales o masivas con cals de los 3 parciales. Útil para entregar a padres durante el ciclo.">
             <span class="material-icons-round">description</span>
             <span class="nav-label">Preboletas</span>
           </a>
-          <a href="#" class="nav-item" data-module="boleta-oficial" onclick="Router.navigate('boleta-oficial')">
+          <a href="#" class="nav-item" data-module="boleta-oficial" onclick="Router.navigate('boleta-oficial')" data-roles="admin,orientador,directivo,subdirector"
+             title="Boleta Oficial · Boleta final del semestre con formato oficial SEP. Para cierre de ciclo y entrega final al padre.">
             <span class="material-icons-round">verified</span>
             <span class="nav-label">Boleta Oficial</span>
           </a>
-          <a href="#" class="nav-item" data-module="concentrado" onclick="Router.navigate('concentrado')">
+
+          <!-- ⭐ MÓDULOS DESTACADOS para orientadores: Concentrado, Irregulares, Reporte Extras ⭐ -->
+          <a href="#" class="nav-item nav-item-destacado" data-module="concentrado" onclick="Router.navigate('concentrado')"
+             title="⭐ CONCENTRADO · Matriz de calificaciones del grupo (todas las materias × todos los alumnos). Por parcial o ACUMULADO (promedio del semestre). Genera Excel oficial y PDF para Dirección.">
             <span class="material-icons-round">grid_on</span>
             <span class="nav-label">Concentrado</span>
+            <span class="nav-badge-star">⭐</span>
           </a>
-          <a href="#" class="nav-item" data-module="at-risk" onclick="Router.navigate('at-risk')">
+          <a href="#" class="nav-item" data-module="at-risk" onclick="Router.navigate('at-risk')"
+             title="Alumnos en Riesgo · Detecta alumnos cerca de reprobar o con muchas faltas, antes de que sea irreversible. Vista preventiva.">
             <span class="material-icons-round">warning</span>
             <span class="nav-label">Alumnos en Riesgo</span>
           </a>
-          <a href="#" class="nav-item" data-module="student-profile" onclick="Router.navigate('student-profile')">
+          <a href="#" class="nav-item nav-item-destacado" data-module="irregulares" onclick="Router.navigate('irregulares')" data-roles="admin,orientador,orientador_docente,directivo,subdirector,auditor"
+             title="⭐ IRREGULARES · Reporte oficial SEP con matriz de alumnos que van a extraordinario. Marca E.E.X.C (calificación), E.E.X.F (faltas) o E.E.X.A (ambas) por materia. Formato listo para entregar a Dirección.">
+            <span class="material-icons-round">assignment_late</span>
+            <span class="nav-label">Irregulares</span>
+            <span class="nav-badge-star">⭐</span>
+          </a>
+          <a href="#" class="nav-item nav-item-destacado" data-module="extras-report" onclick="Router.navigate('extras-report')" data-roles="admin,orientador,orientador_docente,directivo,subdirector,auditor"
+             title="⭐ REPORTE EXTRAS · Tabla DETALLADA por alumno/materia con: cals P1/P2/P3, promedio, % faltas y la(s) regla(s) SEP que activan extra. Útil para entrevistas con padres y Consejo Técnico.">
+            <span class="material-icons-round">fact_check</span>
+            <span class="nav-label">Reporte Extras</span>
+            <span class="nav-badge-star">⭐</span>
+          </a>
+
+          <a href="#" class="nav-item" data-module="student-profile" onclick="Router.navigate('student-profile')"
+             title="Consulta por Alumno · Busca un alumno específico y ve toda su trayectoria: cals, faltas, incidencias, observaciones.">
             <span class="material-icons-round">person_search</span>
             <span class="nav-label">Consulta por Alumno</span>
           </a>
-          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')">
+          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')"
+             title="Indicadores · Estadísticas globales del plantel: aprobación, reprobación, promedio general, asistencia. Por grado, turno y parcial.">
             <span class="material-icons-round">insights</span>
             <span class="nav-label">Indicadores</span>
           </a>
-          <a href="#" class="nav-item" data-module="reports-comparative" onclick="Router.navigate('reports-comparative')">
+          <a href="#" class="nav-item" data-module="reports-comparative" onclick="Router.navigate('reports-comparative')"
+             title="Reportes Comparativos · Compara el desempeño entre parciales, grupos y materias. Detecta tendencias y caídas.">
             <span class="material-icons-round">compare_arrows</span>
             <span class="nav-label">Reportes Comparativos</span>
           </a>
-          <a href="#" class="nav-item" data-module="honor-roll" onclick="Router.navigate('honor-roll')">
+          <a href="#" class="nav-item" data-module="honor-roll" onclick="Router.navigate('honor-roll')"
+             title="Cuadros de Honor · Lista oficial de los mejores promedios por grupo. Imprimible para reconocimiento académico.">
             <span class="material-icons-round">emoji_events</span>
             <span class="nav-label">Cuadros de Honor</span>
+          </a>
+          <a href="#" class="nav-item" data-module="replication-request" onclick="Router.navigate('replication-request')" data-roles="admin,orientador,orientador_docente,subdirector,directivo"
+             title="Replicar Calificaciones · Cuando un alumno cambia de grupo, replicar sus cals viejas al grupo nuevo (uso de orientadores).">
+            <span class="material-icons-round">content_copy</span>
+            <span class="nav-label">Replicar Calificaciones</span>
           </a>
         </div>
 
@@ -241,11 +321,13 @@
         <!-- ═══════════════════════════════════════════════ -->
         <div class="nav-section" id="nav-section-academia" data-roles="admin,presidente_academia" style="display:none;">
           <span class="nav-section-title">Academia</span>
-          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')">
+          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')"
+             title="Indicadores de mi Academia · Estadísticas filtradas SOLO de los grupos y materias de tu academia (grado + turno).">
             <span class="material-icons-round">insights</span>
             <span class="nav-label">Indicadores de mi Academia</span>
           </a>
-          <a href="#" class="nav-item" data-module="mi-academia" onclick="Router.navigate('mi-academia')" data-roles="admin,presidente_academia">
+          <a href="#" class="nav-item" data-module="mi-academia" onclick="Router.navigate('mi-academia')" data-roles="admin,presidente_academia"
+             title="Mi Academia · Concentrado por academia (grado+turno) con orden SEP. Genera Excel listo para reuniones de academia.">
             <span class="material-icons-round">school</span>
             <span class="nav-label">Mi Academia</span>
           </a>
@@ -255,42 +337,59 @@
         <!-- DOCENTES (todos menos secretario_escolar)      -->
         <!-- Subdirector lee todo, NO captura calificaciones-->
         <!-- ═══════════════════════════════════════════════ -->
-        <div class="nav-section" data-roles="admin,maestro,orientador_docente,directivo,subdirector,consulta">
+        <div class="nav-section" data-roles="admin,maestro,orientador_docente,directivo,subdirector,consulta,auditor">
           <span class="nav-section-title">Docentes</span>
-          <a href="#" class="nav-item" data-module="my-grades" onclick="Router.navigate('my-grades')" data-roles="admin,maestro,orientador_docente">
+          <a href="#" class="nav-item" data-module="my-grades" onclick="Router.navigate('my-grades')" data-roles="admin,maestro,orientador_docente"
+             title="Capturar Calificaciones · Captura las cals de tus alumnos por parcial: ec, transversal, examen, punto extra y faltas. Auto-guardado.">
             <span class="material-icons-round">edit_note</span>
             <span class="nav-label">Capturar Calificaciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="my-lists" onclick="Router.navigate('my-lists')">
+          <a href="#" class="nav-item" data-module="my-lists" onclick="Router.navigate('my-lists')"
+             title="Mis Listas · Lista de tus alumnos por grupo/materia. Pase de lista visual con badges de status (riesgo/extra).">
             <span class="material-icons-round">list_alt</span>
             <span class="nav-label">Mis Listas</span>
           </a>
-          <a href="#" class="nav-item" data-module="grades-query" onclick="Router.navigate('grades-query')">
+          <a href="#" class="nav-item" data-module="grades-query" onclick="Router.navigate('grades-query')"
+             title="Consultar Calificaciones · Solo lectura — ver las cals capturadas sin riesgo de modificar. Útil para verificar antes de imprimir.">
             <span class="material-icons-round">visibility</span>
             <span class="nav-label">Consultar Calificaciones</span>
           </a>
-          <a href="#" class="nav-item" data-module="correction-request" onclick="Router.navigate('correction-request')" data-roles="admin,maestro,orientador_docente,subdirector">
+          <a href="#" class="nav-item" data-module="correction-request" onclick="Router.navigate('correction-request')" data-roles="admin,maestro,orientador_docente,subdirector"
+             title="Cambios de Calificación · Pedir formalmente corrección de una calificación ya cerrada. Va a Dirección para aprobación. Se conserva historial.">
             <span class="material-icons-round">rate_review</span>
             <span class="nav-label">Cambios de Calificación</span>
           </a>
-          <a href="#" class="nav-item" data-module="my-f1" onclick="Router.navigate('my-f1')">
+          <a href="#" class="nav-item" data-module="my-f1"
+             title="Concentrado F1 · Tu formato F1 oficial por materia (lista del docente firmable). Resumen de tus cals + horas + faltas — listo para Dirección.">
             <span class="material-icons-round">grid_on</span>
             <span class="nav-label">Concentrado F1</span>
           </a>
-          <a href="#" class="nav-item" data-module="my-at-risk" onclick="Router.navigate('my-at-risk')">
+          <a href="#" class="nav-item" data-module="my-at-risk" onclick="Router.navigate('my-at-risk')"
+             title="Alumnos en Riesgo · Tus alumnos cerca de reprobar o con muchas faltas. Vista preventiva por tus materias asignadas.">
             <span class="material-icons-round">report_problem</span>
             <span class="nav-label">Alumnos en Riesgo</span>
+          </a>
+          <a href="#" class="nav-item" data-module="extraordinarios" onclick="Router.navigate('extraordinarios')"
+             title="Extraordinarios · Captura las cals de examen extraordinario de tus alumnos en EXTRA (3 oportunidades). Detección automática por las 3 reglas SEP.">
+            <span class="material-icons-round">gavel</span>
+            <span class="nav-label">Extraordinarios</span>
+          </a>
+          <!-- "Capturar Examen Extraordinario" se ocultó (mayo 2026 rediseño):
+               la captura ahora es INLINE en cada tarjeta del módulo Extraordinarios. -->
+          <a href="#" class="nav-item" data-module="examen-extraordinario" onclick="Router.navigate('examen-extraordinario')" data-roles="never" style="display:none;">
+            <span class="material-icons-round">edit_note</span>
+            <span class="nav-label">Capturar Examen Extraordinario</span>
           </a>
           <a href="#" class="nav-item" data-module="student-profile" onclick="Router.navigate('student-profile')">
             <span class="material-icons-round">person_search</span>
             <span class="nav-label">Consulta por Alumno</span>
           </a>
-          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')" data-roles="admin">
+          <a href="#" class="nav-item" data-module="indicadores" onclick="Router.navigate('indicadores')" data-roles="admin,subdirector">
             <span class="material-icons-round">insights</span>
             <span class="nav-label">Indicadores</span>
           </a>
-          <!-- Asistencia oculta para maestros (no se usa). Sigue accesible para admin. -->
-          <a href="#" class="nav-item" data-module="attendance" onclick="Router.navigate('attendance')" data-roles="admin">
+          <!-- Asistencia oculta para maestros (no se usa). Accesible para admin y subdirector. -->
+          <a href="#" class="nav-item" data-module="attendance" onclick="Router.navigate('attendance')" data-roles="admin,subdirector">
             <span class="material-icons-round">fact_check</span>
             <span class="nav-label">Asistencia</span>
           </a>
@@ -352,48 +451,54 @@
   <!-- ═══════ SCRIPTS ═══════ -->
   <!-- Core -->
   <script src="/js/firebase-config.js?v=6.96"></script>
-  <script src="/js/constants.js?v=6.90"></script>
-  <script src="/js/data-store.js?v=6.94"></script>
-  <script src="/js/app.js?v=7.0"></script>
+  <script src="/js/constants.js?v=8.12"></script>
+  <script src="/js/data-store.js?v=8.18"></script>
+  <script src="/js/app.js?v=8.58"></script>
   <script src="/js/components.js?v=6.29"></script>
   <script src="/js/lib-loader.js?v=6.29"></script>
   <script src="/js/logos.js?v=6.29"></script>
-  <script src="/js/modules/student-profile.js?v=6.29" defer></script>
+  <script src="/js/modules/student-profile.js?v=8.09" defer></script>
 
   <!-- Módulos (defer: se descargan en paralelo y ejecutan tras parseo, en orden) -->
   <script src="/js/modules/help-center.js?v=6.29" defer></script>
-  <script src="/js/modules/dashboard.js?v=6.93" defer></script>
+  <script src="/js/modules/dashboard.js?v=8.46" defer></script>
   <script src="/js/modules/school-config.js?v=6.29" defer></script>
-  <script src="/js/modules/teachers.js?v=6.31" defer></script>
-  <script src="/js/modules/students.js?v=6.29" defer></script>
-  <script src="/js/modules/grades.js?v=6.94" defer></script>
-  <script src="/js/modules/partial-close.js?v=6.52" defer></script>
-  <script src="/js/modules/at-risk.js?v=6.29" defer></script>
-  <script src="/js/modules/users-mgmt.js?v=6.89" defer></script>
-  <script src="/js/modules/my-lists.js?v=6.29" defer></script>
-  <script src="/js/modules/my-f1.js?v=6.29" defer></script>
+  <script src="/js/modules/teachers.js?v=7.72" defer></script>
+  <script src="/js/modules/students.js?v=7.37" defer></script>
+  <script src="/js/modules/grades.js?v=8.44" defer></script>
+  <script src="/js/modules/partial-close.js?v=8.12" defer></script>
+  <script src="/js/modules/at-risk.js?v=8.47" defer></script>
+  <script src="/js/modules/extraordinarios.js?v=8.04" defer></script>
+  <script src="/js/modules/examen-extraordinario.js?v=8.09" defer></script>
+  <script src="/js/modules/users-mgmt.js?v=7.51" defer></script>
+  <script src="/js/modules/my-lists.js?v=8.09" defer></script>
+  <script src="/js/modules/my-f1.js?v=8.47" defer></script>
   <script src="/js/modules/enrollment.js?v=6.29" defer></script>
   <script src="/js/modules/honor-roll.js?v=6.29" defer></script>
-  <script src="/js/modules/presidente-academia.js?v=6.93" defer></script>
+  <script src="/js/modules/presidente-academia.js?v=7.15" defer></script>
 
   <!-- Nuevos módulos v3.1 -->
-  <script src="/js/modules/import-grades.js?v=6.38" defer></script>
-  <script src="/js/modules/import-students.js?v=6.29" defer></script>
-  <script src="/js/modules/boletas.js?v=6.85" defer></script>
-  <script src="/js/modules/indicadores.js?v=6.98" defer></script>
-  <script src="/js/modules/concentrado.js?v=6.99" defer></script>
-  <script src="/js/modules/attendance.js?v=6.29" defer></script>
+  <script src="/js/modules/import-grades.js?v=8.07" defer></script>
+  <script src="/js/modules/import-students.js?v=7.37" defer></script>
+  <script src="/js/modules/boletas.js?v=8.58" defer></script>
+  <script src="/js/modules/indicadores.js?v=7.50" defer></script>
+  <script src="/js/modules/concentrado.js?v=8.48" defer></script>
+  <script src="/js/modules/irregulares.js?v=8.57" defer></script>
+  <script src="/js/modules/extras-report.js?v=8.57" defer></script>
+  <script src="/js/modules/attendance.js?v=8.09" defer></script>
   <script src="/js/modules/reports-comparative.js?v=6.29" defer></script>
   <script src="/js/modules/bitacora.js?v=6.29" defer></script>
-  <script src="/js/modules/captura-progress.js?v=6.29" defer></script>
-  <script src="/js/modules/grade-corrections.js?v=6.56" defer></script>
-  <script src="/js/global-search.js?v=6.29" defer></script>
+  <script src="/js/modules/audit-data.js?v=7.63" defer></script>
+  <script src="/js/modules/captura-progress.js?v=7.72" defer></script>
+  <script src="/js/modules/grade-corrections.js?v=8.37" defer></script>
+  <script src="/js/global-search.js?v=8.09" defer></script>
   <script src="/js/onboarding-tour.js?v=6.29" defer></script>
-  <script src="/js/offline-helper.js?v=6.87" defer></script>
+  <script src="/js/offline-helper.js?v=7.24" defer></script>
   <script src="/js/help-tips.js?v=6.29" defer></script>
-  <script src="/js/modules/correction-request.js?v=6.56" defer></script>
-  <script src="/js/modules/grades-query.js?v=6.29" defer></script>
-  <script src="/js/modules/boleta-oficial.js?v=6.29" defer></script>
+  <script src="/js/modules/correction-request.js?v=8.40" defer></script>
+  <script src="/js/modules/replication-request.js?v=8.05" defer></script>
+  <script src="/js/modules/grades-query.js?v=8.09" defer></script>
+  <script src="/js/modules/boleta-oficial.js?v=7.27" defer></script>
 
   <!-- ═══════ INDICADOR OFFLINE (aparece cuando se pierde la conexión) ═══════ -->
   <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#dc2626;color:#fff;text-align:center;padding:8px 16px;font-size:13px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.2);">
@@ -437,11 +542,24 @@
           // hizo skipWaiting+clientsClaim), forzamos reload de la pestania.
           // Asi el usuario ve la version nueva sin tocar Cmd+Shift+R.
           let didReload = false;
-          navigator.serviceWorker.addEventListener('controllerchange', () => {
+          const forceReload = (reason) => {
             if (didReload) return;
             didReload = true;
-            console.log('[sw] nueva version detectada, recargando...');
+            console.log('[sw] ' + reason + ' - recargando...');
             window.location.reload();
+          };
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            forceReload('controllerchange');
+          });
+          // v8.44: recarga forzada también cuando el SW nuevo se activa y
+          // manda mensaje SW_ACTIVATED_RELOAD a todas las pestañas (incluso
+          // las que ya tenían un SW controlando, donde controllerchange no
+          // se dispara). Esto cubre el caso en que el usuario no sabe hacer
+          // Ctrl+Shift+R manualmente.
+          navigator.serviceWorker.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'SW_ACTIVATED_RELOAD') {
+              forceReload('SW activado v' + (event.data.version || '?'));
+            }
           });
 
           // Cuando un SW nuevo termina de instalarse, lo activamos inmediatamente.
@@ -456,14 +574,30 @@
             });
           });
 
-          // Disparadores de chequeo: al volver a la pestania y cada 5 min.
-          // El navegador solo busca SW nuevos en navegacion por default (24h),
-          // demasiado lento. Esto fuerza el ciclo a minutos.
-          const checkUpdate = () => reg.update().catch(() => {});
+          // Disparadores de chequeo de SW nuevo. Optimizado para no
+          // bombardear: una sola request por minuto Y debounce de 5s en
+          // eventos (visibilitychange, focus). Antes era cada 30s + en cada
+          // visibilitychange → causaba lentitud perceptible cuando el usuario
+          // cambiaba de pestaña con frecuencia.
+          let _lastCheck = 0;
+          const checkUpdate = () => {
+            const now = Date.now();
+            if (now - _lastCheck < 5000) return; // debounce 5s
+            _lastCheck = now;
+            reg.update().catch(() => {});
+          };
           document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') checkUpdate();
           });
-          setInterval(checkUpdate, 5 * 60 * 1000);
+          window.addEventListener('online', checkUpdate);
+          // Polling cada 2 minutos (suficientemente frecuente: si Olivia
+          // despliega, en máx. 2 min se enteran todos los clientes con tab abierto).
+          setInterval(checkUpdate, 120 * 1000);
+
+          // Nota: no duplicamos el listener de updatefound — el de arriba
+          // ya invoca SKIP_WAITING y el controllerchange dispara el reload.
+          // Si Chrome no emite controllerchange en 8s, el siguiente check
+          // periódico lo detectará (cada 2 min) y forzará nuevo intento.
         } catch (err) {
           console.warn('SW registration failed:', err);
         }
