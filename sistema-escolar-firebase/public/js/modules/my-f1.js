@@ -34,9 +34,18 @@ const MyF1Module = (() => {
   }
 
   function _gradeFaltas(grade) {
-    if (!grade || grade.faltas === undefined || grade.faltas === null || grade.faltas === '') return null;
-    const n = Number(grade.faltas);
-    return Number.isFinite(n) ? n : null;
+    if (!grade) return null;
+    // v8.39: regla EPO 67 — si el parcial tiene calificación capturada
+    // pero el maestro no llenó faltas, asumimos 0 (no 'guión'). Olivia: "no
+    // pueden salir guiones bajo ninguna circunstancia, siempre ceros".
+    if (grade.faltas !== undefined && grade.faltas !== null && grade.faltas !== '') {
+      const n = Number(grade.faltas);
+      return Number.isFinite(n) ? n : 0;
+    }
+    // Sin faltas explícitas: si hay cal capturada → 0 faltas. Sin cal → null.
+    const tieneCal = (grade.cal !== undefined && grade.cal !== null && grade.cal !== '')
+                  || (grade.value !== undefined && grade.value !== null && grade.value !== '');
+    return tieneCal ? 0 : null;
   }
 
   function _sumHours(doc) {
@@ -169,27 +178,58 @@ const MyF1Module = (() => {
 
   async function _loadData() {
     try {
-      assignments = await Store.getMyAssignments();
+      // v8.09: STRICT — "Mi F1" es del maestro y solo de sus materias.
+      assignments = await Store.getOwnAssignments();
+      // Orden: turno → grado → grupo → orden oficial SEP de materias.
+      const _norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+      const _sepIdx = (name, grado) => {
+        const order = (K.SUBJECT_ORDER || {})[Number(grado)] || [];
+        if (order.length === 0) return 999;
+        const n = _norm(name);
+        const i = order.findIndex(o => _norm(o) === n || n.includes(_norm(o)) || _norm(o).includes(n));
+        return i === -1 ? 999 : i;
+      };
       assignments = assignments
         .filter(a => a.groupId && a.subjectId)
         .sort((a, b) =>
           (a.turno || '').localeCompare(b.turno || '') ||
           String(a.grado || '').localeCompare(String(b.grado || '')) ||
           (a.groupName || '').localeCompare(b.groupName || '') ||
+          (_sepIdx(a.subjectName, a.grado) - _sepIdx(b.subjectName, b.grado)) ||
           (a.subjectName || '').localeCompare(b.subjectName || '')
         );
 
       const groupIds = [...new Set(assignments.map(a => a.groupId).filter(Boolean))];
       const role = App.currentUser?.role;
-      const needsTeachers = role === 'admin' || role === 'orientador' || role === 'directivo' || role === 'consulta';
+      const needsTeachers = role === 'admin' || role === 'subdirector' || role === 'orientador' || role === 'directivo' || role === 'consulta';
+      // FIX (mayo 2026): force=true en students+grades para F1. Las listas
+      // son oficiales y NO PUEDEN salir incompletas por caché stale.
+      // El costo extra de lecturas Firestore es aceptable: el F1 se abre
+      // pocas veces al día y la integridad del documento es prioritaria.
       const [studentsData, gradesData, groupsData, teachersData] = await Promise.all([
-        Store.getStudentsByGroups(groupIds),
-        Store.getGradesByGroups(groupIds),
+        Store.getStudentsByGroups(groupIds, /*force*/ true),
+        Store.getGradesByGroups(groupIds, /*force*/ true),
         Store.getGroups(),
         needsTeachers ? Store.getTeachers() : Promise.resolve([])
       ]);
 
-      students = studentsData.filter(s => s.estatus !== 'BAJA' && s.estatus !== 'baja');
+      // FIX defensivo: dedupe por id (por si el flat() de getStudentsByGroups
+      // arrastra duplicados de algún cache inconsistente). Conservar el
+      // primero que aparezca. Esto NO altera el total real cuando no hay
+      // duplicados, solo blinda contra inconsistencias.
+      const seenIds = new Set();
+      const dedup = studentsData.filter(s => {
+        if (!s || !s.id) return false;
+        if (seenIds.has(s.id)) return false;
+        seenIds.add(s.id);
+        return true;
+      });
+      students = dedup.filter(s => s.estatus !== 'BAJA' && s.estatus !== 'baja');
+      // Log auditable: si el total post-filtro NO es la suma esperada,
+      // queda registro para diagnosticar el mismatch en consola del maestro.
+      if (studentsData.length !== students.length + (studentsData.length - dedup.length)) {
+        console.warn('[F1] alumnos descartados:', { total: studentsData.length, deduped: dedup.length, final: students.length });
+      }
       grades = gradesData;
       groups = groupsData;
       teachers = teachersData;
@@ -209,7 +249,7 @@ const MyF1Module = (() => {
 
     const role = App.currentUser?.role;
     const groupedByTeacher = teachers.length > 0 &&
-      (role === 'admin' || role === 'orientador' || role === 'directivo' || role === 'consulta');
+      (role === 'admin' || role === 'subdirector' || role === 'orientador' || role === 'directivo' || role === 'consulta');
 
     const optionHtml = (a) => {
       const label = `${a.turno || ''} ${a.groupName || a.groupId} - ${K.getUACNombre(a.subjectName || a.subjectId)}`;
@@ -232,12 +272,14 @@ const MyF1Module = (() => {
     });
 
     const sortedNames = [...buckets.keys()].sort((a, b) => a.localeCompare(b));
+    // Dentro del optgroup por docente: turno → grado → grupo → orden oficial SEP
     const groupsHtml = sortedNames.map(name => {
       const items = buckets.get(name)
         .sort((a, b) =>
           (a.turno || '').localeCompare(b.turno || '') ||
           String(a.grado || '').localeCompare(String(b.grado || '')) ||
           (a.groupName || '').localeCompare(b.groupName || '') ||
+          (_sepIdx(a.subjectName, a.grado) - _sepIdx(b.subjectName, b.grado)) ||
           (a.subjectName || '').localeCompare(b.subjectName || '')
         )
         .map(optionHtml).join('');
@@ -282,7 +324,10 @@ const MyF1Module = (() => {
       const doc = hours.find(h => h.partial === partial);
       hoursByPartial[partial] = _sumHours(doc);
     });
-    const totalHours = Object.values(hoursByPartial).reduce((a, b) => a + b, 0);
+    // FIX bug-horas-triplicadas: desde v8.32 las horas son SEMESTRALES replicadas
+    // en los 3 docs (P1/P2/P3 tienen el MISMO valor). Sumarlas triplica el dato
+    // real. totalHours debe ser el valor de UN solo doc (los 3 son iguales).
+    const totalHours = hoursByPartial.P3 || hoursByPartial.P2 || hoursByPartial.P1 || 0;
 
     const rows = groupStudents.map((student, index) => {
       const sid = _studentId(student);
@@ -437,7 +482,46 @@ const MyF1Module = (() => {
     lastReport = _buildReport(assignment, mode);
     _renderReport(lastReport);
     document.querySelector('[data-action="f1-export"]')?.removeAttribute('disabled');
-    document.querySelector('[data-action="f1-print"]')?.removeAttribute('disabled');
+
+    // ─── BLOQUEO DE IMPRESIÓN — REGLA EPO 67 (v8.01, revisada) ───
+    // Las horas son SEMESTRALES (febrero–julio). Basta con que el maestro
+    // las haya capturado en CUALQUIER parcial para que el cálculo del %
+    // de inasistencias funcione. Solo bloqueamos si NO hay horas en
+    // ningún parcial (caso real de captura faltante).
+    const printBtn = document.querySelector('[data-action="f1-print"]');
+    try {
+      const hayHorasEnAlgunParcial = ['P1', 'P2', 'P3']
+        .some(pid => (lastReport.hoursByPartial[pid] > 0));
+
+      if (!hayHorasEnAlgunParcial) {
+        printBtn?.setAttribute('disabled', 'disabled');
+        if (printBtn) {
+          printBtn.setAttribute('title',
+            `No puedes imprimir: no has capturado las horas impartidas del semestre. ` +
+            `Captura las horas desde "Capturar Calificaciones".`
+          );
+        }
+        const aviso = document.createElement('div');
+        aviso.style.cssText = 'background:#fef2f2;border:2px solid #b91c1c;border-radius:8px;padding:14px 18px;margin-bottom:14px;color:#7f1d1d;';
+        aviso.innerHTML = `
+          <div style="font-weight:800;font-size:15px;margin-bottom:6px;">⚠️ Impresión BLOQUEADA — faltan horas impartidas</div>
+          <div style="font-size:13px;line-height:1.55;">
+            No has capturado las <strong>horas impartidas del semestre</strong> en esta materia.
+            <br><br>
+            Ve a <strong>"Capturar Calificaciones"</strong>, abre la lista y baja al panel naranja
+            <strong>"Horas impartidas"</strong> al final. Captura los meses de febrero–julio según corresponda.
+            Una sola vez basta — las horas son semestrales.
+          </div>
+        `;
+        results.insertBefore(aviso, results.firstChild);
+      } else {
+        printBtn?.removeAttribute('disabled');
+        printBtn?.removeAttribute('title');
+      }
+    } catch (e) {
+      console.warn('No se pudo validar horas para imprimir:', e);
+      printBtn?.removeAttribute('disabled');  // fail-open si Store no responde
+    }
   }
 
   function _renderReport(report) {
@@ -782,8 +866,14 @@ const MyF1Module = (() => {
     const isAcum = r.mode === 'acumulado';
     const parcMap = { P1: 'PRIMER', P2: 'SEGUNDO', P3: 'TERCER' };
     const titulo = isAcum ? 'CONCENTRADO F1 — ACUMULADO' : `CONCENTRADO F1 — ${parcMap[r.mode] || ''} PARCIAL`;
-    const semMap = { '1': 'SEGUNDO SEMESTRE', '2': 'CUARTO SEMESTRE', '3': 'SEXTO SEMESTRE' };
-    const semText = semMap[String(r.grado)] || '';
+    // Detecta el semestre corriente según la fecha actual. App.getCurrentSemester
+    // retorna {numero, texto}: feb-jul = pares (SEGUNDO/CUARTO/SEXTO),
+    // ago-ene = impares (PRIMERO/TERCERO/QUINTO). Antes estaba hardcoded a
+    // los pares lo cual fallaba en impresiones de agosto en adelante.
+    const semText = (function() {
+      try { return App.getCurrentSemester(r.grado).texto + ' SEMESTRE'; }
+      catch (_) { return ''; }
+    })();
 
     const teacher = teachers.find(t => t.id === r.assignment.teacherId);
     const profesor = teacher
