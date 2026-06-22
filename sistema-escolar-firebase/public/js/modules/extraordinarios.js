@@ -125,20 +125,39 @@ const ExtraordinariosModule = (() => {
       if (canSeeAll) {
         assignments = await Store.getAssignments();
       } else if (isMaestroScope) {
-        // BYPASS de Store.getMyAssignments() — ése helper short-circuita a
-        // getAssignments() cuando el usuario tiene auditorScope, y aquí NO
-        // queremos eso: Jessica auditor+maestro debe ver SOLO sus materias.
-        // Filtramos manualmente por teacherId del usuario actual (que durante
-        // impersonación es el del usuario impersonado, no el de Olivia).
+        // PRIVACIDAD ESTRICTA (junio 2026): usar getOwnAssignments() que hace
+        // .where('teacherId','==',myTeacherId) en Firestore directamente, sin
+        // depender de un filter() del lado cliente. Antes pedíamos TODAS las
+        // assignments y filtrabamos en JS, lo que dejaba escapar materias
+        // ajenas si el maestro tenia algun flag aditivo (auditorScope,
+        // presidente_academia con academiaGrado/Turno, etc.) que las rules
+        // permitian leer globalmente. Ahora la query MISMA esta restringida
+        // a su teacherId — imposible que aparezca una materia ajena.
         const myTeacherId = await Store.getTeacherDocId();
         if (myTeacherId) {
-          const allA = await Store.getAssignments().catch(() => []);
-          assignments = allA.filter(a => a.teacherId === myTeacherId);
+          assignments = await Store.getOwnAssignments().catch(() => []);
         }
       } else if (isOrientadorOnly && oriGroups && oriGroups.length > 0) {
         const groupSet = new Set(oriGroups);
         const allA = await Store.getAssignments().catch(() => []);
         assignments = allA.filter(a => groupSet.has(a.groupId));
+      }
+
+      // DOBLE BLINDAJE (junio 2026): aunque getOwnAssignments YA filtra en
+      // Firestore, si por cualquier razón se mezclaran assignments ajenos
+      // (cache stale, race con cambio de impersonacion, etc.), volvemos a
+      // filtrar en cliente con el teacherId actual. Cinturon y tirantes.
+      if (isMaestroScope) {
+        const myTeacherId = await Store.getTeacherDocId();
+        if (myTeacherId) {
+          const antes = assignments.length;
+          assignments = assignments.filter(a => a.teacherId === myTeacherId);
+          if (antes !== assignments.length) {
+            console.warn('[extraordinarios] assignments ajenas filtradas a posteriori:', antes - assignments.length);
+          }
+        } else {
+          assignments = []; // sin teacherId no mostramos nada
+        }
       }
 
       if (assignments.length === 0) {
