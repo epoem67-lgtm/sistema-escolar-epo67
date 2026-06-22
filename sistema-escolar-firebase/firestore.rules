@@ -48,6 +48,20 @@ service cloud.firestore {
     //   - activityLog (read-only)
     function isAdminOrSubdirector() { return isAdmin() || isSubdirector(); }
 
+    // Auditor (rol ADITIVO): flag users.auditorScope=true otorga lectura
+    // global de students/grades/assignments para auditar el sistema completo
+    // (ambos turnos, todos los grados). NO concede permisos de escritura ni
+    // de generar boletas. Admin/subdirector/directivo ya son auditores
+    // implícitos. Diseñado para Jessica Alcántara (mayo 2026) — supervisora
+    // que sigue siendo docente en sus 4 materias pero monitorea todo.
+    function isAuditor() {
+      return isAuthenticated() &&
+        (getUserData().auditorScope == true ||
+         getUserData().role == 'admin' ||
+         getUserData().role == 'subdirector' ||
+         getUserData().role == 'directivo');
+    }
+
     // Secretario Escolar y Secretaria Administrativa: misma vista que directivo
     // pero con escrituras puntuales (escolar→inscripciones, admin→datos escuela).
     function canReadAsDirectivo() { return isDirectivo() || isSecretarioEscolar() || isSecretarioAdmin(); }
@@ -72,10 +86,11 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/assignmentsByGroup/$(groupId + '_' + getTeacherId()));
     }
 
-    // Presidente/Secretario de Academia: permite leer alumnos/grades/etc.
-    // de los grupos de SU grado+turno aunque no tenga asignación docente
-    // en ellos. Triggered cuando el user doc tiene academiaGrado + academiaTurno
-    // y el grupo coincide con ambos.
+    // Presidente/Secretario de Academia (rol ADITIVO — NO está en users.role):
+    // permite leer alumnos/grades/etc. de los grupos de SU grado+turno aunque
+    // no tenga asignación docente en ellos. Triggered cuando el user doc tiene
+    // academiaGrado + academiaTurno y el grupo coincide con ambos.
+    // Sembrado por: scripts/fixes/asignar-presidentes-academia.js
     function isAcademiaScopeOf(groupId) {
       return isAuthenticated() &&
         getUserData().academiaGrado != null &&
@@ -94,6 +109,39 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/partials/$(partial)).data.locked == true;
     }
 
+    // v8.07: ¿el parcial está cerrado PARA UN GRADO específico?
+    // El partial doc tiene lockedByGrade: { '1': bool, '2': bool, '3': bool }.
+    // Si la entrada del grado existe, manda. Si no, fallback al campo locked global.
+    //
+    // Acepta grado como number o string — convierte con string().
+    //
+    // (cond1 con info por grado)  ||  (cond2 fallback global cuando no hay info)
+    function isPartialLockedForGrade(partial, grado) {
+      return (
+        // Caso 1: hay info por grado → manda esa
+        get(/databases/$(database)/documents/partials/$(partial)).data.lockedByGrade is map &&
+        string(grado) in get(/databases/$(database)/documents/partials/$(partial)).data.lockedByGrade &&
+        get(/databases/$(database)/documents/partials/$(partial)).data.lockedByGrade[string(grado)] == true
+      ) || (
+        // Caso 2: NO hay info por grado para ese grado → fallback al global
+        (
+          !(get(/databases/$(database)/documents/partials/$(partial)).data.lockedByGrade is map) ||
+          !(string(grado) in get(/databases/$(database)/documents/partials/$(partial)).data.lockedByGrade)
+        )
+        && get(/databases/$(database)/documents/partials/$(partial)).data.locked == true
+      );
+    }
+
+    // v8.07: ¿la ventana de correcciones está abierta AHORA?
+    function isCorrectionsWindowOpen() {
+      return exists(/databases/$(database)/documents/config/correctionsWindow) &&
+        get(/databases/$(database)/documents/config/correctionsWindow).data.open == true &&
+        (
+          get(/databases/$(database)/documents/config/correctionsWindow).data.closesAt == null ||
+          get(/databases/$(database)/documents/config/correctionsWindow).data.closesAt > request.time
+        );
+    }
+
     // ¿El maestro tiene un OVERRIDE activo para escribir en este parcial
     // aunque esté cerrado? El docId es determinístico: `${partial}_${teacherId}`
     // para que la regla pueda hacer exists()/get() sin queries.
@@ -107,20 +155,28 @@ service cloud.firestore {
         );
     }
 
-    // El maestro puede escribir grades de un parcial si: NO está cerrado, O
-    // el admin le otorgó un override vigente.
+    // El maestro puede escribir grades si el parcial NO está cerrado
+    // para el grado del grupo, o si tiene override vigente.
     function canMaestroWriteGradesFor(partial) {
       return !isPartialLocked(partial) || teacherHasPartialOverride(partial);
     }
 
+    function canMaestroWriteGradesForGroup(partial, groupId) {
+      return !isPartialLockedForGrade(
+          partial,
+          get(/databases/$(database)/documents/groups/$(groupId)).data.grado
+        ) || teacherHasPartialOverride(partial);
+    }
+
     // ─── CONFIGURACION ──────────────────────
     // Datos de la escuela y school.staff: SOLO admin (Olivia) + secretario_admin (Lupita).
-    // correctionsWindow y captureWindow: SOLO admin (Olivia).
+    // correctionsWindow y captureWindow: admin (Olivia) + subdirector (Octavio).
+    //   Subdirector tiene autoridad academica para abrir/cerrar ventanas igual que admin.
     match /config/{docId} {
       allow read: if isAuthenticated();
       allow write: if (
         docId == 'correctionsWindow' || docId == 'captureWindow'
-          ? isAdmin()
+          ? isAdminOrSubdirector()
           : canManageSchoolConfig()
       );
     }
@@ -183,7 +239,7 @@ service cloud.firestore {
     match /teachers/{teacherId} {
       allow read: if isAuthenticated() && (
         isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
-        isPresidenteAcademia() || getTeacherId() == teacherId
+        isPresidenteAcademia() || isAuditor() || getTeacherId() == teacherId
       );
       // Subdirector puede editar/crear/eliminar docentes (gestión académica)
       allow write: if isAdminOrSubdirector();
@@ -203,7 +259,7 @@ service cloud.firestore {
     match /assignments/{assignmentId} {
       allow read: if isAuthenticated() && (
         isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
-        isPresidenteAcademia() ||
+        isPresidenteAcademia() || isAuditor() ||
         resource.data.teacherId == getTeacherId()
       );
       allow write: if isAdminOrSubdirector();
@@ -219,7 +275,7 @@ service cloud.firestore {
     match /students/{studentId} {
       allow read: if isAuthenticated() && (
         isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
-        isPresidenteAcademia() ||
+        isPresidenteAcademia() || isAuditor() ||
         (canMaestro() && teacherHasGroup(resource.data.groupId)) ||
         // Presidente/Secretario de Academia (con academiaGrado/Turno): puede leer
         // alumnos de los grupos de su grado+turno aunque no sea su maestro.
@@ -230,34 +286,32 @@ service cloud.firestore {
 
     // ─── CALIFICACIONES ────────────────────
     // C-2 FIX: maestro solo escribe grades si tiene assignment de ese grupo+materia.
-    // Presidente de Academia: lectura solo de las materias de su academia
-    // (filtrado client-side; permite leer todas para luego filtrar).
+    //
+    // Lectura para Presidente/Secretario de Academia: el rol es ADITIVO — esos
+    // 12 docentes conservan su role base 'maestro' u 'orientador_docente', por lo
+    // que canMaestro() ya les autoriza leer grades. El filtrado al grado+turno
+    // de su academia se hace client-side. Si en el futuro hay un presidente que
+    // NO es maestro, agregar: || isAcademiaScopeOf(resource.data.groupId)
     match /grades/{gradeId} {
-      // Lectura: cualquier rol con acceso a la sección Calificaciones.
-      // Maestros pueden leer cualquier grade (filtro client-side por
-      // groupId). isAcademiaScopeOf no se evalúa aquí porque ya cubre
-      // canMaestro (al menos para los 12 presidentes). Si en el futuro
-      // hay presidentes que NO son maestros, agregar:
-      //   || isAcademiaScopeOf(resource.data.groupId)
       allow read: if isAuthenticated() && (
-        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || canMaestro() || isPresidenteAcademia()
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || canMaestro() || isPresidenteAcademia() || isAuditor()
       );
 
       allow create: if isAuthenticated() && (
-        isAdmin() ||
+        isAdminOrSubdirector() ||
         (canMaestro()
           && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId)
-          && canMaestroWriteGradesFor(request.resource.data.partial))
+          && canMaestroWriteGradesForGroup(request.resource.data.partial, request.resource.data.groupId))
       );
 
       allow update: if isAuthenticated() && (
-        isAdmin() ||
+        isAdminOrSubdirector() ||
         (canMaestro()
           && teacherHasAssignment(resource.data.groupId, resource.data.subjectId)
-          && canMaestroWriteGradesFor(resource.data.partial))
+          && canMaestroWriteGradesForGroup(resource.data.partial, resource.data.groupId))
       );
 
-      allow delete: if isAdmin();
+      allow delete: if isAdminOrSubdirector();
     }
 
     // ─── PARCIALES ─────────────────────────
@@ -267,10 +321,78 @@ service cloud.firestore {
       allow write: if isAdminOrSubdirector();
     }
 
+    // ─── EXAMEN EXTRAORDINARIO ─────────────
+    // Captura del extra que reemplaza la cal final de una materia.
+    // docId determinístico: `${studentId}_${subjectId}` (uno por alumno × materia).
+    //
+    // - read: cualquier rol con acceso a calificaciones (mismo set que grades.read).
+    // - write: admin/subdirector/directivo siempre; maestro solo si tiene
+    //   la asignación de ese grupo+materia (teacherHasAssignment).
+    // Esquema (mayo 2026 v7.55 — 3 oportunidades de extraordinario):
+    //   docId = {studentId}_{subjectId}_{oportunidad}  donde oportunidad ∈ {1,2,3}
+    //   data: { studentId, subjectId, groupId, teacherId, oportunidad: 1|2|3,
+    //           calExtraordinario: 5..10, estatus: 'APROBADO'|'REPROBADO',
+    //           fechaAplicacion, fechaCaptura, comentario, ciclo, updatedBy }
+    //
+    // La regla NO valida transición de oportunidades en el servidor (es decir,
+    // no comprueba que para crear _2 ya exista _1 reprobado). Eso lo hace el
+    // frontend. La regla SÍ valida que el campo `oportunidad` sea 1/2/3 y la
+    // cal esté en rango 5..10.
+    match /extraordinarios/{docId} {
+      // READ: amplio para que todos los roles educativos puedan consultar
+      // (boletas, reportes, vistas read-only). Solo el WRITE es estricto.
+      allow read: if isAuthenticated() && (
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || canMaestro() || isPresidenteAcademia() || isAuditor()
+      );
+      // WRITE (create/update) — REGLA EPO 67 v8.02 IMPERATIVA:
+      // Solo pueden CAPTURAR extraordinarios:
+      //   1) Admin (Olivia) — override administrativo
+      //   2) Subdirector (Octavio) — aplicador formal
+      //   3) El maestro CUYO teacherId coincide con la asignación + tiene
+      //      el assignment doc en /assignments. Incluye orientador_docente,
+      //      presidente_academia con asignación real, e interim (porque la
+      //      asignación interim también tiene su teacherId).
+      // NADIE más captura: orientador puro, auditor, directivo, secretarios,
+      // consulta — todos read-only por más que el frontend les exponga
+      // inputs por bug.
+      //
+      // Dos escenarios válidos de captura:
+      //   A) Cal numérica 5-10 con estatus APROBADO/REPROBADO
+      //   B) NP (no presentó): sin cal numérica, estatus='NO_PRESENTO'.
+      //      Cuenta como "no acreditó" y manda al alumno a la siguiente oportunidad.
+      //      Si la 3ª oportunidad termina en NO_PRESENTO → baja pendiente.
+      allow create, update: if isAuthenticated() && (
+        (
+          // Caso A — cal numérica
+          (request.resource.data.calExtraordinario is number
+            && request.resource.data.calExtraordinario >= 5
+            && request.resource.data.calExtraordinario <= 10)
+          ||
+          // Caso B — NO PRESENTÓ
+          (request.resource.data.estatus == 'NO_PRESENTO')
+        )
+        && (
+          !('oportunidad' in request.resource.data) ||
+          request.resource.data.oportunidad in [1, 2, 3]
+        )
+        && (
+          // Lista blanca estricta — solo estos 3 caminos permiten escribir.
+          isAdmin()
+          || isSubdirector()
+          || (
+              canMaestro()
+              && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId)
+              && request.resource.data.teacherId == getTeacherId()
+            )
+        )
+      );
+      allow delete: if isAdminOrSubdirector();
+    }
+
     // ─── AT RISK ───────────────────────────
     match /atRisk/{docId} {
       allow read: if isAuthenticated() && (
-        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || isAuditor() ||
         (canMaestro() && resource.data.teacherId == getTeacherId())
       );
       allow create: if isAuthenticated() && (
@@ -316,6 +438,45 @@ service cloud.firestore {
       allow write: if isAdminOrSubdirector();
     }
 
+    // ─── RESPALDO EN LA NUBE DE BORRADORES ─────────────────────────
+    // v8.36: cada vez que un maestro teclea calificaciones, el editor
+    // escribe un draft en localStorage Y aquí en Firestore con docId
+    // determinístico {teacherId}_{groupId}_{subjectId}_{partial}.
+    // Esto permite recuperar datos cuando el navegador del maestro se
+    // pierde o el bug impide guardar en /grades. Admin puede consultar
+    // todos los drafts para diagnóstico/recuperación.
+    match /gradeDrafts/{draftId} {
+      // Lectura: admin/subdirector/orientador (para auditoría) y el
+      // propio maestro dueño del draft.
+      allow read: if isAuthenticated() && (
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() ||
+        (canMaestro() && resource.data.teacherId == getTeacherId())
+      );
+      // Escritura: solo el propio maestro escribiendo SU propio draft
+      // (o admin/subdirector para limpiar). teacherId debe coincidir
+      // con el del usuario actual (anti-suplantación).
+      allow create, update: if isAuthenticated() && (
+        isAdminOrSubdirector() ||
+        (canMaestro() && request.resource.data.teacherId == getTeacherId())
+      );
+      allow delete: if isAdminOrSubdirector();
+    }
+
+    // ─── CERTIFIED SNAPSHOTS — INMUTABLES ─────────────────────────
+    // Snapshots criptográficamente firmados (SHA256) del estado de los
+    // grades en un momento dado. Son EVIDENCIA INMUTABLE para auditoría
+    // y entrega de boletas oficiales.
+    //
+    // Regla v8.06: NADIE puede modificar o borrar un snapshot una vez creado.
+    // Solo admin/subdirector pueden CREAR snapshots nuevos.
+    // Lectura abierta a todos los autenticados (transparencia).
+    match /certifiedSnapshots/{snapshotId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdminOrSubdirector();
+      allow update: if false;  // ← INMUTABLE
+      allow delete: if false;  // ← INMUTABLE
+    }
+
     // ─── ASISTENCIA ────────────────────────
     // A-1 FIX: maestro sólo puede registrar de su grupo
     match /attendance/{attendanceId} {
@@ -339,19 +500,50 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && (isAdmin() || isSubdirector() || canOrientador());
     }
 
+    // ─── CALIFICACIONES VIGENTES (junio 2026) ──────────────────
+    // studentsFinalGrades/{studentId}_{subjectId}
+    //
+    // Documento canónico que dice cuál es la calificación VIGENTE del
+    // alumno en una materia, considerando ordinaria + 3 oportunidades
+    // de extraordinario. Lo escribe SOLO el módulo de extraordinarios
+    // cuando un caso CIERRA (aprobado en alguna oportunidad o
+    // reprobado/NP en la 3ª). Los datos originales (grades P1/P2/P3 +
+    // extraordinarios) quedan intactos como historial.
+    //
+    // LECTURA: cualquier autenticado. Las boletas, concentrados,
+    // perfil del alumno, F1 leen de aquí para mostrar la cal oficial.
+    //
+    // ESCRITURA: admin/subdirector (autoridad académica), o el docente
+    // de la materia (canMaestro + teacherHasAssignment con groupId+
+    // subjectId del payload). El maestro solo puede escribir cal
+    // vigente de SUS materias.
+    match /studentsFinalGrades/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && (
+        isAdminOrSubdirector() ||
+        (canMaestro() && teacherHasAssignment(
+          request.resource.data.groupId,
+          request.resource.data.subjectId
+        ))
+      );
+      allow delete: if isAdminOrSubdirector();
+    }
+
     // ─── HORAS DE MAESTRO ──────────────────
     match /teacherHours/{docId} {
       allow read: if isAuthenticated();
-      // Admin/Subdirector: siempre. Maestro: solo si el parcial NO está cerrado
-      // (o si tiene override vigente). Antes faltaba esta validación y los
-      // maestros podían modificar horas en parciales ya cerrados.
+      // Las horas impartidas son SEMESTRALES: una sola captura visible en P1/P2/P3.
+      // Por eso NO se bloquean por parcial cerrado. El cierre aplica a grades,
+      // no a teacherHours. Para maestros, basta que tengan la asignación real
+      // del grupo+materia; así el cliente viejo puede guardar horas P1/P2/P3
+      // sin permitir modificar calificaciones de P1/P2.
       allow create: if isAuthenticated() && (
         isAdminOrSubdirector() ||
-        (canMaestro() && canMaestroWriteGradesFor(request.resource.data.partial))
+        (canMaestro() && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId))
       );
       allow update: if isAuthenticated() && (
         isAdminOrSubdirector() ||
-        (canMaestro() && canMaestroWriteGradesFor(resource.data.partial))
+        (canMaestro() && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId))
       );
       allow delete: if isAdminOrSubdirector();
     }
@@ -362,34 +554,84 @@ service cloud.firestore {
     //   - Admin/Subdirector/Directivo (read), aprueban/aplican
     //   - La aplicacion real se valida via /config/correctionsWindow (manual)
     match /gradeCorrections/{correctionId} {
+      // v8.40 PRIVACIDAD ESTRICTA:
+      // - Admin/Subdirector/Directivo: lectura completa (gestión)
+      // - Maestro: SOLO lee correcciones donde
+      //     (a) él las pidió (requestedBy = su uid), o
+      //     (b) admin las pidió a SU nombre (teacherId = su teacherId).
+      //   Cualquier otra corrección NO la ve, aunque comparta materia/grupo.
       allow read: if isAuthenticated() && (
         isAdmin() || isSubdirector() || canReadAsDirectivo() ||
-        // El maestro lee SUS propias solicitudes
-        (canMaestro() && resource.data.requestedBy == request.auth.uid)
+        (canMaestro() && (
+          resource.data.requestedBy == request.auth.uid ||
+          resource.data.teacherId == getTeacherId()
+        ))
       );
 
       // CREATE: admin/subdirector/directivo siempre, maestro solo de sus alumnos.
-      // Status inicial debe ser 'pending'. Se exige folio + datos minimos.
-      // REGLA EPO 67: la cal nueva NUNCA puede ser MENOR que la cal actual capturada.
-      // Si currentGrade es null/ausente (alumno sin captura previa) se permite cualquier cal valida.
+      //
+      // Flujos posibles:
+      //   1. SOLICITUD (maestro o admin/dirección): status='pending'.
+      //      Cal nueva >= cal actual (no se rescatan reprobados por debajo).
+      //   2. APLICACIÓN DIRECTA (solo admin/subdirector): status='applied'.
+      //      Pueden subir, bajar o capturar primera vez (autoridad académica
+      //      equivalente a corrección manual del registro de calificaciones).
+      //      Se ejecuta junto con el update a /grades/{gradeId}.
+      //
+      // Campos mínimos comunes: studentId, subjectId, partial, newGrade, reason, folio, status.
       allow create: if isAuthenticated()
         && request.resource.data.keys().hasAll(['studentId', 'subjectId', 'partial', 'newGrade', 'reason', 'folio', 'status'])
         && request.resource.data.newGrade is number
         && request.resource.data.newGrade >= 5
         && request.resource.data.newGrade <= 10
-        && request.resource.data.status == 'pending'
         && (
-          // Si hay currentGrade y es numero, la nueva debe ser >= currentGrade.
-          !('currentGrade' in request.resource.data) ||
-          request.resource.data.currentGrade == null ||
-          !(request.resource.data.currentGrade is number) ||
-          request.resource.data.newGrade >= request.resource.data.currentGrade
-        )
-        && (
-          isAdmin() || isSubdirector() || isDirectivo() ||
-          (canMaestro()
+          // FLUJO 1 (solicitud de maestro): cualquier rol autorizado, status='pending',
+          //   y si hay currentGrade numero la nueva debe ser >=.
+          //
+          // v8.07: además exige:
+          //   - El parcial debe estar CERRADO para el grado del alumno (no se
+          //     puede solicitar correcciones de un parcial que el maestro aún
+          //     puede editar directo).
+          //   - La ventana de correcciones debe estar ABIERTA (config/correctionsWindow).
+          // Admin/subdirector/directivo SE SALTAN estas validaciones (autoridad).
+          (
+            request.resource.data.status == 'pending'
+            && (
+              !('currentGrade' in request.resource.data) ||
+              request.resource.data.currentGrade == null ||
+              !(request.resource.data.currentGrade is number) ||
+              request.resource.data.newGrade >= request.resource.data.currentGrade
+            )
+            && (
+              isAdmin() || isSubdirector() || isDirectivo() ||
+              (canMaestro()
+                && request.resource.data.requestedBy == request.auth.uid
+                && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId)
+                // v8.07 — bloqueos adicionales para maestros:
+                && 'grado' in request.resource.data
+                && isPartialLockedForGrade(request.resource.data.partial, request.resource.data.grado)
+                && isCorrectionsWindowOpen())
+            )
+          ) ||
+          // FLUJO 2 (aplicación directa): solo admin/subdirector,
+          //   status='applied', cualquier dirección de cambio (5-10).
+          (
+            request.resource.data.status == 'applied'
+            && isAdminOrSubdirector()
+          ) ||
+          // FLUJO 3 (REPLICACIÓN AUTORIZADA por Dirección): orientador SOLICITA
+          //   con source='replication_request', status='pending'. Aquí newGrade
+          //   PUEDE ser menor que currentGrade (no aplica regla "no bajar")
+          //   porque hay oficio de Dirección que lo autoriza. La aplicación
+          //   final la hace admin/subdirector con el doble check.
+          (
+            request.resource.data.status == 'pending'
+            && request.resource.data.source == 'replication_request'
             && request.resource.data.requestedBy == request.auth.uid
-            && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId))
+            && request.resource.data.authOficio is string
+            && request.resource.data.authOficio.size() > 0
+            && (canOrientador() || isAdmin() || isSubdirector() || isDirectivo())
+          )
         );
 
       // UPDATE:
@@ -410,8 +652,8 @@ service cloud.firestore {
         )
       );
 
-      // DELETE: solo admin (auditoria - no se borran solicitudes normales)
-      allow delete: if isAdmin();
+      // DELETE: admin + subdirector (auditoria - no se borran solicitudes normales)
+      allow delete: if isAdminOrSubdirector();
     }
 
     // ─── NOTIFICACIONES ────────────────────

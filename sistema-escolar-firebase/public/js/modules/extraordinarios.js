@@ -403,12 +403,43 @@ const ExtraordinariosModule = (() => {
       });
     }
 
-    const cardsHtml = tarjetas.length === 0
+    // ─── AGRUPAR TARJETAS POR MATERIA (junio 2026) ───────────────────
+    // Antes: N tarjetas-por-grupo dispersas en grid. Si el docente daba la
+    // misma materia en 3 grupos, veia 3 tarjetas separadas que confundian.
+    // Ahora: una sola tarjeta-MATERIA con los grupos como sub-secciones
+    // internas. La impresion vive aqui, siempre consolidada.
+    const materiasMap = new Map();
+    for (const t of tarjetas) {
+      if (!materiasMap.has(t.subjectId)) {
+        materiasMap.set(t.subjectId, {
+          subjectId: t.subjectId,
+          subjectName: t.subjectName,
+          turno: t.turno,
+          grado: t.grado,
+          tarjetas: []
+        });
+      }
+      materiasMap.get(t.subjectId).tarjetas.push(t);
+    }
+    // Orden materias: por nombre (alfabético por UAC oficial)
+    const materias = [...materiasMap.values()].sort((a, b) =>
+      K.getUACNombre(a.subjectName).localeCompare(K.getUACNombre(b.subjectName))
+    );
+    // Dentro de cada materia, orden de grupos: turno -> grado -> grupo
+    for (const m of materias) {
+      m.tarjetas.sort((a, b) =>
+        (a.turno || '').localeCompare(b.turno || '') ||
+        (Number(a.grado) - Number(b.grado)) ||
+        (a.groupName || '').localeCompare(b.groupName || '')
+      );
+    }
+
+    const cardsHtml = materias.length === 0
       ? `<div class="card" style="padding:32px;text-align:center;color:#9ca3af;">
           ${_filters.search || _filters.soloConCasos ? 'Ningún resultado con los filtros.' : '✓ Sin materias asignadas.'}
         </div>`
-      : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px;">
-          ${tarjetas.map(_renderTarjeta).join('')}
+      : `<div style="display:flex;flex-direction:column;gap:18px;">
+          ${materias.map(_renderMateriaContainer).join('')}
         </div>`;
 
     container.innerHTML = UI.moduleContainer([
@@ -477,6 +508,108 @@ const ExtraordinariosModule = (() => {
     ].join(''));
 
     _bindEvents();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // RENDER DE CONTAINER POR MATERIA (junio 2026)
+  // ═══════════════════════════════════════════════════════════════
+  // Una "Materia" agrupa N tarjetas-por-grupo. El header tiene los
+  // totales agregados y los 3 botones de impresion oficial (siempre
+  // consolidados). Dentro van las sub-tarjetas por grupo (captura
+  // inline preservada).
+
+  function _renderMateriaContainer(materia) {
+    const tarjs = materia.tarjetas;
+    const subjectNameOficial = K.getUACNombre(materia.subjectName);
+
+    // Totales agregados de la materia
+    let totalAlumnos = 0, totalP1 = 0, totalP2 = 0, totalP3 = 0, totalApr = 0, totalRep = 0;
+    for (const t of tarjs) {
+      totalAlumnos += t.alumnos.length;
+      for (const a of t.alumnos) {
+        if (a.estadoGlobal === 'PENDIENTE_1') totalP1++;
+        else if (a.estadoGlobal === 'PENDIENTE_2') totalP2++;
+        else if (a.estadoGlobal === 'PENDIENTE_3') totalP3++;
+        else if (a.estadoGlobal.startsWith('APROBADO')) totalApr++;
+        else if (a.estadoGlobal === 'REPROBADO_FINAL') totalRep++;
+      }
+    }
+    const pendientesTot = totalP1 + totalP2 + totalP3;
+
+    // Color del header segun estado global de la materia
+    let headerColor, headerBg;
+    if (totalAlumnos === 0) {
+      headerColor = '#10b981';
+      headerBg = 'linear-gradient(135deg,#fff,#ecfdf5)';
+    } else if (pendientesTot === 0) {
+      headerColor = '#6366f1';
+      headerBg = 'linear-gradient(135deg,#fff,#eef2ff)';
+    } else {
+      headerColor = '#dc2626';
+      headerBg = 'linear-gradient(135deg,#fff,#fef2f2)';
+    }
+
+    // Resumen de grupos: "2-1, 2-2, 2-3" o "2-1 mat · 2-1 vesp"
+    const gruposLabel = tarjs.map(t => t.groupName).join(' · ');
+    const totalGrupos = tarjs.length;
+
+    // Botones imprimir consolidado (SIEMPRE — el sistema ya solo soporta este modo)
+    const printBtns = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+      <button data-action="print-extra-materia" data-subject-id="${escapeHtml(materia.subjectId)}" data-op="1"
+        title="Imprime la lista oficial de 1ª oportunidad con TODOS los grupos consolidados en una sola hoja"
+        style="padding:8px 14px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+        🖨️ Imprimir 1ª Oportunidad
+      </button>
+      <button data-action="print-extra-materia" data-subject-id="${escapeHtml(materia.subjectId)}" data-op="2"
+        style="padding:8px 14px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+        🖨️ Imprimir 2ª Oportunidad
+      </button>
+      <button data-action="print-extra-materia" data-subject-id="${escapeHtml(materia.subjectId)}" data-op="3"
+        style="padding:8px 14px;background:#b91c1c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+        🖨️ Imprimir 3ª Oportunidad
+      </button>
+    </div>`;
+
+    const chips = [];
+    if (totalP1) chips.push(`<span style="background:#fef3c7;color:#92400e;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;">${totalP1} pend. 1ª</span>`);
+    if (totalP2) chips.push(`<span style="background:#fed7aa;color:#9a3412;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;">${totalP2} pend. 2ª</span>`);
+    if (totalP3) chips.push(`<span style="background:#fecaca;color:#7f1d1d;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;">${totalP3} pend. 3ª</span>`);
+    if (totalApr) chips.push(`<span style="background:#bbf7d0;color:#166534;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;">${totalApr} aprobados</span>`);
+    if (totalRep) chips.push(`<span style="background:#e5e7eb;color:#1f2937;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;">${totalRep} reprob. final</span>`);
+    if (totalAlumnos === 0) chips.push(`<span style="background:#dcfce7;color:#166534;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;">Sin extraordinarios</span>`);
+
+    const header = `<div style="padding:16px 20px;background:${headerBg};border-left:6px solid ${headerColor};border-radius:12px 12px 0 0;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:260px;">
+          <div style="font-size:11px;color:#475569;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:2px;">
+            MATERIA · ${totalGrupos} grupo${totalGrupos !== 1 ? 's' : ''}
+          </div>
+          <div style="font-size:18px;font-weight:800;color:#0f172a;line-height:1.25;margin-bottom:6px;">
+            ${escapeHtml(subjectNameOficial)}
+          </div>
+          <div style="font-size:11px;color:#64748b;font-weight:600;line-height:1.4;">
+            Grupos: ${escapeHtml(gruposLabel)}
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;">${chips.join('')}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:10px;font-weight:700;color:#475569;letter-spacing:1px;">TOTAL EN EXTRA</div>
+          <div style="font-size:34px;font-weight:900;color:${headerColor};line-height:1;">${totalAlumnos}</div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px;">alumnos</div>
+        </div>
+      </div>
+      ${printBtns}
+    </div>`;
+
+    // Sub-tarjetas por grupo (reusa _renderTarjeta existente)
+    const subTarjetasHtml = tarjs.map(_renderTarjeta).join('');
+
+    return `<div class="card" style="padding:0;overflow:hidden;border:1.5px solid ${headerColor}33;border-radius:12px;background:#fff;">
+      ${header}
+      <div style="padding:12px;background:#f8fafc;display:flex;flex-direction:column;gap:10px;">
+        ${subTarjetasHtml}
+      </div>
+    </div>`;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -595,53 +728,22 @@ const ExtraordinariosModule = (() => {
       </div>`;
     }
 
-    // Conteo de grupos con la MISMA materia (incluye el actual). Direccion
-    // exige que la impresion sea SIEMPRE por MATERIA — la hoja unica con
-    // columna GRUPO. Ya NO se permite imprimir un solo grupo aislado
-    // porque eso multiplica hojas innecesarias y el examen oficial es por
-    // materia, no por grupo. Si solo hay 1 grupo con esta materia, el
-    // mismo print sale con 1 grupo (la columna GRUPO igual ayuda al
-    // archivo y traza institucional).
-    const totalGruposMateria = (_data.tarjetas || [])
-      .filter(x => x.subjectId === t.subjectId).length;
-
-    const sufijoGrupos = totalGruposMateria > 1
-      ? ` (${totalGruposMateria} grupos)`
-      : '';
-
-    // Un único set: SIEMPRE imprime por materia (consolidado).
-    const printBtns = `<div style="display:flex;flex-direction:column;gap:6px;">
-      <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:2px;">
-        🖨️ Imprimir lista oficial${totalGruposMateria > 1 ? ` (juntará ${totalGruposMateria} grupos en una hoja)` : ''}:
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button data-action="print-extra-materia" data-subject-id="${escapeHtml(t.subjectId)}" data-op="1"
-          title="${totalGruposMateria > 1 ? 'Imprime 1ª oportunidad de TODOS los grupos donde se imparte esta materia en una sola hoja con columna GRUPO' : 'Imprime 1ª oportunidad de esta materia'}"
-          style="padding:8px 12px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-          1ª Oportunidad${sufijoGrupos}
-        </button>
-        <button data-action="print-extra-materia" data-subject-id="${escapeHtml(t.subjectId)}" data-op="2"
-          style="padding:8px 12px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-          2ª Oportunidad${sufijoGrupos}
-        </button>
-        <button data-action="print-extra-materia" data-subject-id="${escapeHtml(t.subjectId)}" data-op="3"
-          style="padding:8px 12px;background:#b91c1c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-          3ª Oportunidad${sufijoGrupos}
-        </button>
-      </div>
-    </div>`;
+    // REDISEÑO (junio 2026): los botones de impresion ya NO viven en cada
+    // sub-tarjeta de grupo. Viven en el header de la MATERIA (_renderMateriaContainer)
+    // porque la impresion es SIEMPRE consolidada — todos los grupos de la materia
+    // en una sola hoja. Aqui solo queda el boton "Guardar todo" que sigue siendo
+    // por-grupo (cada grupo guarda sus propios alumnos).
 
     const guardarTodoBtn = canCapture ? `<button data-action="save-all-extra" data-card-key="${t.key}"
       style="padding:8px 14px;background:#1e40af;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-      💾 Guardar todo
+      💾 Guardar todo este grupo
     </button>` : '';
 
     return `<div style="padding:14px 16px;background:#fff;border-top:1px solid #e5e7eb;">
       <div style="display:grid;grid-template-columns:1fr auto;gap:10px;margin-bottom:10px;align-items:start;">
         <div>${modoBanner}</div>
-        <div style="display:flex;gap:8px;flex-direction:column;align-items:flex-end;">
+        <div style="display:flex;gap:8px;align-items:flex-start;">
           ${guardarTodoBtn}
-          ${printBtns}
         </div>
       </div>
       <div style="overflow-x:auto;">
@@ -938,6 +1040,82 @@ const ExtraordinariosModule = (() => {
       updatedByName: App.currentUser?.displayName || App.currentUser?.email || '',
     };
     await window.db.collection('extraordinarios').doc(docId).set(data, { merge: true });
+
+    // ═══ CAL VIGENTE: actualizar registro academico oficial (junio 2026) ═══
+    // Cuando un extraordinario CIERRA el caso (APROBADO en cualquier op,
+    // o REPROBADO/NO_PRESENTO en la 3a), escribimos un doc canonico en
+    // studentsFinalGrades que dice cual es la cal VIGENTE del alumno
+    // en esa materia. Los modulos de boletas/concentrados/perfil leen
+    // de aqui para mostrar la calificacion oficial. Los datos originales
+    // (P1/P2/P3 + extraordinarios 1/2/3) quedan intactos como historial.
+    await _updateCalVigente(alumno, tarjeta, Number(oportunidad), estatus, calToSave, cicloEscolar);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // CAL VIGENTE: actualiza studentsFinalGrades cuando un extra CIERRA caso
+  // ═══════════════════════════════════════════════════════════════
+  async function _updateCalVigente(alumno, tarjeta, oportunidad, estatus, calToSave, cicloEscolar) {
+    // Solo escribimos cuando el caso quedó CERRADO. Si es REPROBADO o
+    // NO_PRESENTO en op 1 o 2 → el alumno va a la siguiente, todavia
+    // no es "final". El registro vigente se actualizara cuando termine.
+    const cierraCaso =
+      estatus === 'APROBADO' ||
+      (oportunidad === 3 && (estatus === 'REPROBADO' || estatus === 'NO_PRESENTO'));
+
+    if (!cierraCaso) return; // op1/op2 no aprobado: aun no es final
+
+    const docId = `${alumno.studentId}_${tarjeta.subjectId}`;
+
+    // Cal ordinaria = promedio P1+P2+P3 que la app ya calculo (alumno.promedio).
+    // Si no esta disponible, intentamos reconstruir con alumno.cals.
+    let calOrdinaria = null;
+    if (typeof alumno.promedio === 'number' && !isNaN(alumno.promedio)) {
+      calOrdinaria = alumno.promedio;
+    } else if (Array.isArray(alumno.cals)) {
+      const cs = alumno.cals.filter(c => c != null && !isNaN(c));
+      if (cs.length) calOrdinaria = cs.reduce((a, b) => a + b, 0) / cs.length;
+    }
+
+    // Cal vigente: si aprobo, la del extraordinario. Si reprobo final
+    // (3a NP o REPROBADO), conservamos la peor cifra entre 5 (minimo) y
+    // lo que tenga capturado.
+    let calVigente;
+    if (estatus === 'APROBADO') {
+      calVigente = calToSave; // 6..10
+    } else {
+      // Reprobado o NP en 3a oportunidad
+      calVigente = 5;
+    }
+
+    const data = {
+      studentId: alumno.studentId,
+      studentName: alumno.studentName,
+      subjectId: tarjeta.subjectId,
+      subjectName: tarjeta.subjectName,
+      groupId: tarjeta.groupId,
+      groupName: tarjeta.groupName,
+      teacherId: tarjeta.teacherId || '',
+      teacherName: tarjeta.teacherName || '',
+      // Datos clave de la cal vigente
+      calOrdinaria: calOrdinaria != null ? Math.round(calOrdinaria * 100) / 100 : null,
+      calExtraordinaria: estatus === 'APROBADO' ? calToSave : null,
+      oportunidadAprobada: estatus === 'APROBADO' ? oportunidad : null,
+      calVigente: calVigente,
+      origenCalVigente: estatus === 'APROBADO' ? ('extraordinario_' + oportunidad) : 'reprobado_final',
+      estatusFinal: estatus === 'APROBADO' ? 'APROBADO' : (estatus === 'NO_PRESENTO' ? 'BAJA_NP' : 'REPROBADO_FINAL'),
+      bajaPendiente: oportunidad === 3 && estatus === 'NO_PRESENTO',
+      // Trazabilidad
+      ciclo: cicloEscolar,
+      fechaCaptura: new Date(),
+      updatedBy: window.auth?.currentUser?.uid || '',
+      updatedByName: App.currentUser?.displayName || App.currentUser?.email || '',
+    };
+    try {
+      await window.db.collection('studentsFinalGrades').doc(docId).set(data, { merge: true });
+    } catch (e) {
+      console.warn('[extraordinarios] no se pudo actualizar studentsFinalGrades:', e.message);
+      // No revertimos el extraordinario — esa data ya esta guardada. Solo log.
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
