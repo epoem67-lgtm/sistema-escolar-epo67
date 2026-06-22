@@ -329,6 +329,12 @@ const MyF1Module = (() => {
     // real. totalHours debe ser el valor de UN solo doc (los 3 son iguales).
     const totalHours = hoursByPartial.P3 || hoursByPartial.P2 || hoursByPartial.P1 || 0;
 
+    // v8.60 REGLAS SEP: construir grades3 (P1,P2,P3) para pasarlos a
+    // App.calcCalFinalSEP, que aplica las 3 reglas estrictas (promedio<6,
+    // 2+ reprobados, >20% faltas) y devuelve la calFinal oficial.
+    const hoursByPartObj = {};
+    hours.forEach(h => { hoursByPartObj[h.partial || 'SEMESTRE'] = h; });
+
     const rows = groupStudents.map((student, index) => {
       const sid = _studentId(student);
       const byPartial = {};
@@ -336,6 +342,9 @@ const MyF1Module = (() => {
       let totalPoints = 0;
       let gradeCount = 0;
       let failedPartials = 0;
+
+      // grades3 ordenados para reglas SEP
+      const grades3 = PARTIALS.map(p => gradeMap[sid]?.[p] || null);
 
       PARTIALS.forEach(partial => {
         const grade = gradeMap[sid]?.[partial] || null;
@@ -350,8 +359,12 @@ const MyF1Module = (() => {
         }
       });
 
+      // Reglas SEP estrictas: si reprueba por cualquier regla → cal=5 forzosa
+      const sepResult = App.calcCalFinalSEP({ grades3, hoursByPart: hoursByPartObj });
       const finalAverage = gradeCount > 0 ? totalPoints / gradeCount : null;
-      const finalGrade = finalAverage !== null ? K.calcCal(finalAverage) : null;
+      const finalGrade = sepResult.calFinal; // YA viene con reglas SEP aplicadas (5 si reprobó)
+      const reprobadoPorRegla = sepResult.reprobadoPorRegla;
+      const motivoSEP = sepResult.motivo;
       const absenceBase = mode === 'acumulado' ? totalHours : hoursByPartial[mode];
       const faltasForMode = mode === 'acumulado' ? totalFaltas : (byPartial[mode]?.faltas || 0);
       const absencePercent = absenceBase > 0 ? (faltasForMode * 100) / absenceBase : null;
@@ -367,6 +380,10 @@ const MyF1Module = (() => {
         failedPartials,
         finalAverage,
         finalGrade,
+        // v8.60 REGLAS SEP: metadata para que el render pueda destacar visualmente
+        // la sustitución forzosa por regla SEP (con tooltip explicando motivo).
+        reprobadoPorRegla,
+        motivoSEP,
         partialGrade: mode !== 'acumulado' ? byPartial[mode]?.cal ?? null : null,
         partialFaltas: mode !== 'acumulado' ? byPartial[mode]?.faltas ?? null : null
       };

@@ -532,6 +532,95 @@ const App = {
   },
 
   /**
+   * REGLAS SEP — CALIFICACIÓN FINAL OFICIAL (junio 2026)
+   * ────────────────────────────────────────────────────────────────
+   * Determina la cal final que se debe MOSTRAR para una materia
+   * considerando las reglas SEP estrictas. Esta es la calificación
+   * oficial que aparece en boletas, concentrados, F1, perfil del
+   * alumno y cualquier vista de cal final.
+   *
+   * REGLAS (cualquiera dispara cal=5 forzosa, SIN excepción):
+   *   1. PROMEDIO < 6 con los 3 parciales capturados
+   *   2. 2 o MÁS parciales reprobados (no importa el promedio —
+   *      18 ÷ 3 = 6 aprobatorio matemático NO aplica si reprobó 2)
+   *   3. Inasistencias > 20% sobre horas impartidas
+   *
+   * Reusa App.calcStatusExtraordinario que ya implementa las 3 reglas
+   * de forma independiente. Aquí solo agregamos el wrapper que
+   * devuelve la CAL OFICIAL a mostrar.
+   *
+   * Input:
+   *   grades3      = [gradeP1, gradeP2, gradeP3]
+   *   hoursByPart  = { P1, P2, P3 } docs de teacherHours
+   *   passGrade    = 6 (default)
+   *
+   * Output:
+   *   {
+   *     calFinal: number,          // 5 si reprobó por reglas, sino promedio redondeado (5..10)
+   *     calOriginal: number|null,  // promedio sin aplicar reglas SEP (para diagnóstico)
+   *     reprobadoPorRegla: boolean,
+   *     reglas: array,             // ['DOS_REPROB', 'INASIST'] etc
+   *     motivo: string,            // explicación legible para tooltip
+   *     puedeMejorar: boolean      // false si las reglas son definitivas
+   *   }
+   */
+  calcCalFinalSEP({ grades3 = [], hoursByPart = {}, passGrade = 6 } = {}) {
+    const status = this.calcStatusExtraordinario({ grades3, hoursByPart, passGrade });
+
+    // Promedio crudo (sin aplicar reglas SEP), para referencia.
+    const calOriginal = status.promedio != null
+      ? Math.round(status.promedio * 100) / 100
+      : null;
+
+    // Si NO hay ninguna cal capturada -> retornar null (todavía no es evaluable)
+    if (status.cals.every(c => c == null)) {
+      return {
+        calFinal: null,
+        calOriginal: null,
+        reprobadoPorRegla: false,
+        reglas: [],
+        motivo: 'Sin calificaciones capturadas',
+        puedeMejorar: true
+      };
+    }
+
+    // REGLAS DEFINITIVAS: cualquier regla activa fuerza cal=5.
+    if (status.isExtra) {
+      const motivos = [];
+      if (status.reglasActivas.includes('DOS_REPROB')) {
+        motivos.push(`${status.reprobados} parciales reprobados`);
+      }
+      if (status.reglasActivas.includes('PROM_BAJO')) {
+        motivos.push(`promedio ${calOriginal} < ${passGrade}`);
+      }
+      if (status.reglasActivas.includes('INASIST')) {
+        motivos.push(`${status.pctInasistencia.toFixed(1)}% inasistencias (>20%)`);
+      }
+      return {
+        calFinal: 5, // regla SEP: sustitución forzosa
+        calOriginal,
+        reprobadoPorRegla: true,
+        reglas: status.reglasActivas,
+        motivo: motivos.join(' · '),
+        puedeMejorar: false // ya es definitivo
+      };
+    }
+
+    // No hay regla activa: usar promedio redondeado (regla K.calcCal).
+    // Si todavía falta parciales por capturar, devolvemos el promedio
+    // de lo capturado pero marcamos puedeMejorar=true (sigue en curso).
+    const calRedondeada = K.calcCal(status.promedio);
+    return {
+      calFinal: calRedondeada,
+      calOriginal,
+      reprobadoPorRegla: false,
+      reglas: [],
+      motivo: status.tiene3Cals ? 'Aprobado' : 'En curso — faltan parciales',
+      puedeMejorar: !status.tiene3Cals
+    };
+  },
+
+  /**
    * Determina el SEMESTRE CORRIENTE para un grado escolar, basado en la fecha
    * actual. Calendario escolar de bachillerato:
    *   - Agosto-enero → 1er semestre del ciclo → grados 1°, 3°, 5°

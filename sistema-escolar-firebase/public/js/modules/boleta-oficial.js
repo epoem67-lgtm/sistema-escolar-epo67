@@ -16,11 +16,15 @@ const BoletaOficialModule = (function () {
     container.innerHTML = `<div class="module-container">${UI.loadingState('Cargando...')}</div>`;
 
     try {
-      const [students, groups, subjects, assignments] = await Promise.all([
-        Store.getStudents(), Store.getGroups(), Store.getSubjects(), Store.getAssignments()
+      const [students, groups, subjects, assignments, oriGroups] = await Promise.all([
+        Store.getStudents(), Store.getGroups(), Store.getSubjects(), Store.getAssignments(),
+        Store.getOrientadorGroups()
       ]);
-      _students = students.filter(s => s.estatus === 'ACTIVO');
-      _groups = groups;
+      // Filtrado para orientadores: solo sus grupos asignados
+      const filteredGroups = oriGroups ? groups.filter(g => oriGroups.includes(g.id)) : groups;
+      const allowedGroupIds = new Set(filteredGroups.map(g => g.id));
+      _students = students.filter(s => s.estatus === 'ACTIVO' && (oriGroups === null || allowedGroupIds.has(s.groupId)));
+      _groups = filteredGroups;
       _subjects = subjects;
       _assignments = assignments;
 
@@ -58,6 +62,7 @@ const BoletaOficialModule = (function () {
 
       _bindFilters();
       _bindActions(container);
+      Utils.restrictTurnoGradoOptions(_groups, 'bo-turno', 'bo-grado');
     } catch (e) {
       console.error('Error:', e);
       container.innerHTML = `<div class="module-container">${UI.emptyState('error', e.message)}</div>`;
@@ -126,7 +131,7 @@ const BoletaOficialModule = (function () {
     results.innerHTML = UI.loadingState('Calculando promedios...');
 
     try {
-      const allGrades = await Store.getGradesByGroup(groupId, true);
+      const allGrades = await Store.getGradesByGroup(groupId);
       const grupo = _groups.find(g => g.id === groupId);
       const groupName = grupo?.nombre || groupId;
 
@@ -145,46 +150,74 @@ const BoletaOficialModule = (function () {
       }
 
       // Compute per student: average of P1+P2+P3 per subject
-      const semMap = { '1': 'PRIMER', '2': 'TERCERO', '3': 'QUINTO' };
-      const semestre = semMap[String(grado)] || 'PRIMER';
+      // Semestre corriente según la fecha actual (App.getCurrentSemester
+      // detecta automáticamente si estamos en 1er o 2do semestre del ciclo).
+      const semestre = App.getCurrentSemester(grado).texto;
       const ciclo = '2025-2026';
       const numToText = { 1:'UNA', 2:'DOS', 3:'TRES', 4:'CUATRO', 5:'CINCO', 6:'SEIS', 7:'SIETE', 8:'OCHO', 9:'NUEVE', 10:'DIEZ', 11:'ONCE', 12:'DOCE', 13:'TRECE' };
 
       let html = '';
 
-      studentList.forEach((student, idx) => {
-        const studentGrades = allGrades.filter(g => g.studentId === student.id);
+      // v8.60 REGLAS SEP: cargar horas por materia para aplicar la regla del 20%
+      // de faltas. Sin esto la cal final no es 100% reglada.
+      let hoursIdx = {};
+      try {
+        const hMap = await Store.getTeacherHoursForGroups([groupId]);
+        for (const h of hMap.values()) {
+          const subj = h.subjectId;
+          const part = h.partial || 'SEMESTRE';
+          if (!hoursIdx[subj]) hoursIdx[subj] = {};
+          hoursIdx[subj][part] = h;
+        }
+      } catch (e) { console.warn('[boleta-oficial] no se pudieron cargar horas:', e.message); }
 
-        // Per subject: average of available parcials
+      studentList.forEach((student, idx) => {
+        const isTraslado = !!student.bajaPendiente;
+        const blankFill = '';
+        const studentGrades = isTraslado ? [] : allGrades.filter(g => g.studentId === student.id);
+
         const subjectRows = [];
         let totalCal = 0, countCal = 0;
 
         groupSubjects.forEach(sub => {
           const subGrades = studentGrades.filter(g => g.subjectId === sub.id);
-          const cals = subGrades.map(g => g.cal !== undefined ? g.cal : (g.value !== undefined ? Number(g.value) : null))
-            .filter(v => v !== null && !isNaN(v));
+          // Construir grades3 ordenado (P1, P2, P3) para reglas SEP
+          const grades3 = ['P1', 'P2', 'P3'].map(p => subGrades.find(g => g.partial === p) || null);
+          const tieneAlguna = grades3.some(g => g != null);
 
-          let finalCal = '';
-          let obs = '';
-          if (cals.length > 0) {
-            const avg = cals.reduce((a, b) => a + b, 0) / cals.length;
-            finalCal = Math.round(avg);
-            if (finalCal < 6) finalCal = 5;
-            if (finalCal > 10) finalCal = 10;
-            obs = finalCal >= 6 ? 'ACREDITADA' : 'NO ACREDITADA';
-            totalCal += finalCal;
-            countCal++;
+          let finalCal = blankFill;
+          let obs = isTraslado ? '' : 'NO ACREDITADA';
+          let reprobadoPorRegla = false;
+          let motivoSEP = '';
+
+          if (tieneAlguna) {
+            // Aplica reglas SEP estrictas (3 reglas independientes):
+            //  1) promedio<6, 2) 2+ parciales reprobados, 3) >20% faltas
+            const result = App.calcCalFinalSEP({
+              grades3,
+              hoursByPart: hoursIdx[sub.id] || {}
+            });
+            if (result.calFinal != null) {
+              finalCal = result.calFinal;
+              reprobadoPorRegla = result.reprobadoPorRegla;
+              motivoSEP = result.motivo;
+              obs = finalCal >= 6 ? 'ACREDITADA' : 'NO ACREDITADA';
+              totalCal += finalCal;
+              countCal++;
+            }
           }
 
           subjectRows.push({
             name: K.getUACNombre(sub.nombre),
             ciclo,
             cal: finalCal,
-            obs
+            obs,
+            reprobadoPorRegla,
+            motivoSEP
           });
         });
 
-        const promedio = countCal > 0 ? (totalCal / countCal).toFixed(1) : '';
+        const promedio = countCal > 0 ? (totalCal / countCal).toFixed(1) : blankFill;
         const numAsig = groupSubjects.length;
         const numAsigText = numToText[numAsig] || numAsig;
 
@@ -247,7 +280,7 @@ const BoletaOficialModule = (function () {
 
             <div style="margin-top:14px;font-family:Times,serif;font-size:9px;">
               <div><strong>ASIGNATURAS CURSADAS ${numAsig}(${numAsigText})</strong></div>
-              <div><strong>LA CALIFICACION MINIMA APROBATORIA ES DE 6 (SEIS) PUNTOS</strong></div>
+              <div><strong>LA CALIFICACIÓN MINIMA APROBATORIA ES DE 6 (SEIS) PUNTOS</strong></div>
               <div>ESTA BOLETA NO ES VALIDA SI PRESENTA BORRADURAS O ALTERACIONES</div>
             </div>
 
@@ -282,8 +315,22 @@ const BoletaOficialModule = (function () {
 
     const content = [...results.children].map(el => el.outerHTML).join('');
 
+    // Resolver metadatos para nombre del archivo
+    const _gid = document.getElementById('bo-grupo')?.value;
+    const _aid = document.getElementById('bo-alumno')?.value;
+    const _g = _groups.find(x => x.id === _gid);
+    const _a = _students.find(x => x.id === _aid);
+    const _orient = _g ? K.getOrientador(_g.turno, _g.nombre) : '';
+    const _alumno = _a ? `${_a.apellido1 || ''} ${_a.apellido2 || ''} ${_a.nombres || ''}`.trim() : '';
+    const _docTitle = Utils.fileName({
+      tipo: 'BOLETA_OFICIAL',
+      turno: _g?.turno,
+      grupo: _g?.nombre,
+      maestro: _orient,
+      alumno: _alumno
+    });
     const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-      <title>Boleta Oficial EPO 67</title>
+      <title>${Utils.sanitize(_docTitle)}</title>
       <style>
         @page { size: letter portrait; margin: 18mm 20mm; margin-top: 12mm; margin-bottom: 12mm; }
         * { margin:0; padding:0; box-sizing:border-box; }

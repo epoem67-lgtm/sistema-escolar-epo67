@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v8.59-auto-clean-selectivo-extras-materia";
+const SW_VERSION = "v8.60-reglas-sep-cal-final-unificada";
 // PERFORMANCE: el cache YA NO depende de SW_VERSION. Antes cada bump de versión
 // borraba los 46 JS (~1.9 MB) y forzaba a redescargarlos. Ahora el cache es
 // estable y persistente — los archivos viejos se reemplazan naturalmente cuando

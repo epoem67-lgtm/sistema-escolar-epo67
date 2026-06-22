@@ -27,7 +27,10 @@ const ConcentradoModule = (() => {
     ).join('');
 
     const role = App.currentUser?.role;
-    const isAdmin = role === 'admin' || role === 'subdirector' || role === 'directivo';
+    // Auditor (admin/subdirector/directivo/auditorScope=true) ve la UI de admin:
+    // 2 tarjetas por turno con ZIP por orientador. La UI de "Mis grupos" (verde)
+    // es solo para orientadores reales con grupos asignados.
+    const isAdmin = role === 'admin' || role === 'subdirector' || role === 'directivo' || App.canActAs('auditor');
     container.innerHTML = `
       <div class="module-container">
         <div class="module-header">
@@ -44,7 +47,15 @@ const ConcentradoModule = (() => {
           <div class="chip-filter-row" style="margin-bottom:0;">
             <span class="chip-filter-label">¿Qué parcial?</span>
             <div class="chip-group">
-              ${K.PARCIALES.map(p => `<button class="chip chip-parcial ${p.id === 'P2' ? 'active' : ''}" data-filter="parcial" data-value="${p.id}">${p.nombre}</button>`).join('')}
+              ${(function(){
+                const def = App.getDefaultPartial();
+                const chips = K.PARCIALES.map(p =>
+                  `<button class="chip chip-parcial ${p.id === def ? 'active' : ''}" data-filter="parcial" data-value="${p.id}">${p.nombre}</button>`
+                ).join('');
+                // v8.48: chip "Acumulado" — promedio de los 3 parciales por materia
+                const chipAcum = `<button class="chip chip-parcial" data-filter="parcial" data-value="ACUM" title="Promedio de los 3 parciales por materia">📊 Acumulado</button>`;
+                return chips + chipAcum;
+              })()}
             </div>
           </div>
           <!-- Filtros ocultos para compatibilidad con código viejo -->
@@ -155,36 +166,81 @@ const ConcentradoModule = (() => {
   // ─── DATA LOADING ───
   async function loadData() {
     try {
-      const [students, groups, subjects, assignments, oriGroups] = await Promise.all([
-        Store.getStudents(),
+      const user = App.currentUser || {};
+      // Auditor (admin/subdirector/directivo/auditorScope) tiene PRIORIDAD: ve
+      // todo el sistema, no se aplica filtro de academia. Para ver su academia
+      // específica entra por "Mi Academia".
+      const isAuditorGlobal = App.canActAs('auditor');
+      const acaGrado = (!isAuditorGlobal && Number(user.academiaGrado)) || null;
+      const acaTurno = (!isAuditorGlobal && user.academiaTurno) || null;
+      const isAcademia = !!(acaGrado && acaTurno);
+
+      // Cargar metadata primero. Las queries globales a students y assignments
+      // se difieren hasta saber si el rol puede leerlas (las firestore.rules
+      // rechazan globales para maestros, incluidos los presidentes/secretarios
+      // de academia cuyo role base es 'maestro').
+      const [groups, subjects, oriGroups] = await Promise.all([
         Store.getGroups(),
         Store.getSubjects(),
-        Store.getAssignments(),
         Store.getOrientadorGroups()
       ]);
-      orientadorGroupIds = oriGroups; // null for admin, array for orientador
+      orientadorGroupIds = oriGroups;
 
       // ═══════════════════════════════════════════════════════════
-      // FILTRADO POR ROL (mismo criterio que indicadores.js):
-      // - Admin / Subdirector / Directivo: ven TODO (oriGroups === null)
-      // - Orientador / Orientador-docente: ven TODO el TURNO donde son
-      //   orientadores. No solo los grupos específicos asignados —
-      //   tienen que coordinar el turno completo (boletas, concentrado,
-      //   indicadores, etc.).
+      // FILTRADO POR ROL (UNIÓN — los roles SUMAN scope, no se intersectan):
+      // - Admin / Subdirector / Directivo: oriGroups === null → ven todo
+      // - Orientador / Orientador-docente: TODOS los grupos del/los turnos donde
+      //   son orientadores
+      // - Presidente/Secretario de Academia: TODOS los grupos de su grado+turno
+      // - Combinación (ej. Laurita: orient. vesp + presidenta acad. 1° mat) →
+      //   ve TODO el vespertino + TODO 1° matutino
       // ═══════════════════════════════════════════════════════════
       let filteredGroups;
       if (oriGroups === null) {
-        filteredGroups = groups; // admin: sin filtro
-      } else if (oriGroups.length === 0) {
-        filteredGroups = []; // orientador sin grupos asignados
+        filteredGroups = groups;
+      } else if (oriGroups.length === 0 && !isAcademia) {
+        filteredGroups = [];
       } else {
-        // Detectar el/los turno(s) donde la persona es orientador
-        const oriGroupSet = new Set(oriGroups);
-        const turnosDelOrientador = new Set(
-          groups.filter(g => oriGroupSet.has(g.id)).map(g => g.turno).filter(Boolean)
-        );
-        // Mostrar TODOS los grupos de esos turnos
-        filteredGroups = groups.filter(g => turnosDelOrientador.has(g.turno));
+        const visibleGroupIds = new Set();
+        if (oriGroups.length > 0) {
+          const oriGroupSet = new Set(oriGroups);
+          const turnosOri = new Set();
+          groups.filter(g => oriGroupSet.has(g.id))
+            .forEach(g => g.turno && turnosOri.add(g.turno));
+          groups.filter(g => turnosOri.has(g.turno))
+            .forEach(g => visibleGroupIds.add(g.id));
+        }
+        if (isAcademia) {
+          groups.filter(g => Number(g.grado) === acaGrado && g.turno === acaTurno)
+            .forEach(g => visibleGroupIds.add(g.id));
+        }
+        filteredGroups = groups.filter(g => visibleGroupIds.has(g.id));
+      }
+
+      // Students: lectura global si el rol lo permite; por scope si maestro+academia
+      const canReadAllStudents = oriGroups === null || App.canActAs('orientador');
+      let students;
+      if (canReadAllStudents) {
+        students = await Store.getStudents();
+      } else if (filteredGroups.length === 0) {
+        students = [];
+      } else {
+        const groupIds = filteredGroups.map(g => g.id);
+        students = await Store.getStudentsByGroups(groupIds);
+      }
+
+      // Assignments: lectura global solo para admin/orientador/directivo/subdirector.
+      // Para maestro+academia se deja vacío — el fallback en líneas ~282 deriva
+      // las materias del catálogo `subjects` por grado, que es lo correcto para
+      // un reporte de academia (no depende de quién imparte qué).
+      const canReadAllAssignments = oriGroups === null
+        || App.canActAs('orientador')
+        || App.canActAs('subdirector')
+        || App.canActAs('directivo');
+      let assignments = [];
+      if (canReadAllAssignments) {
+        try { assignments = await Store.getAssignments(); }
+        catch (e) { console.warn('getAssignments falló:', e); assignments = []; }
       }
 
       const allowedIds = new Set(filteredGroups.map(g => g.id));
@@ -194,9 +250,8 @@ const ConcentradoModule = (() => {
       allGroups = filteredGroups;
       allSubjects = subjects;
       allAssignments = assignments;
-      // Load grades per-group (much more efficient than loading ALL grades)
       const groupIds = allGroups.map(g => g.id);
-      allGrades = await Store.getGradesByGroups(groupIds);
+      allGrades = groupIds.length > 0 ? await Store.getGradesByGroups(groupIds) : [];
     } catch (e) {
       console.error('Error cargando datos de concentrado:', e);
       Toast.show('Error al cargar datos', 'error');
@@ -231,7 +286,7 @@ const ConcentradoModule = (() => {
     const turno = _chipValue("turno");
     const grado = _chipValue("grado");
     const grupo = _chipValue("grupo");
-    const parcial = _chipValue("parcial") || 'P1';
+    const parcial = _chipValue("parcial") || App.getDefaultPartial();
 
     if (!grupo) {
       Toast.show('Selecciona un grupo para generar el concentrado', 'warning');
@@ -289,7 +344,9 @@ const ConcentradoModule = (() => {
         }
       }
 
-      subjectList.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+      // Orden oficial SEP del grado (consistente con boletas/concentrados impresos).
+      const _gradoForSort = grado || (groupStudents[0]?.grado ? Number(groupStudents[0].grado) : null);
+      subjectList = K.sortSubjectsByGrado(subjectList, _gradoForSort != null ? Number(_gradoForSort) : 0);
 
       if (subjectList.length === 0) {
         resultsDiv.innerHTML = `
@@ -302,19 +359,44 @@ const ConcentradoModule = (() => {
       }
 
       // Build grade lookup: studentId -> subjectId -> value
+      // v8.48: si parcial === 'ACUM', calcular promedio simple de P1+P2+P3 por materia
       const studentIds = new Set(groupStudents.map(s => s.id));
-      const gradesForGroup = allGrades.filter(g =>
-        studentIds.has(g.studentId) && g.partial === parcial
-      );
-
       const gradeMap = {};
-      gradesForGroup.forEach(g => {
-        // Use cal (new format) or value (legacy)
-        const cal = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : null);
-        if (cal === null || cal === undefined) return;
-        if (!gradeMap[g.studentId]) gradeMap[g.studentId] = {};
-        gradeMap[g.studentId][g.subjectId] = cal;
-      });
+
+      if (parcial === 'ACUM') {
+        // Acumulado: agrupar cals de los 3 parciales y promediar
+        const acc = {}; // studentId -> subjectId -> [cal1, cal2, cal3]
+        allGrades.filter(g =>
+          studentIds.has(g.studentId) && ['P1', 'P2', 'P3'].includes(g.partial)
+        ).forEach(g => {
+          const cal = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : null);
+          if (cal === null || cal === undefined || isNaN(Number(cal))) return;
+          if (!acc[g.studentId]) acc[g.studentId] = {};
+          if (!acc[g.studentId][g.subjectId]) acc[g.studentId][g.subjectId] = [];
+          acc[g.studentId][g.subjectId].push(Number(cal));
+        });
+        // Calcular promedio y poblar gradeMap
+        for (const sid of Object.keys(acc)) {
+          gradeMap[sid] = {};
+          for (const subj of Object.keys(acc[sid])) {
+            const vals = acc[sid][subj];
+            const prom = vals.reduce((s, v) => s + v, 0) / vals.length;
+            // Redondeo SEP: <6 trunca, >=6 redondea normal
+            gradeMap[sid][subj] = prom < 6 ? Math.floor(prom) : Math.round(prom);
+          }
+        }
+      } else {
+        // Modo individual (P1, P2, P3): filtrar por el parcial específico
+        const gradesForGroup = allGrades.filter(g =>
+          studentIds.has(g.studentId) && g.partial === parcial
+        );
+        gradesForGroup.forEach(g => {
+          const cal = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : null);
+          if (cal === null || cal === undefined) return;
+          if (!gradeMap[g.studentId]) gradeMap[g.studentId] = {};
+          gradeMap[g.studentId][g.subjectId] = cal;
+        });
+      }
 
       // Build matrix data
       const passGrade = K.THRESHOLDS.PASS_GRADE;
@@ -478,20 +560,20 @@ const ConcentradoModule = (() => {
             <div class="stat-card stat-card--compact">
               <div class="stat-content">
                 <div class="stat-label">Promedio del Grupo</div>
-                <div class="stat-number">${overallAvg.toFixed(2)}</div>
+                <div class="stat-number">${overallAvg.toFixed(1)}</div>
               </div>
             </div>
             <div class="stat-card stat-card--compact">
               <div class="stat-content">
                 <div class="stat-label">Mejor Promedio</div>
-                <div class="stat-number">${best ? best.average.toFixed(2) : '-'}</div>
+                <div class="stat-number">${best ? best.average.toFixed(1) : '-'}</div>
                 ${best ? `<div class="stat-label">${Utils.sanitize(best.name)}</div>` : ''}
               </div>
             </div>
             <div class="stat-card stat-card--compact">
               <div class="stat-content">
                 <div class="stat-label">Peor Promedio</div>
-                <div class="stat-number">${worst ? worst.average.toFixed(2) : '-'}</div>
+                <div class="stat-number">${worst ? worst.average.toFixed(1) : '-'}</div>
                 ${worst ? `<div class="stat-label">${Utils.sanitize(worst.name)}</div>` : ''}
               </div>
             </div>
@@ -749,7 +831,7 @@ html, body { margin:0; padding:0; height:100%; }
         &nbsp;&nbsp;<span class="lb">Aprobados:</span> <span class="vl">${approved}</span>
         &nbsp;&nbsp;<span class="lb">Reprobados:</span> <span class="vl">${failed}</span>
         &nbsp;&nbsp;<span class="lb">% Aprobación:</span> <span class="vl">${pctAprob}</span>
-        &nbsp;&nbsp;<span class="lb">Promedio:</span> <span class="vl">${overallAvg.toFixed(2)}</span></td>
+        &nbsp;&nbsp;<span class="lb">Promedio:</span> <span class="vl">${overallAvg.toFixed(1)}</span></td>
     </tr>
 </table>
 </div>
@@ -871,12 +953,71 @@ html, body { margin:0; padding:0; height:100%; }
                         (a.apellido2 || '').localeCompare(b.apellido2 || '') ||
                         (a.nombres || '').localeCompare(b.nombres || ''));
 
-      // Mapa grades por alumno+materia para este parcial
+      // Mapa grades por alumno+materia. v8.48: si partial === 'ACUM', construir
+      // grade sintético con cal=promedio P1+P2+P3 y faltas=suma.
+      // v8.60 REGLAS SEP: en modo ACUM la cal final aplica las 3 reglas estrictas
+      // (promedio<6, 2+ parciales reprobados, >20% faltas). Si CUALQUIERA dispara,
+      // cal forzosa = 5. La marca reprobadoPorRegla queda en el grade sintetico
+      // para que el render pueda destacar visualmente la sustitucion.
       const gMap = {};
-      for (const g of allGrades) {
-        if (g.partial !== partial || g.groupId !== grp.id) continue;
-        gMap[g.studentId] = gMap[g.studentId] || {};
-        gMap[g.studentId][g.subjectId] = g;
+      if (partial === 'ACUM') {
+        // Cargar horas por grupo+materia (necesario para la regla 3 — >20% faltas)
+        let hoursIdx = {};
+        try {
+          const hMap = await Store.getTeacherHoursForGroups([grp.id]);
+          for (const [docId, h] of hMap.entries()) {
+            const subj = h.subjectId;
+            const part = h.partial || 'SEMESTRE';
+            if (!hoursIdx[subj]) hoursIdx[subj] = {};
+            hoursIdx[subj][part] = h;
+          }
+        } catch (e) { console.warn('[concentrado-acum] no se pudieron cargar horas:', e.message); }
+
+        // Acumular grades3 por alumno+materia (preserva docs originales para reglas SEP)
+        const acc = {};
+        for (const g of allGrades) {
+          if (g.groupId !== grp.id) continue;
+          if (!['P1', 'P2', 'P3'].includes(g.partial)) continue;
+          const faltas = Number(g.faltas) || 0;
+          if (!acc[g.studentId]) acc[g.studentId] = {};
+          if (!acc[g.studentId][g.subjectId]) {
+            acc[g.studentId][g.subjectId] = { grades3: [null, null, null], faltas: 0 };
+          }
+          const idx = g.partial === 'P1' ? 0 : (g.partial === 'P2' ? 1 : 2);
+          acc[g.studentId][g.subjectId].grades3[idx] = g;
+          acc[g.studentId][g.subjectId].faltas += faltas;
+        }
+
+        for (const sid of Object.keys(acc)) {
+          gMap[sid] = {};
+          for (const subj of Object.keys(acc[sid])) {
+            const { grades3, faltas } = acc[sid][subj];
+            const result = App.calcCalFinalSEP({
+              grades3,
+              hoursByPart: hoursIdx[subj] || {}
+            });
+            if (result.calFinal === null) continue; // sin captura
+
+            gMap[sid][subj] = {
+              cal: result.calFinal,
+              faltas,
+              studentId: sid,
+              subjectId: subj,
+              partial: 'ACUM',
+              // Metadata SEP para render
+              reprobadoPorRegla: result.reprobadoPorRegla,
+              reglasSEP: result.reglas,
+              motivoSEP: result.motivo,
+              calOriginal: result.calOriginal
+            };
+          }
+        }
+      } else {
+        for (const g of allGrades) {
+          if (g.partial !== partial || g.groupId !== grp.id) continue;
+          gMap[g.studentId] = gMap[g.studentId] || {};
+          gMap[g.studentId][g.subjectId] = g;
+        }
       }
 
       // ─── HOJA 1: CONCENTRADO ───
@@ -929,7 +1070,7 @@ html, body { margin:0; padding:0; height:100%; }
             else { subStats[si].reprob++; stuReprobs++; }
           }
         });
-        const prom = cntCal > 0 ? +(sumCal / cntCal).toFixed(2) : '';
+        const prom = cntCal > 0 ? +(sumCal / cntCal).toFixed(1) : '';
         row.push(prom);
         aoa1.push(row);
 
@@ -957,7 +1098,7 @@ html, body { margin:0; padding:0; height:100%; }
         return row;
       };
 
-      const promPerSub = subStats.map(s => s.cnt > 0 ? +(s.sum / s.cnt).toFixed(2) : '');
+      const promPerSub = subStats.map(s => s.cnt > 0 ? +(s.sum / s.cnt).toFixed(1) : '');
       const aprobPerSub = subStats.map(s => s.cnt > 0 ? s.aprob : '');
       const reprobPerSub = subStats.map(s => s.cnt > 0 ? s.reprob : '');
       const pctAprobPerSub = subStats.map(s => s.cnt > 0 ? +(s.aprob * 100 / s.cnt).toFixed(1) : '');
@@ -970,7 +1111,7 @@ html, body { margin:0; padding:0; height:100%; }
       //     sumatoria de aprobaciones a través de materias).
       // El conteo POR MATERIA (aprobPerSub/reprobPerSub) sigue siendo correcto
       // porque cada alumno aporta exactamente 1 cal por materia.
-      const groupProm = groupCntProm > 0 ? +(groupSumProm / groupCntProm).toFixed(2) : '';
+      const groupProm = groupCntProm > 0 ? +(groupSumProm / groupCntProm).toFixed(1) : '';
       const groupPctAprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosAprob * 100 / totalAlumnosEvaluados).toFixed(1) : '';
       const groupPctReprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosIrregulares * 100 / totalAlumnosEvaluados).toFixed(1) : '';
 
@@ -1101,7 +1242,7 @@ html, body { margin:0; padding:0; height:100%; }
     const grado = _chipValue("grado");
     const modo = _chipValue("modo") || 'todos';
     const grupoSel = _chipValue("grupo");
-    const partial = _chipValue("parcial") || 'P1';
+    const partial = _chipValue("parcial") || App.getDefaultPartial();
 
     if (!turno) { Toast.show('Selecciona turno', 'warning'); return null; }
     if (!grado) { Toast.show('Selecciona grado', 'warning'); return null; }
@@ -1138,10 +1279,42 @@ html, body { margin:0; padding:0; height:100%; }
     }
     orientador = (orientador || '').toUpperCase();
 
-    const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
+    // v8.48: si partial === 'ACUM', etiqueta es 'ACUMULADO (PROMEDIO 3 PARCIALES)'
+    const partialLabel = partial === 'ACUM'
+      ? 'ACUMULADO (PROMEDIO 3 PARCIALES)'
+      : (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
     const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
 
     return { targetGroups, partial, partialLabel, cicloEscolar, turno, grado, orientador, modo };
+  }
+
+  /**
+   * v8.48: Helper para resolver la cal de un alumno en una materia según el modo.
+   * - Si partial es P1/P2/P3: retorna la cal de ese parcial específico.
+   * - Si partial === 'ACUM': retorna el promedio simple de P1+P2+P3 (los que tengan cal).
+   *
+   * @param {Array} grades - Lista completa de grades (todos los parciales)
+   * @param {string} studentId
+   * @param {string} subjectId
+   * @param {string} partial - 'P1' | 'P2' | 'P3' | 'ACUM'
+   * @returns {number|null} La calificación final (redondeada SEP) o null si no hay datos
+   */
+  function _getCalForPartial(grades, studentId, subjectId, partial) {
+    if (partial === 'ACUM') {
+      const vals = grades
+        .filter(g => g.studentId === studentId && g.subjectId === subjectId &&
+                     ['P1', 'P2', 'P3'].includes(g.partial))
+        .map(g => g.cal !== undefined ? Number(g.cal) : (g.value !== undefined ? Number(g.value) : NaN))
+        .filter(n => !isNaN(n));
+      if (vals.length === 0) return null;
+      const prom = vals.reduce((s, v) => s + v, 0) / vals.length;
+      // Redondeo SEP: <6 trunca, >=6 redondea normal
+      return prom < 6 ? Math.floor(prom) : Math.round(prom);
+    }
+    const g = grades.find(gg => gg.studentId === studentId && gg.subjectId === subjectId && gg.partial === partial);
+    if (!g) return null;
+    const c = g.cal !== undefined ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : null);
+    return c === null || c === undefined || isNaN(Number(c)) ? null : Number(c);
   }
 
   // Excel con estilos (mismo formato visual que el PDF: colores por bloque de materia, bordes, etc)
@@ -1175,11 +1348,37 @@ html, body { margin:0; padding:0; height:100%; }
           .sort((a, b) => (a.apellido1 || '').localeCompare(b.apellido1 || '') ||
                           (a.apellido2 || '').localeCompare(b.apellido2 || '') ||
                           (a.nombres || '').localeCompare(b.nombres || ''));
+        // v8.48: modo ACUM construye grades sintéticos con cal=promedio P1+P2+P3 y faltas=suma
         const gMap = {};
-        for (const g of allGrades) {
-          if (g.partial !== ctx.partial || g.groupId !== grp.id) continue;
-          gMap[g.studentId] = gMap[g.studentId] || {};
-          gMap[g.studentId][g.subjectId] = g;
+        if (ctx.partial === 'ACUM') {
+          const acc = {}; // studentId -> subjectId -> {cals: [], faltas: 0}
+          for (const g of allGrades) {
+            if (g.groupId !== grp.id) continue;
+            if (!['P1', 'P2', 'P3'].includes(g.partial)) continue;
+            const cal = g.cal !== undefined ? Number(g.cal) : (g.value !== undefined ? Number(g.value) : NaN);
+            const faltas = Number(g.faltas) || 0;
+            if (!acc[g.studentId]) acc[g.studentId] = {};
+            if (!acc[g.studentId][g.subjectId]) acc[g.studentId][g.subjectId] = { cals: [], faltas: 0 };
+            if (!isNaN(cal)) acc[g.studentId][g.subjectId].cals.push(cal);
+            acc[g.studentId][g.subjectId].faltas += faltas;
+          }
+          // Construir gMap con cal = promedio SEP
+          for (const sid of Object.keys(acc)) {
+            gMap[sid] = {};
+            for (const subj of Object.keys(acc[sid])) {
+              const { cals, faltas } = acc[sid][subj];
+              if (cals.length === 0) continue;
+              const prom = cals.reduce((s, v) => s + v, 0) / cals.length;
+              const cal = prom < 6 ? Math.floor(prom) : Math.round(prom);
+              gMap[sid][subj] = { cal, faltas, studentId: sid, subjectId: subj, partial: 'ACUM' };
+            }
+          }
+        } else {
+          for (const g of allGrades) {
+            if (g.partial !== ctx.partial || g.groupId !== grp.id) continue;
+            gMap[g.studentId] = gMap[g.studentId] || {};
+            gMap[g.studentId][g.subjectId] = g;
+          }
         }
 
         // ─── HOJA: CONCENTRADO (matriz F+C por materia) ───
@@ -1294,7 +1493,7 @@ html, body { margin:0; padding:0; height:100%; }
               else { subStats[i].reprob++; stuReprobs++; }
             }
           });
-          const prom = cntCal > 0 ? +(sumCal / cntCal).toFixed(2) : '';
+          const prom = cntCal > 0 ? +(sumCal / cntCal).toFixed(1) : '';
           ws.getCell(rowIdx, promCol).value = prom;
           ws.getCell(rowIdx, promCol).alignment = { horizontal: 'center' };
           ws.getCell(rowIdx, promCol).font = { bold: true };
@@ -1330,7 +1529,7 @@ html, body { margin:0; padding:0; height:100%; }
         const groupPctAprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosAprob * 100 / totalAlumnosEvaluados).toFixed(1) : '';
         const groupPctReprob = totalAlumnosEvaluados > 0 ? +(totalAlumnosIrregulares * 100 / totalAlumnosEvaluados).toFixed(1) : '';
         const statRows = [
-          { label: 'PROMEDIO', valFn: s => s.cnt > 0 ? +(s.sum / s.cnt).toFixed(2) : '', total: groupCntProm > 0 ? +(groupSumProm / groupCntProm).toFixed(2) : '', bg: 'FFF1F5F9', fg: 'FF1F2937' },
+          { label: 'PROMEDIO', valFn: s => s.cnt > 0 ? +(s.sum / s.cnt).toFixed(1) : '', total: groupCntProm > 0 ? +(groupSumProm / groupCntProm).toFixed(1) : '', bg: 'FFF1F5F9', fg: 'FF1F2937' },
           { label: 'ALUMNOS APROBADOS', valFn: s => s.cnt > 0 ? s.aprob : '', total: totalAlumnosAprob, bg: 'FFD4EDDA', fg: 'FF155724' },
           { label: '% APROBACIÓN', valFn: s => s.cnt > 0 ? +(s.aprob * 100 / s.cnt).toFixed(1) : '', total: groupPctAprob, bg: 'FFE8F5E9', fg: 'FF155724', isPct: true },
           { label: 'ALUMNOS REPROBADOS', valFn: s => s.cnt > 0 ? s.reprob : '', total: totalAlumnosIrregulares, bg: 'FFFFD3DF', fg: 'FFAA0000' },
@@ -1638,7 +1837,7 @@ html, body { margin:0; padding:0; height:100%; }
       const turno = _chipValue("turno");
       const grado = _chipValue("grado");
       const grupoSel = _chipValue("grupo");
-      const partial = _chipValue("parcial") || 'P1';
+      const partial = _chipValue("parcial") || App.getDefaultPartial();
       if (!turno) { Toast.show('Selecciona turno', 'warning'); return; }
       if (!grado) { Toast.show('Selecciona grado', 'warning'); return; }
 
@@ -1705,11 +1904,36 @@ html, body { margin:0; padding:0; height:100%; }
         .sort((a, b) => (a.apellido1 || '').localeCompare(b.apellido1 || '') ||
                         (a.apellido2 || '').localeCompare(b.apellido2 || '') ||
                         (a.nombres || '').localeCompare(b.nombres || ''));
+      // v8.48: si partial === 'ACUM', construir gMap con cal=promedio P1+P2+P3 y faltas=suma
       const gMap = {};
-      for (const g of allGrades) {
-        if (g.partial !== partial || g.groupId !== grp.id) continue;
-        gMap[g.studentId] = gMap[g.studentId] || {};
-        gMap[g.studentId][g.subjectId] = g;
+      if (partial === 'ACUM') {
+        const acc = {};
+        for (const g of allGrades) {
+          if (g.groupId !== grp.id) continue;
+          if (!['P1', 'P2', 'P3'].includes(g.partial)) continue;
+          const cal = g.cal !== undefined ? Number(g.cal) : (g.value !== undefined ? Number(g.value) : NaN);
+          const faltas = Number(g.faltas) || 0;
+          if (!acc[g.studentId]) acc[g.studentId] = {};
+          if (!acc[g.studentId][g.subjectId]) acc[g.studentId][g.subjectId] = { cals: [], faltas: 0 };
+          if (!isNaN(cal)) acc[g.studentId][g.subjectId].cals.push(cal);
+          acc[g.studentId][g.subjectId].faltas += faltas;
+        }
+        for (const sid of Object.keys(acc)) {
+          gMap[sid] = {};
+          for (const subj of Object.keys(acc[sid])) {
+            const { cals, faltas } = acc[sid][subj];
+            if (cals.length === 0) continue;
+            const prom = cals.reduce((s, v) => s + v, 0) / cals.length;
+            const cal = prom < 6 ? Math.floor(prom) : Math.round(prom);
+            gMap[sid][subj] = { cal, faltas, studentId: sid, subjectId: subj, partial: 'ACUM' };
+          }
+        }
+      } else {
+        for (const g of allGrades) {
+          if (g.partial !== partial || g.groupId !== grp.id) continue;
+          gMap[g.studentId] = gMap[g.studentId] || {};
+          gMap[g.studentId][g.subjectId] = g;
+        }
       }
 
       // ─── HOJA: CONCENTRADO POR GRUPO ─────────────────────────────
@@ -1773,7 +1997,7 @@ html, body { margin:0; padding:0; height:100%; }
           const cBg = fail ? 'background:#ffd3df;color:#a00;font-weight:700;' : '';
           return `<td class="num">${f === '' ? blankFill : f}</td><td class="num" style="${cBg}">${c === '' ? blankFill : c}</td>`;
         }).join('');
-        const prom = cntCal > 0 ? (sumCal / cntCal).toFixed(2) : blankFill;
+        const prom = cntCal > 0 ? (sumCal / cntCal).toFixed(1) : blankFill;
         const promFail = prom && Number(prom) < passGrade;
         const rowStyle = isTraslado ? ' style="background:#fff7ed;"' : '';
         const nameSuffix = isTraslado ? ' <span style="color:#f97316;font-size:0.7em;font-weight:600;">[TRASLADO]</span>' : '';
@@ -1818,13 +2042,13 @@ html, body { margin:0; padding:0; height:100%; }
         </tr>`;
       };
 
-      const promPerSub = subStats.map(s => s.cnt > 0 ? (s.sum / s.cnt).toFixed(2) : '—');
+      const promPerSub = subStats.map(s => s.cnt > 0 ? (s.sum / s.cnt).toFixed(1) : '—');
       const aprobPerSub = subStats.map(s => s.aprob);
       const reprobPerSub = subStats.map(s => s.reprob);
       const pctAprobPerSub = subStats.map(s => s.cnt > 0 ? ((s.aprob * 100 / s.cnt).toFixed(1) + '%') : '—');
       const pctReprobPerSub = subStats.map(s => s.cnt > 0 ? ((s.reprob * 100 / s.cnt).toFixed(1) + '%') : '—');
 
-      const groupProm = groupCntProm > 0 ? (groupSumProm / groupCntProm).toFixed(2) : '—';
+      const groupProm = groupCntProm > 0 ? (groupSumProm / groupCntProm).toFixed(1) : '—';
       // TOTAL alumno-céntrico (cuadra contra los alumnos reales evaluados del grupo)
       const groupPctAprob = totalAlumnosEvaluados > 0 ? ((totalAlumnosAprob * 100 / totalAlumnosEvaluados).toFixed(1) + '%') : '—';
       const groupPctReprob = totalAlumnosEvaluados > 0 ? ((totalAlumnosIrregulares * 100 / totalAlumnosEvaluados).toFixed(1) + '%') : '—';
@@ -2033,7 +2257,7 @@ html, body { margin:0; padding:0; height:100%; }
   async function exportOrientacionMasivo() {
     try {
       const turno = _chipValue("turno");
-      const partial = _chipValue("parcial") || 'P1';
+      const partial = _chipValue("parcial") || App.getDefaultPartial();
       if (!turno) { Toast.show('Selecciona el turno', 'warning'); return; }
 
       const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
@@ -2294,7 +2518,7 @@ html, body { margin:0; padding:0; height:100%; }
       if (action === 'conc-zip-orientadores') {
         // Admin: ZIP por orientador del turno (función ya existente)
         const turno = btn.dataset.turno;
-        const partial = _chipValue('parcial') || 'P2';
+        const partial = _chipValue('parcial') || App.getDefaultPartial();
         _runConcAction(btn, async () => {
           await generateZipOrientadoresByTurno(turno, partial);
         });
@@ -2302,7 +2526,7 @@ html, body { margin:0; padding:0; height:100%; }
       }
       if (action === 'conc-mio-excel' || action === 'conc-mio-pdf') {
         // Orientador: descarga directa de sus grupos (1 archivo combinado por grado)
-        const partial = _chipValue('parcial') || 'P2';
+        const partial = _chipValue('parcial') || App.getDefaultPartial();
         _runConcAction(btn, async () => {
           await _generateMyOrientadorReport(action === 'conc-mio-pdf' ? 'pdf' : 'excel', partial);
         });
@@ -2312,8 +2536,9 @@ html, body { margin:0; padding:0; height:100%; }
       if (action === 'orientación-print') printOrientacion();
       else if (action === 'orientación-excel') exportOrientacionStyledExcel();
       else if (action === 'orientación-masivo') {
-        if (App.currentUser?.role !== 'admin') {
-          Toast.show('Solo administración puede generar el masivo por orientador', 'warning');
+        const _r = App.currentUser?.role;
+        if (_r !== 'admin' && _r !== 'subdirector') {
+          Toast.show('Solo dirección/subdirección pueden generar el masivo por orientador', 'warning');
           return;
         }
         exportOrientacionMasivo();
@@ -2353,7 +2578,7 @@ html, body { margin:0; padding:0; height:100%; }
       Toast.show('Turno inválido', 'error');
       return false;
     }
-    partial = partial || 'P2';
+    partial = partial || App.getDefaultPartial();
     const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
     const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
 
@@ -2494,11 +2719,27 @@ html, body { margin:0; padding:0; height:100%; }
       Toast.show('Turno inválido', 'error');
       return false;
     }
-    partial = partial || 'P2';
+    partial = partial || App.getDefaultPartial();
     const partialLabel = (K.PARCIALES.find(p => p.id === partial)?.nombre || partial).toUpperCase();
     const partialNumWord = ({ P1: 'PRIMER', P2: 'SEGUNDO', P3: 'TERCER' })[partial] || partial;
     const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
     const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
+
+    // Si el usuario es presidente/secretario de academia, solo generamos las
+    // pestañas de SU grado. Los orientadores reciben los 3 grados (sin cambio).
+    // EXCEPCIÓN: si el usuario es AUDITOR (admin/subdirector/directivo/auditorScope),
+    // tiene prioridad y recibe todos los grados aunque también sea presidente.
+    const _u = App.currentUser || {};
+    const _isAuditorGlobal = App.canActAs('auditor');
+    const _acaGrado = (!_isAuditorGlobal && Number(_u.academiaGrado)) || null;
+    const _acaTurno = (!_isAuditorGlobal && _u.academiaTurno) || null;
+    // El filtro de academia SÓLO aplica cuando el turno solicitado coincide
+    // con el de la academia del usuario. Si el usuario es academia 1° MATUTINO
+    // pero también orientadora VESPERTINO (caso Laurita), al generar Excel
+    // VESPERTINO debe ver los 3 grados (su rol de orientadora ahí), no solo 1°.
+    const isAcademia = !!(_acaGrado && _acaTurno);
+    const academiaAplica = isAcademia && _acaTurno === turno;
+    const gradosVisibles = academiaAplica ? [_acaGrado] : [1, 2, 3];
 
     // Cargar datos si todavía no se cargaron
     if (!allGroups.length) await loadData();
@@ -2532,15 +2773,30 @@ html, body { margin:0; padding:0; height:100%; }
       );
     }
 
+    // PRE-INDEX para evitar N² al generar el Excel de Indicadores.
+    // Antes: cada `statsForSubjectInGroup` y `statsGeneralForGroup` hacía
+    //   allGrades.filter() recorriendo ~6000-9000 docs. Como se llama
+    //   ~3 grados × 6 grupos × 13 materias = ~234 veces, total ~1.4M-2M
+    //   iteraciones (5-10s congelando UI).
+    // Ahora: 1 pasada de indexado, después lookups O(1).
+    const partialGrades = allGrades.filter(g => g.partial === partial);
+    const gradesBySubGrp = new Map();    // key = subjectId|groupId
+    const gradesByStuPart = new Map();   // key = studentId (ya filtrado por partial)
+    for (const g of partialGrades) {
+      const k1 = (g.subjectId || '') + '|' + (g.groupId || '');
+      if (!gradesBySubGrp.has(k1)) gradesBySubGrp.set(k1, []);
+      gradesBySubGrp.get(k1).push(g);
+      if (!gradesByStuPart.has(g.studentId)) gradesByStuPart.set(g.studentId, []);
+      gradesByStuPart.get(g.studentId).push(g);
+    }
+
     // Helper: stats POR MATERIA dentro de un grupo.
     // - aprob: alumnos que aprobaron ESA materia (cal >= 6)
     // - reprob: alumnos que reprobaron ESA materia (cal < 6)
     // - incidencias: igual que reprob (porque 1 alumno tiene 1 cal por materia)
     // - total: alumnos con calificación capturada en esa materia
     function statsForSubjectInGroup(subjectId, groupId) {
-      const grades = allGrades.filter(g =>
-        g.partial === partial && g.groupId === groupId && g.subjectId === subjectId
-      );
+      const grades = gradesBySubGrp.get(subjectId + '|' + groupId) || [];
       let sum = 0, cnt = 0, aprob = 0, reprob = 0;
       for (const g of grades) {
         const cal = g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null);
@@ -2550,7 +2806,7 @@ html, body { margin:0; padding:0; height:100%; }
         else reprob++;
       }
       return {
-        prom: cnt > 0 ? +(sum / cnt).toFixed(2) : null,
+        prom: cnt > 0 ? +(sum / cnt).toFixed(1) : null,
         aprob, reprob, total: cnt,
         incidencias: reprob,  // por materia: mismo número que reprob
       };
@@ -2574,10 +2830,11 @@ html, body { margin:0; padding:0; height:100%; }
       let promSum = 0, promCnt = 0;
       let aprobAlumnos = 0, reprobAlumnos = 0;
       let totalIncidencias = 0;
+      const subjectIdsSet = new Set(subjectIds);
       for (const stu of students) {
-        const studentGrades = allGrades.filter(g =>
-          g.partial === partial && g.studentId === stu.id && subjectIds.includes(g.subjectId)
-        );
+        // Lookup O(1) en lugar de allGrades.filter().
+        const all = gradesByStuPart.get(stu.id) || [];
+        const studentGrades = all.filter(g => subjectIdsSet.has(g.subjectId));
         let sum = 0, cnt = 0, reprobsDelAlumno = 0;
         for (const g of studentGrades) {
           const cal = g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null);
@@ -2596,7 +2853,7 @@ html, body { margin:0; padding:0; height:100%; }
         }
       }
       return {
-        prom: promCnt > 0 ? +(promSum / promCnt).toFixed(2) : null,
+        prom: promCnt > 0 ? +(promSum / promCnt).toFixed(1) : null,
         aprob: aprobAlumnos,     // alumnos sin reprobadas
         reprob: reprobAlumnos,   // alumnos irregulares
         total: aprobAlumnos + reprobAlumnos,  // alumnos evaluados del grupo
@@ -2614,9 +2871,26 @@ html, body { margin:0; padding:0; height:100%; }
 
     // ─── Crear hoja por grado (PRIMERO, SEGUNDO, TERCERO) ───
     const gradoSheetNames = { 1: 'PRIMERO', 2: 'SEGUNDO ', 3: 'TERCERO ' };
-    for (const grado of [1, 2, 3]) {
+    for (const grado of gradosVisibles) {
       const groupsOfGrado = turnoGroups.filter(g => Number(g.grado) === grado);
-      const subjectsForGrado = INDICADORES_SUBJECTS[grado];
+      const groupIdsOfGrado = new Set(groupsOfGrado.map(g => g.id));
+      // INDICADORES_SUBJECTS es la lista SEP oficial (incluye materias como
+      // "Temas Selectos de Igualdad y DDHH" que en EPO 67 no se imparten o
+      // no se han capturado). Filtramos a sólo las que tienen al menos una
+      // calificación en algún grupo del grado en el parcial actual — así no
+      // aparecen columnas vacías en el reporte.
+      const allSubjectsForGrado = INDICADORES_SUBJECTS[grado] || [];
+      const subjectsForGrado = allSubjectsForGrado.filter(([oficial]) => {
+        const subj = findSubject(oficial, grado);
+        if (!subj) return false;
+        return allGrades.some(g => {
+          if (g.partial !== partial || g.subjectId !== subj.id) return false;
+          if (!groupIdsOfGrado.has(g.groupId)) return false;
+          const c = Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN));
+          return !isNaN(c);
+        });
+      });
+      if (subjectsForGrado.length === 0) continue; // grado sin datos, salta hoja
       const ws = wb.addWorksheet(gradoSheetNames[grado], {
         pageSetup: { paperSize: 1, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
       });
@@ -2670,13 +2944,15 @@ html, body { margin:0; padding:0; height:100%; }
         //     · Por materia: = ALUMNOS REPROBADOS (1 cal por alumno)
         //     · General: suma de todas las reprobadas (un alumno cuenta
         //       tantas veces como materias reprobadas tenga)
+        // Fila INCIDENCIAS removida: en GENERAL era sumatoria de materias×alumnos
+        // (inflación que no refleja "número de reprobados"). La info útil ya
+        // está en ALUMNOS REPROBADOS (alumno-céntrico) + % REPROBACION.
         const statRows = [
           { label: 'PROMEDIO',                   fn: s => s.prom != null ? s.prom : '',                       fmt: null },
           { label: 'ALUMNOS APROBADOS',          fn: s => s.total > 0 ? s.aprob : '',                          fmt: null },
           { label: '% APROBACION',               fn: s => s.total > 0 ? +(s.aprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
           { label: 'ALUMNOS REPROBADOS',         fn: s => s.total > 0 ? s.reprob : '',                         fmt: null },
           { label: '% REPROBACION',              fn: s => s.total > 0 ? +(s.reprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
-          { label: 'INCIDENCIAS DE REPROB.',     fn: s => s.total > 0 ? (s.incidencias != null ? s.incidencias : s.reprob) : '', fmt: null },
         ];
 
         // Pre-calcular stats por materia + general
@@ -2723,21 +2999,29 @@ html, body { margin:0; padding:0; height:100%; }
           gc.border = thinBorder;
         });
 
-        blockStartRow += 8;  // 7 filas (header + 6 stats) + 1 vacía de separación
+        blockStartRow += 7;  // 6 filas (header + 5 stats) + 1 vacía de separación
       }
     }
 
     // ─── Hoja CONCENTRADO GENERAL ───
+    // Para academia (un solo grado), la columna GENERAL es redundante con
+    // la del grado, así que la omitimos. Si hay varios grados, mostrarla.
     {
+      const showGeneralCol = gradosVisibles.length > 1;
+      const numGradoCols = gradosVisibles.length;
+      const totalCols = 2 + numGradoCols + (showGeneralCol ? 1 : 0);
+
       const ws = wb.addWorksheet('CONCENTRADO GENERAL ', {
         pageSetup: { paperSize: 1, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
       });
       ws.getColumn(1).width = 13;
       ws.getColumn(2).width = 22;
-      for (let c = 3; c <= 6; c++) ws.getColumn(c).width = 14;
+      for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 14;
 
-      ws.mergeCells(2, 1, 2, 6);
-      ws.getCell(2, 1).value = `${partialNumWord} BIMESTRE`;
+      ws.mergeCells(2, 1, 2, totalCols);
+      ws.getCell(2, 1).value = academiaAplica
+        ? `${partialNumWord} BIMESTRE — ACADEMIA ${_acaGrado}° ${turno}`
+        : `${partialNumWord} BIMESTRE`;
       ws.getCell(2, 1).font = { bold: true, size: 14 };
       ws.getCell(2, 1).alignment = { horizontal: 'center', vertical: 'middle' };
       ws.getCell(2, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCD34D' } };
@@ -2745,7 +3029,9 @@ html, body { margin:0; padding:0; height:100%; }
       // Header
       ws.mergeCells(3, 1, 3, 2);
       ws.getCell(3, 1).value = 'INDICADORES';
-      ['1°', '2°', '3°', 'GENERAL '].forEach((label, i) => {
+      const headerLabels = gradosVisibles.map(g => `${g}°`);
+      if (showGeneralCol) headerLabels.push('GENERAL ');
+      headerLabels.forEach((label, i) => {
         const c = ws.getCell(3, 3 + i);
         c.value = label;
         c.font = { bold: true, size: 11 };
@@ -2760,43 +3046,44 @@ html, body { margin:0; padding:0; height:100%; }
 
       // Stats por grado (alumno-céntricas — un alumno cuenta UNA vez)
       const statsByGrado = {};
-      for (const grado of [1, 2, 3]) {
+      for (const grado of gradosVisibles) {
         const groupsOfGrado = turnoGroups.filter(g => Number(g.grado) === grado);
-        let promSum = 0, promCnt = 0, totalAprob = 0, totalReprob = 0, totalIncidencias = 0;
+        let promSum = 0, promCnt = 0, totalAprob = 0, totalReprob = 0;
         for (const grp of groupsOfGrado) {
           const s = statsGeneralForGroup(grp.id, grado);
           if (s.prom != null) { promSum += s.prom; promCnt++; }
           totalAprob += s.aprob;
           totalReprob += s.reprob;
-          totalIncidencias += (s.incidencias || 0);
         }
         statsByGrado[grado] = {
-          prom: promCnt > 0 ? +(promSum / promCnt).toFixed(2) : null,
+          prom: promCnt > 0 ? +(promSum / promCnt).toFixed(1) : null,
           aprob: totalAprob,
           reprob: totalReprob,
           total: totalAprob + totalReprob,
-          incidencias: totalIncidencias,
         };
       }
-      // Stats GENERAL (todo el turno)
-      const generalAll = {
-        prom: null,
-        aprob: statsByGrado[1].aprob + statsByGrado[2].aprob + statsByGrado[3].aprob,
-        reprob: statsByGrado[1].reprob + statsByGrado[2].reprob + statsByGrado[3].reprob,
-        incidencias: statsByGrado[1].incidencias + statsByGrado[2].incidencias + statsByGrado[3].incidencias,
-        total: 0,
-      };
-      generalAll.total = generalAll.aprob + generalAll.reprob;
-      const promValues = [1, 2, 3].map(g => statsByGrado[g].prom).filter(p => p != null);
-      generalAll.prom = promValues.length > 0 ? +(promValues.reduce((a, b) => a + b, 0) / promValues.length).toFixed(2) : null;
+      // Stats GENERAL (suma de los grados visibles) — solo si hay >1 grado
+      let generalAll = null;
+      if (showGeneralCol) {
+        generalAll = {
+          aprob: gradosVisibles.reduce((a, g) => a + statsByGrado[g].aprob, 0),
+          reprob: gradosVisibles.reduce((a, g) => a + statsByGrado[g].reprob, 0),
+          total: 0,
+        };
+        generalAll.total = generalAll.aprob + generalAll.reprob;
+        const promValues = gradosVisibles.map(g => statsByGrado[g].prom).filter(p => p != null);
+        generalAll.prom = promValues.length > 0 ? +(promValues.reduce((a, b) => a + b, 0) / promValues.length).toFixed(1) : null;
+      }
 
+      // Sin fila INCIDENCIAS (era sumatoria estratosférica que no aportaba
+      // valor — un alumno con 3 reprobadas inflaba el conteo). La info útil
+      // está en ALUMNOS REPROBADOS (alumno-céntrico) y % REPROBACION.
       const statRows = [
         { label: 'PROMEDIO',                fn: s => s.prom != null ? s.prom : '',                              fmt: null },
         { label: 'ALUMNOS APROBADOS',       fn: s => s.total > 0 ? s.aprob : '',                                fmt: null },
         { label: '% APROBACION',            fn: s => s.total > 0 ? +(s.aprob * 100 / s.total).toFixed(1) : '',  fmt: '0.0"%"' },
         { label: 'ALUMNOS REPROBADOS',      fn: s => s.total > 0 ? s.reprob : '',                               fmt: null },
         { label: '% REPROBACION',           fn: s => s.total > 0 ? +(s.reprob * 100 / s.total).toFixed(1) : '', fmt: '0.0"%"' },
-        { label: 'INCIDENCIAS DE REPROB.',  fn: s => s.total > 0 ? (s.incidencias || 0) : '',                   fmt: null },
       ];
       statRows.forEach((sr, idx) => {
         const r = 4 + idx;
@@ -2807,7 +3094,7 @@ html, body { margin:0; padding:0; height:100%; }
         lc.alignment = { horizontal: 'center', vertical: 'middle' };
         lc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F0FE' } };
         lc.border = thinBorder;
-        [1, 2, 3].forEach((g, i) => {
+        gradosVisibles.forEach((g, i) => {
           const c = ws.getCell(r, 3 + i);
           c.value = sr.fn(statsByGrado[g]);
           if (sr.fmt) c.numFmt = sr.fmt;
@@ -2818,13 +3105,15 @@ html, body { margin:0; padding:0; height:100%; }
             c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
           }
         });
-        const gc = ws.getCell(r, 6);
-        gc.value = sr.fn(generalAll);
-        if (sr.fmt) gc.numFmt = sr.fmt;
-        gc.font = { bold: true };
-        gc.alignment = { horizontal: 'center', vertical: 'middle' };
-        gc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFBEB' } };
-        gc.border = thinBorder;
+        if (showGeneralCol && generalAll) {
+          const gc = ws.getCell(r, 3 + numGradoCols);
+          gc.value = sr.fn(generalAll);
+          if (sr.fmt) gc.numFmt = sr.fmt;
+          gc.font = { bold: true };
+          gc.alignment = { horizontal: 'center', vertical: 'middle' };
+          gc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFBEB' } };
+          gc.border = thinBorder;
+        }
       });
     }
 
@@ -2906,10 +3195,11 @@ html, body { margin:0; padding:0; height:100%; }
         const groupStudents = allStudents
           .filter(s => s.groupId === grpId && !s.bajaPendiente)
           .sort((a, b) => (a.apellido1 || '').localeCompare(b.apellido1 || ''));
+        const subjectIdsSet = new Set(subjectIds);
         return groupStudents.map(stu => {
-          const grades = allGrades.filter(g =>
-            g.partial === partial && g.studentId === stu.id && subjectIds.includes(g.subjectId)
-          );
+          // Lookup O(1) en gradesByStuPart (ya filtrado por partial).
+          const all = gradesByStuPart.get(stu.id) || [];
+          const grades = all.filter(g => subjectIdsSet.has(g.subjectId));
           let reprobadas = 0;
           for (const g of grades) {
             const cal = g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null);
@@ -2919,17 +3209,18 @@ html, body { margin:0; padding:0; height:100%; }
         });
       }
 
-      // Grid 3x3: filas (grupo 1, grupo 2, grupo 3) x cols (1°, 2°, 3°)
-      // Cada bloque ocupa ~21 filas y 11 cols (incluyendo separación)
-      const colOffsets = { 1: 1, 2: 12, 3: 23 };
+      // Grid: filas (grupo 1, 2, 3) x cols (un bloque por grado visible).
+      // Para academia, solo el grado del usuario → bloque en col 1.
+      // Para orientadores: los 3 grados en cols 1/12/23.
+      const colOffsets = {};
+      gradosVisibles.forEach((g, i) => { colOffsets[g] = 1 + i * 11; });
       const rowOffsets = { 1: 1, 2: 23, 3: 45 };
-      for (const grupoNum of [1, 2, 3]) {  // grupo 1, 2, 3
-        for (const grado of [1, 2, 3]) {
+      for (const grupoNum of [1, 2, 3]) {
+        for (const grado of gradosVisibles) {
           const targetName = `${grado}-${grupoNum}`;
           const grp = turnoGroups.find(g => g.nombre === targetName || g.nombre === `${grado}°${grupoNum}` || g.nombre.endsWith(`-${grupoNum}`) && Number(g.grado) === grado);
           if (!grp) continue;
           const studs = studentsWithFailures(grp.id, grado);
-          // Mostrar como "1°1" en el encabezado
           buildCasosBlock(ws, rowOffsets[grupoNum], colOffsets[grado], `${grado}°${grupoNum}`, studs);
         }
       }
