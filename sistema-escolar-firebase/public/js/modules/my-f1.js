@@ -362,12 +362,31 @@ const MyF1Module = (() => {
       // Reglas SEP estrictas: si reprueba por cualquier regla → cal=5 forzosa
       const sepResult = App.calcCalFinalSEP({ grades3, hoursByPart: hoursByPartObj });
       const finalAverage = gradeCount > 0 ? totalPoints / gradeCount : null;
-      const finalGrade = sepResult.calFinal; // YA viene con reglas SEP aplicadas (5 si reprobó)
-      const reprobadoPorRegla = sepResult.reprobadoPorRegla;
-      const motivoSEP = sepResult.motivo;
+      let finalGrade = sepResult.calFinal; // YA viene con reglas SEP aplicadas (5 si reprobó)
+      let reprobadoPorRegla = sepResult.reprobadoPorRegla;
+      let motivoSEP = sepResult.motivo;
       const absenceBase = mode === 'acumulado' ? totalHours : hoursByPartial[mode];
       const faltasForMode = mode === 'acumulado' ? totalFaltas : (byPartial[mode]?.faltas || 0);
       const absencePercent = absenceBase > 0 ? (faltasForMode * 100) / absenceBase : null;
+
+      // DOBLE RED DE SEGURIDAD (junio 2026): si el alumno excede 20% de
+      // inasistencias en el modo actual (acumulado o por parcial),
+      // forzar finalGrade = 5 SIN excepcion. Esto cubre el caso donde la
+      // funcion central (calcCalFinalSEP) no aplico la regla 3 por algun
+      // motivo edge (cache stale, hoursByPart mal formado, etc.).
+      // Reglamento EPO 67 / Gaceta SEP: >20% faltas = reprobado, no acreditado.
+      if (absencePercent !== null && absencePercent > 20 && finalGrade !== null) {
+        if (finalGrade !== 5) {
+          // Solo logear si estamos sobreescribiendo una cal aprobatoria
+          // (caso del bug reportado: aparece cal>=6 pero >20% faltas).
+          if (finalGrade >= K.THRESHOLDS.PASS_GRADE) {
+            console.warn('[F1-SEP] forzando cal=5 por >20% faltas. antes:', finalGrade, 'pct:', absencePercent.toFixed(1));
+          }
+          finalGrade = 5;
+          reprobadoPorRegla = true;
+          motivoSEP = (motivoSEP || '') + (motivoSEP ? ' · ' : '') + `${absencePercent.toFixed(1)}% inasistencias (>20%)`;
+        }
+      }
 
       const row = {
         num: index + 1,
