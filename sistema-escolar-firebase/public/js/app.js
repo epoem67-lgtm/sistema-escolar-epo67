@@ -1451,27 +1451,76 @@ const Auth = {
    * Ya NO hace lookup a /users (queda bloqueado por reglas sin sesión, que
    * era exactamente el bug pre-existente que dejaba inutilizable este flujo).
    */
+  /**
+   * Modal "¿Olvidaste tu contraseña?" — rediseñado (junio 2026).
+   *
+   * Diseño previo fallaba constantemente: Firebase enviaba el correo de reset
+   * pero (a) caía en SPAM, (b) el profe no encontraba el correo, (c) el
+   * dominio remitente noreply@epo67-sistema.firebaseapp.com luce sospechoso.
+   *
+   * Nuevo diseño: 2 botones SIEMPRE visibles desde el inicio:
+   *   1. "Enviarme correo" → intenta reset de Firebase (si correo es real)
+   *   2. "Pedir ayuda a Olivia por WhatsApp" → siempre funciona, con el
+   *      correo y nombre del usuario prellenados en el mensaje
+   *
+   * Asi el usuario NUNCA queda sin opcion. Si el correo no llega en 5 min,
+   * usa el boton de WhatsApp.
+   */
   openForgotPassword() {
     if (typeof Modal === 'undefined') {
       alert('Por favor recarga la página y vuelve a intentar.');
       return;
     }
     const body = `
-      <div style="margin-bottom:14px;font-size:13px;color:#444;line-height:1.4;">
-        Ingresa tu correo de inicio de sesión y te enviaremos un enlace para restablecer tu contraseña.
+      <div style="margin-bottom:14px;font-size:13px;color:#444;line-height:1.5;">
+        Ingresa tu correo. Tienes 2 opciones:
+        <br>· <strong>Por correo:</strong> te llega un enlace para reestablecer (revisa SPAM).
+        <br>· <strong>Por WhatsApp:</strong> Olivia te genera una contraseña al momento.
       </div>
       <div class="form-group">
-        <label for="fpEmail">Correo</label>
-        <input type="email" id="fpEmail" placeholder="tu@correo.com" autocomplete="email">
+        <label for="fpEmail">Tu correo</label>
+        <input type="email" id="fpEmail" placeholder="tu@correo.com" autocomplete="email" style="font-size:14px;padding:9px 10px;">
       </div>
-      <div id="fpInfo" style="font-size:12px;color:#666;margin-top:8px;display:none;line-height:1.45;"></div>
+      <div id="fpInfo" style="font-size:13px;color:#666;margin-top:10px;display:none;line-height:1.5;padding:10px 12px;border-radius:6px;"></div>
+
+      <div style="margin-top:18px;display:flex;flex-direction:column;gap:10px;">
+        <button type="button" data-action="fp-send" class="btn btn-primary" style="width:100%;padding:11px;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;">
+          <span class="material-icons-round" style="font-size:18px;">mail</span>
+          Enviarme correo de recuperación
+        </button>
+        <a id="fpWhatsappBtn" href="#" target="_blank" style="text-decoration:none;">
+          <button type="button" class="btn" style="width:100%;padding:11px;font-size:14px;background:#25D366;color:#fff;display:flex;align-items:center;justify-content:center;gap:8px;border:none;">
+            <span class="material-icons-round" style="font-size:18px;">chat</span>
+            Pedir ayuda a Olivia por WhatsApp
+          </button>
+        </a>
+      </div>
+
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:11.5px;color:#6b7280;line-height:1.5;">
+        <strong>💡 Si no recibes el correo en 5 minutos:</strong> revisa SPAM, o usa el botón verde de WhatsApp.
+        Olivia te atiende directo (Lun a Vie, 8am - 5pm).
+      </div>
     `;
     const footer = `
-      <button class="btn btn-outline" data-action="modal-cancel">Cancelar</button>
-      <button class="btn btn-primary" data-action="fp-send">Enviar enlace</button>
+      <button class="btn btn-outline" data-action="modal-cancel">Cerrar</button>
     `;
     Modal.open('Recuperar contraseña', body, footer);
 
+    // Función para actualizar el link de WhatsApp dinámicamente con el correo escrito
+    function updateWhatsappLink() {
+      const typed = document.getElementById('fpEmail').value.trim();
+      const baseMsg = typed
+        ? `Hola Olivia, soy ${typed} y necesito que me generes una contrasena nueva, no puedo entrar al sistema escolar. Gracias.`
+        : `Hola Olivia, necesito que me generes una contrasena nueva, no puedo entrar al sistema escolar. Gracias.`;
+      const url = `https://wa.me/525510782357?text=${encodeURIComponent(baseMsg)}`;
+      const btn = document.getElementById('fpWhatsappBtn');
+      if (btn) btn.href = url;
+    }
+    // Actualizar al cargar y cada vez que escriba
+    updateWhatsappLink();
+    document.getElementById('fpEmail').addEventListener('input', updateWhatsappLink);
+
+    // Click handler para el botón "Enviarme correo"
     document.querySelector('.modal').addEventListener('click', async (e) => {
       if (e.target.closest('[data-action="modal-cancel"]')) { Modal.close(); return; }
       if (!e.target.closest('[data-action="fp-send"]')) return;
@@ -1479,55 +1528,80 @@ const Auth = {
       const typed = document.getElementById('fpEmail').value.trim().toLowerCase();
       const info = document.getElementById('fpInfo');
       info.style.display = 'block';
-      if (!typed) { info.textContent = '⚠ Ingresa tu correo'; info.style.color = '#dc2626'; return; }
+      info.style.background = '';
+      info.style.border = '';
 
-      // Mensaje compartido cuando el reset por email no es viable y
-      // el usuario debe contactar a Olivia
-      const sosMsg = '⚠ No podemos restablecer este correo automáticamente. ' +
-        'Escríbele a Olivia por <a href="https://wa.me/525510782357?text=Hola%20Olivia%2C%20necesito%20que%20me%20generes%20una%20contrase%C3%B1a%20nueva." ' +
-        'target="_blank" style="color:#0d6efd;text-decoration:underline;">WhatsApp</a> y te genera una contraseña temporal.';
-
-      // Caso 1: correo sintético @epo67.local — Firebase no puede enviar email
-      // a un dominio inexistente. Vamos directo al fallback de soporte.
-      if (typed.endsWith('@epo67.local')) {
-        info.innerHTML = sosMsg;
+      if (!typed) {
+        info.innerHTML = '⚠ Escribe tu correo primero.';
         info.style.color = '#dc2626';
+        info.style.background = '#fef2f2';
+        info.style.border = '1px solid #fecaca';
         return;
       }
 
-      // Caso 2: correo real. Si es un alias de un maestro (recoveryEmail), el
-      // Auth email subyacente es sintético y Firebase no puede enviar reset.
-      // Detectamos eso con un lookup público a /email_aliases. Si encontramos
-      // alias, redirigimos a soporte. Si NO encontramos alias, asumimos que
-      // es el Auth email directo (caso admin/usuarios bootstrap) y Firebase
-      // sí puede enviar.
+      // Caso 1: correo sintético @epo67.local — Firebase no puede enviar email
+      // a un dominio inexistente.
+      if (typed.endsWith('@epo67.local')) {
+        info.innerHTML = `⚠ El correo <strong>${typed}</strong> es interno del sistema y no recibe mensajes.<br>
+          <strong>Usa el botón verde de WhatsApp ↓</strong> para que Olivia te genere una contraseña.`;
+        info.style.color = '#b45309';
+        info.style.background = '#fef3c7';
+        info.style.border = '1px solid #fcd34d';
+        return;
+      }
+
+      // Caso 2: correo real con alias (su Auth email subyacente es sintético)
       try {
         const aliasDoc = await DB.emailAliases().doc(typed).get();
         if (aliasDoc.exists) {
-          info.innerHTML = sosMsg;
-          info.style.color = '#dc2626';
+          info.innerHTML = `⚠ Este correo está registrado como respaldo pero no como correo de acceso directo.<br>
+            <strong>Usa el botón verde de WhatsApp ↓</strong> para que Olivia te genere una contraseña.`;
+          info.style.color = '#b45309';
+          info.style.background = '#fef3c7';
+          info.style.border = '1px solid #fcd34d';
           return;
         }
       } catch (lookupErr) {
-        console.warn('[forgotPassword] alias lookup falló (no crítico):', lookupErr.message);
+        console.warn('[forgotPassword] alias lookup falló:', lookupErr.message);
       }
 
+      // Intentar enviar el correo
       try {
+        info.innerHTML = '⏳ Enviando correo…';
+        info.style.color = '#0369a1';
+        info.style.background = '#f0f9ff';
+        info.style.border = '1px solid #bae6fd';
+
         await auth.sendPasswordResetEmail(typed);
-        info.innerHTML = `✅ Si esa cuenta existe, enviamos un enlace a <strong>${typed}</strong>.<br>Revisa tu bandeja de entrada (y spam).`;
-        info.style.color = '#16a34a';
-        setTimeout(() => Modal.close(), 4500);
+
+        info.innerHTML = `✅ <strong>Correo enviado a ${typed}</strong><br><br>
+          📥 Revisa tu bandeja de entrada <strong>Y la carpeta de SPAM</strong>.<br>
+          ⏱ Puede tardar hasta <strong>5 minutos</strong> en llegar.<br>
+          📧 El remitente es <em>noreply@epo67-sistema.firebaseapp.com</em><br><br>
+          <strong>Si no llega:</strong> usa el botón verde de WhatsApp ↓`;
+        info.style.color = '#15803d';
+        info.style.background = '#f0fdf4';
+        info.style.border = '1px solid #86efac';
       } catch (err) {
-        console.warn('[forgotPassword] sendPasswordResetEmail:', err.code, err.message);
+        console.warn('[forgotPassword]:', err.code, err.message);
         if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
-          info.innerHTML = sosMsg;
-          info.style.color = '#dc2626';
+          info.innerHTML = `⚠ No encontramos una cuenta con el correo <strong>${typed}</strong>.<br>
+            <strong>Usa el botón verde de WhatsApp ↓</strong> para que Olivia te ayude.`;
+          info.style.color = '#b45309';
+          info.style.background = '#fef3c7';
+          info.style.border = '1px solid #fcd34d';
         } else if (err.code === 'auth/too-many-requests') {
-          info.textContent = '⚠ Demasiados intentos. Espera unos minutos antes de reintentar.';
-          info.style.color = '#dc2626';
+          info.innerHTML = `⚠ Demasiados intentos. Espera unos minutos.<br>
+            <strong>O usa el botón verde de WhatsApp ↓</strong> ahora mismo.`;
+          info.style.color = '#b45309';
+          info.style.background = '#fef3c7';
+          info.style.border = '1px solid #fcd34d';
         } else {
-          info.textContent = '⚠ ' + (err.message || 'Error al procesar la solicitud');
-          info.style.color = '#dc2626';
+          info.innerHTML = `⚠ ${err.message || 'Error al procesar.'}<br>
+            <strong>Usa el botón verde de WhatsApp ↓</strong> para resolver al momento.`;
+          info.style.color = '#b45309';
+          info.style.background = '#fef3c7';
+          info.style.border = '1px solid #fcd34d';
         }
       }
     });
