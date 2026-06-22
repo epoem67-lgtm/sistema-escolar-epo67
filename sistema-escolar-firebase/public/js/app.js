@@ -900,7 +900,11 @@ const Auth = {
   async loginWithEmail(event) {
     event.preventDefault();
     const typedEmail = document.getElementById('loginEmail').value.trim().toLowerCase();
-    const password = document.getElementById('loginPassword').value;
+    // FIX junio 2026: trim() tambien al password. Bug recurrente:
+    // copy-paste desde WhatsApp/correo agrega espacios invisibles al final.
+    // Firebase Auth los toma como caracteres y rechaza con "auth/invalid-credential",
+    // generando reportes de "no me deja entrar" cuando la pass es correcta.
+    const password = document.getElementById('loginPassword').value.trim();
 
     if (!typedEmail || !password) {
       this.showLoginError('Ingresa correo y contraseña');
