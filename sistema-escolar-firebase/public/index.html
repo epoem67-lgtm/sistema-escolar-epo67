@@ -15,25 +15,88 @@
        Si la versión coincide, no hace nada.
        ════════════════════════════════════════════════════════════════ -->
   <script>
-    // VERSION TRACKING (sin auto-clean destructivo).
-    // El auto-clean anterior borraba TODA la IndexedDB y localStorage en cada
-    // bump de versión — eso destruía la sesión de Firebase Auth (que vive en
-    // IDB `firebaseLocalStorageDb` + key `firebase:authUser:*` en localStorage).
-    // Resultado: CADA DEPLOY sacaba a todos los usuarios. Pésima UX.
+    // AUTO-CLEAN SELECTIVO (v8.09+).
+    // Detecta versión nueva y purga Service Worker + Cache API automaticamente
+    // para que el maestro NUNCA tenga que hacer Ctrl+Shift+R. Sin esto, el SW
+    // viejo podia seguir sirviendo HTML/JS antiguo durante dias.
     //
-    // Ahora SOLO guardamos la versión para diagnóstico. Los assets se
-    // refrescan vía `?v=X.Y` en cada <script src> (cache busting natural por
-    // URL), no necesitamos purgar nada. El Service Worker ya es persistente
-    // (sw.js v7.48+ mantiene cache entre versiones).
+    // QUÉ PURGAMOS:
+    //   - Service Workers (todos los registros) — se vuelven a registrar
+    //     automaticamente al cargar la version nueva del HTML.
+    //   - Cache API (caches.keys() + caches.delete) — todos los assets
+    //     viejos que tenia cacheados el SW. La proxima carga los descarga
+    //     frescos desde el servidor.
+    //
+    // QUÉ NO TOCAMOS (preservamos sesion del usuario):
+    //   - IndexedDB completo — ahi vive firebaseLocalStorageDb (sesion
+    //     Firebase Auth) + Firestore offline persistence. Borrarlo saca
+    //     al maestro y le borra capturas pendientes.
+    //   - localStorage — ahi vive `firebase:authUser:*` (sesion alternativa),
+    //     `epo67_lastEmail` (recordar correo), `epo67_lastRoute`, etc.
+    //     Solo ACTUALIZAMOS `epo67_app_version`.
+    //   - sessionStorage — datos volatiles de la sesion en curso.
     (function () {
       try {
         const APP_VERSION = document.querySelector('meta[name="app-version"]').content;
         const lastVersion = localStorage.getItem('epo67_app_version');
-        if (lastVersion !== APP_VERSION) {
-          console.log('[version-track]', lastVersion || '(primera vez)', '→', APP_VERSION);
+
+        if (lastVersion && lastVersion !== APP_VERSION) {
+          console.log('[auto-clean] versión nueva:', lastVersion, '→', APP_VERSION);
+          // 1) Marcar la nueva ANTES de la purga para no quedar en loop.
+          localStorage.setItem('epo67_app_version', APP_VERSION);
+          // 2) Mostrar splash con mensaje de actualización (HTML directo en body
+          //    porque el cuerpo aún no se parsea; al menos quedará en el DOM).
+          document.documentElement.innerHTML = '<head><meta charset="UTF-8"><title>Actualizando…</title>' +
+            '<style>body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:linear-gradient(135deg,#1a1f2e 0%,#4c1d95 100%);color:#fff;font-family:system-ui,sans-serif;}' +
+            '.box{background:rgba(255,255,255,.08);padding:32px 40px;border-radius:12px;text-align:center;max-width:380px;}' +
+            '.spinner{width:48px;height:48px;border:4px solid rgba(255,255,255,.2);border-top:4px solid #fff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 14px;}' +
+            '@keyframes spin{to{transform:rotate(360deg)}}' +
+            '</style></head><body><div class="box"><div class="spinner"></div>' +
+            '<h2 style="margin:0 0 8px;font-size:18px;">Actualizando sistema…</h2>' +
+            '<p style="margin:0;font-size:13px;opacity:.85;line-height:1.5;">Estamos descargando la versión más reciente. Tu sesión se mantiene activa.</p>' +
+            '</div></body>';
+
+          // 3) Purga selectiva. En paralelo. Sin await — si falla algun paso,
+          //    el reload final igual se hace; el peor caso es que se vea la
+          //    versión vieja una vez más y la próxima carga lo arregle.
+          var purgePromises = [];
+          if (navigator.serviceWorker) {
+            purgePromises.push(
+              navigator.serviceWorker.getRegistrations()
+                .then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); })
+                .catch(function () {})
+            );
+          }
+          if (window.caches) {
+            purgePromises.push(
+              caches.keys()
+                .then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })
+                .catch(function () {})
+            );
+          }
+          // 4) Reload con timestamp para esquivar HTTP cache de cualquier proxy.
+          Promise.all(purgePromises).then(function () {
+            console.log('[auto-clean] purga completada, recargando…');
+            location.replace(location.pathname + '?_av=' + Date.now());
+          });
+          // 5) DETENER ejecucion del bootstrap viejo — no cargar mas codigo.
+          // Tiramos error para que no se sigan ejecutando los siguientes <script>.
+          throw new Error('__AUTO_CLEAN_RELOAD__');
+        }
+
+        // Primera vez o misma versión: solo registrar.
+        if (!lastVersion) {
+          console.log('[version-track] (primera vez) →', APP_VERSION);
           localStorage.setItem('epo67_app_version', APP_VERSION);
         }
-      } catch (_) { /* localStorage bloqueado: ignorar */ }
+      } catch (e) {
+        if (e && e.message === '__AUTO_CLEAN_RELOAD__') {
+          // Esperado: interrumpimos a proposito el bootstrap. NO re-lanzar.
+          return;
+        }
+        // localStorage bloqueado u otro error: silencioso, app sigue cargando.
+        console.warn('[version-track] error:', e && e.message);
+      }
     })();
   </script>
   <link rel="stylesheet" href="/css/styles.css?v=6.67">

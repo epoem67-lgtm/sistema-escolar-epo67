@@ -17,12 +17,17 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v7.0-academia-sidebar-fix";
-const STATIC_CACHE = `epo67-static-${SW_VERSION}`;
+const SW_VERSION = "v8.59-auto-clean-selectivo-extras-materia";
+// PERFORMANCE: el cache YA NO depende de SW_VERSION. Antes cada bump de versión
+// borraba los 46 JS (~1.9 MB) y forzaba a redescargarlos. Ahora el cache es
+// estable y persistente — los archivos viejos se reemplazan naturalmente cuando
+// cambia su `?v=` en index.html (Cache API trata cada URL como entrada distinta).
+// Resultado: deploys subsecuentes son casi instantáneos para el usuario.
+const STATIC_CACHE = 'epo67-static-v1';
 // Bumpear este flag dispara una limpieza del IndexedDB de Firestore en todos
 // los clientes al activar el nuevo SW. Útil cuando hay datos viejos cacheados
 // en navegadores de usuarios que no responden a refresh normal.
-const PURGE_FIRESTORE_CACHE_FLAG = '2026-05-22-fix-francisco';
+const PURGE_FIRESTORE_CACHE_FLAG = '2026-05-23-laurita-cards-v711';
 
 // Recursos a precachear durante la instalacion (la app shell minima)
 // Si algun fetch falla, no se rompe la instalacion (continueOnError).
@@ -55,6 +60,10 @@ self.addEventListener('install', (event) => {
 });
 
 // ─── ACTIVATE ─────────────────────────────────────────────────
+// Solo borra caches MUY viejos (los que ya no usamos). Las entries del cache
+// activo NO se tocan — los assets viejos quedan "huérfanos" automáticamente
+// cuando el index.html nuevo pide URLs con `?v=` distinto. Esos huérfanos los
+// limpiamos pasivamente cuando crecen demasiado (lógica futura si hace falta).
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
@@ -63,6 +72,18 @@ self.addEventListener('activate', (event) => {
           .map((k) => caches.delete(k))
     );
     await self.clients.claim();
+
+    // v8.44: REFRESH FORZADO a todos los clientes (incluido tabs en background).
+    // Cuando un SW nuevo se activa, manda un mensaje a TODAS las pestañas
+    // controladas para que recarguen — útil cuando los usuarios no saben
+    // hacer Ctrl+Shift+R manualmente. El listener en index.html recibe este
+    // mensaje y ejecuta window.location.reload().
+    const allClients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' });
+    for (const client of allClients) {
+      try {
+        client.postMessage({ type: 'SW_ACTIVATED_RELOAD', version: SW_VERSION });
+      } catch (_) { /* cliente cerrado, ignorar */ }
+    }
   })());
 });
 
