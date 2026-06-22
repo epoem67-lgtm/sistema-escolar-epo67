@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Entrar al Sistema Escolar EPO 67</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;}
+    body{
+      margin:0;font-family:system-ui,-apple-system,'Inter',sans-serif;
+      background:linear-gradient(135deg,#1e3a8a 0%,#4c1d95 100%);
+      min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;
+      color:#1f2937;
+    }
+    .card{
+      background:#fff;border-radius:14px;padding:32px 28px;max-width:420px;width:100%;
+      box-shadow:0 20px 50px rgba(0,0,0,.25);
+    }
+    h1{margin:0 0 4px;font-size:22px;color:#1e3a8a;text-align:center;}
+    .subtitle{text-align:center;color:#64748b;font-size:13px;margin:0 0 22px;}
+    .badge{
+      display:inline-block;background:#fef3c7;color:#92400e;padding:3px 10px;
+      border-radius:99px;font-size:11px;font-weight:700;margin-bottom:14px;
+    }
+    label{display:block;font-size:13px;font-weight:600;margin:14px 0 5px;color:#374151;}
+    input{
+      width:100%;padding:12px 14px;font-size:15px;border:1.5px solid #cbd5e1;
+      border-radius:8px;background:#f8fafc;font-family:inherit;
+    }
+    input:focus{outline:none;border-color:#3b82f6;background:#fff;}
+    .pass-row{position:relative;}
+    .pass-row .ver{
+      position:absolute;right:10px;top:50%;transform:translateY(-50%);
+      background:none;border:none;cursor:pointer;color:#64748b;
+      font-size:12px;font-weight:600;padding:4px 8px;
+    }
+    .btn{
+      width:100%;padding:13px;margin-top:18px;font-size:15px;font-weight:700;
+      border:none;border-radius:8px;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;gap:8px;
+    }
+    .btn-primary{background:#1e40af;color:#fff;}
+    .btn-primary:hover{background:#1e3a8a;}
+    .btn-primary:disabled{opacity:.6;cursor:wait;}
+    .btn-wa{background:#25D366;color:#fff;margin-top:10px;}
+    .btn-wa:hover{background:#1eb050;}
+    .msg{
+      margin-top:16px;padding:12px 14px;border-radius:8px;font-size:13px;line-height:1.5;
+      display:none;
+    }
+    .msg.ok{background:#f0fdf4;color:#15803d;border:1px solid #86efac;display:block;}
+    .msg.err{background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;display:block;}
+    .msg.warn{background:#fef3c7;color:#b45309;border:1px solid #fcd34d;display:block;}
+    .msg.info{background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;display:block;}
+    .help{
+      margin-top:18px;padding-top:14px;border-top:1px solid #e5e7eb;
+      font-size:12px;color:#64748b;line-height:1.55;
+    }
+    .ver-pass-checkbox{
+      display:flex;align-items:center;gap:6px;font-size:12px;color:#475569;
+      margin-top:6px;cursor:pointer;
+    }
+    .char-warn{
+      display:none;margin-top:6px;font-size:11px;color:#b91c1c;font-weight:600;
+    }
+    .links{text-align:center;margin-top:14px;font-size:13px;}
+    .links a{color:#1e40af;text-decoration:none;font-weight:600;}
+    .links a:hover{text-decoration:underline;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="text-align:center;">
+      <span class="badge">🆘 ACCESO DE EMERGENCIA</span>
+    </div>
+    <h1>Entrar al Sistema</h1>
+    <p class="subtitle">Pagina alterna sin cache — si la pagina principal no te deja entrar, usa esta.</p>
+
+    <form id="form" autocomplete="off">
+      <label for="email">Correo</label>
+      <input id="email" type="email" placeholder="tu@correo.com" autocomplete="username" required spellcheck="false" autocapitalize="off">
+
+      <label for="pass">Contraseña</label>
+      <div class="pass-row">
+        <input id="pass" type="password" placeholder="Tu contraseña" autocomplete="current-password" required spellcheck="false">
+        <button type="button" class="ver" id="togglePass">VER</button>
+      </div>
+      <div class="char-warn" id="charWarn"></div>
+
+      <button type="submit" class="btn btn-primary" id="btnLogin">
+        🔓 ENTRAR
+      </button>
+    </form>
+
+    <a id="waBtn" href="https://wa.me/525510782357" target="_blank" style="text-decoration:none;">
+      <button type="button" class="btn btn-wa">
+        💬 Pedir ayuda a Olivia (WhatsApp)
+      </button>
+    </a>
+
+    <div id="msg" class="msg"></div>
+
+    <div class="links">
+      <a href="/">← Volver a la pagina principal</a>
+    </div>
+
+    <div class="help">
+      <strong>¿No puedes entrar?</strong> Esta pagina:
+      <br>· NO usa cache (siempre la version mas reciente)
+      <br>· NO tiene autocompletar (te asegura que escribas tu password real)
+      <br>· Te muestra el error EXACTO si Firebase rechaza tu acceso
+      <br>· Tiene un boton de "VER" para confirmar que escribiste bien la contraseña
+    </div>
+  </div>
+
+  <!-- Firebase compat -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script>
+    // ═══════════════════════════════════════════════════════════
+    // PASO 0: PURGA AGRESIVA — esta pagina debe ser inmune al
+    // cache y al Service Worker viejo. Si hay un SW activo, lo
+    // mata. Si hay caches, los borra. Asi garantizamos que esta
+    // pagina es la "salida de emergencia" que SIEMPRE funciona.
+    // ═══════════════════════════════════════════════════════════
+    (async () => {
+      try {
+        if (navigator.serviceWorker) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const r of regs) await r.unregister();
+        }
+        if (window.caches) {
+          const ks = await caches.keys();
+          for (const k of ks) await caches.delete(k);
+        }
+      } catch (e) { console.warn('purga:', e); }
+    })();
+
+    // Firebase config (mismo que la app principal)
+    firebase.initializeApp({
+      apiKey: "AIzaSyDX4za0avN20Lplmf5LAR7pdfZlvNtvcJc",
+      authDomain: "epo67-sistema.firebaseapp.com",
+      projectId: "epo67-sistema",
+      storageBucket: "epo67-sistema.firebasestorage.app",
+      messagingSenderId: "425082037377",
+      appId: "1:425082037377:web:4bd72a502c874acfa25980"
+    });
+    const auth = firebase.auth();
+
+    const $ = id => document.getElementById(id);
+    const msg = $('msg');
+
+    function showMsg(type, html) {
+      msg.className = 'msg ' + type;
+      msg.innerHTML = html;
+    }
+
+    // Toggle "VER" password
+    $('togglePass').addEventListener('click', () => {
+      const p = $('pass');
+      if (p.type === 'password') { p.type = 'text'; $('togglePass').textContent = 'OCULTAR'; }
+      else { p.type = 'password'; $('togglePass').textContent = 'VER'; }
+    });
+
+    // Actualizar link WhatsApp dinamicamente con correo
+    function updateWA() {
+      const email = $('email').value.trim();
+      const m = email
+        ? `Hola Olivia, soy ${email} y necesito ayuda para entrar al sistema escolar. Mi contrasena no funciona.`
+        : `Hola Olivia, necesito ayuda para entrar al sistema escolar. Mi contrasena no funciona.`;
+      $('waBtn').href = `https://wa.me/525510782357?text=${encodeURIComponent(m)}`;
+    }
+    $('email').addEventListener('input', updateWA);
+    updateWA();
+
+    // Detectar caracteres invisibles / espacios en password
+    function checkPassChars(raw) {
+      const warn = $('charWarn');
+      const problems = [];
+      if (raw !== raw.trim()) problems.push('tiene espacios al principio o al final');
+      if (/[​-‍﻿]/.test(raw)) problems.push('tiene caracteres invisibles');
+      if (/[ ]/.test(raw)) problems.push('tiene espacios "duros" (non-breaking)');
+      if (problems.length) {
+        warn.style.display = 'block';
+        warn.innerHTML = '⚠ Tu contrasena ' + problems.join(' y ') + '. Bórrala y escríbela a mano.';
+        return true;
+      }
+      warn.style.display = 'none';
+      return false;
+    }
+    $('pass').addEventListener('input', e => checkPassChars(e.target.value));
+
+    // FORM SUBMIT
+    $('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const rawEmail = $('email').value;
+      const rawPass = $('pass').value;
+
+      // Detectar y mostrar caracteres raros
+      const hasIssues = checkPassChars(rawPass);
+
+      // Limpiar
+      const email = rawEmail.trim().toLowerCase();
+      const password = rawPass.trim();
+
+      if (!email || !password) {
+        showMsg('err', '⚠ Escribe correo y contrasena.');
+        return;
+      }
+
+      const btn = $('btnLogin');
+      btn.disabled = true;
+      btn.textContent = '⏳ Entrando...';
+      showMsg('info', '⏳ Verificando con Firebase...');
+
+      try {
+        const cred = await auth.signInWithEmailAndPassword(email, password);
+        showMsg('ok',
+          `✅ <strong>Acceso correcto.</strong><br>` +
+          `Hola ${cred.user.displayName || cred.user.email}.<br>` +
+          `Redirigiendo al sistema en 2 segundos...`
+        );
+        setTimeout(() => { location.href = '/'; }, 2000);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '🔓 ENTRAR';
+        let extra = '';
+        if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+          extra = `<br><br>📌 <strong>Verifica:</strong>
+            <br>· El correo este bien escrito (sin mayusculas, sin espacios)
+            <br>· La contrasena tenga 6+ caracteres
+            <br>· No hayas confundido O (letra) con 0 (cero), o l con 1
+            <br><br>Si nada funciona: <strong>usa el boton verde de WhatsApp</strong>.`;
+        } else if (err.code === 'auth/too-many-requests') {
+          extra = `<br><br>⏱ Espera 5-10 minutos antes de volver a intentar.<br>O escribe a Olivia por WhatsApp.`;
+        } else if (err.code === 'auth/user-disabled') {
+          extra = `<br><br>🚫 Tu cuenta esta deshabilitada. Contacta a Olivia.`;
+        }
+        showMsg('err',
+          `❌ <strong>Error de Firebase:</strong><br>` +
+          `Codigo: <code style="background:#fee;padding:2px 5px;border-radius:3px;">${err.code || 'desconocido'}</code><br>` +
+          `Mensaje: ${err.message || 'sin detalle'}` + extra
+        );
+      }
+    });
+
+    // Si llega session preservada (ya esta logueado), redirigir directo a la app.
+    auth.onAuthStateChanged((u) => {
+      if (u) {
+        showMsg('info', `Ya tienes sesion activa como <strong>${u.email}</strong>. Redirigiendo a la app...`);
+        setTimeout(() => { location.href = '/'; }, 1500);
+      }
+    });
+  </script>
+</body>
+</html>

@@ -899,12 +899,23 @@ const Auth = {
    */
   async loginWithEmail(event) {
     event.preventDefault();
-    const typedEmail = document.getElementById('loginEmail').value.trim().toLowerCase();
-    // FIX junio 2026: trim() tambien al password. Bug recurrente:
-    // copy-paste desde WhatsApp/correo agrega espacios invisibles al final.
-    // Firebase Auth los toma como caracteres y rechaza con "auth/invalid-credential",
-    // generando reportes de "no me deja entrar" cuando la pass es correcta.
-    const password = document.getElementById('loginPassword').value.trim();
+    const rawEmail = document.getElementById('loginEmail').value;
+    const rawPass = document.getElementById('loginPassword').value;
+
+    // FIX junio 2026: trim() agresivo al email Y password. Bug recurrente:
+    // copy-paste desde WhatsApp/correo agrega espacios y caracteres invisibles
+    // (zero-width chars, no-break space). Firebase Auth los toma como caracteres
+    // y rechaza con "auth/invalid-credential", generando reportes de "no me deja"
+    // entrar cuando la pass es correcta.
+    const typedEmail = rawEmail.trim().toLowerCase();
+    const password = rawPass.trim()
+      .replace(/[​-‍﻿]/g, '') // zero-width chars
+      .replace(/ /g, ''); // non-breaking space
+
+    // Console.log diagnostico — visible en F12 cuando hay un reporte de "no entro"
+    if (rawPass !== password) {
+      console.warn('[login] password tenia chars sospechosos. raw len:', rawPass.length, 'limpio:', password.length);
+    }
 
     if (!typedEmail || !password) {
       this.showLoginError('Ingresa correo y contraseña');
@@ -951,15 +962,29 @@ const Auth = {
       // El onAuthStateChanged se encarga del resto
     } catch (error) {
       console.error('❌ Error en autenticación:', error);
+      console.error('   email enviado:', email);
+      console.error('   pass length:', password.length);
+      console.error('   error.code:', error.code);
+      console.error('   error.message:', error.message);
       let msg = 'Error de autenticación';
-      if (error.code === 'auth/user-not-found') msg = 'No existe una cuenta con este correo';
-      else if (error.code === 'auth/wrong-password') msg = 'Contraseña incorrecta';
-      else if (error.code === 'auth/email-already-in-use') msg = 'Este correo ya está registrado';
-      else if (error.code === 'auth/weak-password') msg = 'La contraseña debe tener al menos 6 caracteres';
-      else if (error.code === 'auth/invalid-email') msg = 'Correo electrónico inválido';
-      else if (error.code === 'auth/invalid-credential') msg = 'Credenciales inválidas. Verifica tu correo y contraseña';
-      else msg = error.message;
-      this.showLoginError(msg);
+      let extraHelp = '';
+      if (error.code === 'auth/user-not-found') {
+        msg = 'No existe una cuenta con este correo';
+      } else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        msg = 'Credenciales inválidas. Verifica tu correo y contraseña.';
+        extraHelp = '<br><a href="/entrar.html" style="color:#1e40af;font-weight:600;">⚡ Probar página alterna (sin caché)</a>';
+      } else if (error.code === 'auth/email-already-in-use') {
+        msg = 'Este correo ya está registrado';
+      } else if (error.code === 'auth/weak-password') {
+        msg = 'La contraseña debe tener al menos 6 caracteres';
+      } else if (error.code === 'auth/invalid-email') {
+        msg = 'Correo electrónico inválido';
+      } else if (error.code === 'auth/too-many-requests') {
+        msg = 'Demasiados intentos. Espera 5 minutos o usa /entrar.html';
+      } else {
+        msg = error.message;
+      }
+      this.showLoginError(msg + extraHelp);
     }
   },
 
@@ -1613,7 +1638,10 @@ const Auth = {
    */
   showLoginError(message) {
     const errorEl = document.getElementById('loginError');
-    errorEl.textContent = message;
+    // innerHTML para permitir links de ayuda (ej. "/entrar.html").
+    // Los mensajes vienen siempre de codigo del sistema, no de input usuario,
+    // por lo que XSS no aplica aqui.
+    errorEl.innerHTML = message;
     errorEl.style.display = 'block';
     console.error('🚫 Error de login:', message);
   },

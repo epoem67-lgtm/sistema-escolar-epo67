@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v8.60-reglas-sep-cal-final-unificada";
+const SW_VERSION = "v8.62-fix-login-y-pagina-entrar-emergencia";
 // PERFORMANCE: el cache YA NO depende de SW_VERSION. Antes cada bump de versión
 // borraba los 46 JS (~1.9 MB) y forzaba a redescargarlos. Ahora el cache es
 // estable y persistente — los archivos viejos se reemplazan naturalmente cuando
@@ -96,6 +96,14 @@ self.addEventListener('fetch', (event) => {
 
   // Solo manejamos same-origin
   if (url.origin !== self.location.origin) return;
+
+  // ENTRAR.HTML — pagina de acceso de emergencia.
+  // NO la tocamos: que el navegador la pida fresca cada vez, sin SW.
+  // Asi cuando un maestro no puede entrar por cache viejo, /entrar siempre
+  // es la salida que SIEMPRE funciona porque NO depende del SW.
+  if (url.pathname === '/entrar' || url.pathname === '/entrar.html') {
+    return; // dejar pasar al navegador
+  }
 
   // Network-first para navegacion (index.html) -> siempre la ultima version
   if (req.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
