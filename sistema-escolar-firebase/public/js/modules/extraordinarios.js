@@ -576,45 +576,40 @@ const ExtraordinariosModule = (() => {
       </div>`;
     }
 
-    // Cuántos grupos hay para ESTA misma materia (subjectId). Si hay >1,
-    // tiene sentido ofrecer el modo "consolidado por materia" que junta
-    // todos los grupos en una sola hoja con columna GRUPO.
-    const otrosGruposMismaMateria = (_data.tarjetas || [])
-      .filter(x => x.subjectId === t.subjectId && x.key !== t.key);
-    const hayMultiplesGrupos = otrosGruposMismaMateria.length > 0;
+    // Conteo de grupos con la MISMA materia (incluye el actual). Direccion
+    // exige que la impresion sea SIEMPRE por MATERIA — la hoja unica con
+    // columna GRUPO. Ya NO se permite imprimir un solo grupo aislado
+    // porque eso multiplica hojas innecesarias y el examen oficial es por
+    // materia, no por grupo. Si solo hay 1 grupo con esta materia, el
+    // mismo print sale con 1 grupo (la columna GRUPO igual ayuda al
+    // archivo y traza institucional).
+    const totalGruposMateria = (_data.tarjetas || [])
+      .filter(x => x.subjectId === t.subjectId).length;
 
-    // Botones de impresión: 1 set por oportunidad
+    const sufijoGrupos = totalGruposMateria > 1
+      ? ` (${totalGruposMateria} grupos)`
+      : '';
+
+    // Un único set: SIEMPRE imprime por materia (consolidado).
     const printBtns = `<div style="display:flex;flex-direction:column;gap:6px;">
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button data-action="print-extra" data-card-key="${t.key}" data-op="1"
-          style="padding:8px 12px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-          🖨️ 1ª Oportunidad
-        </button>
-        <button data-action="print-extra" data-card-key="${t.key}" data-op="2"
-          style="padding:8px 12px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-          🖨️ 2ª Oportunidad
-        </button>
-        <button data-action="print-extra" data-card-key="${t.key}" data-op="3"
-          style="padding:8px 12px;background:#b91c1c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-          🖨️ 3ª Oportunidad
-        </button>
+      <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:2px;">
+        🖨️ Imprimir lista oficial${totalGruposMateria > 1 ? ` (juntará ${totalGruposMateria} grupos en una hoja)` : ''}:
       </div>
-      ${hayMultiplesGrupos ? `
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:#eff6ff;padding:6px 8px;border-radius:8px;border-left:3px solid #1d4ed8;">
-        <span style="font-size:11px;font-weight:700;color:#1e40af;">📑 Consolidado por MATERIA (todos los grupos):</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
         <button data-action="print-extra-materia" data-subject-id="${escapeHtml(t.subjectId)}" data-op="1"
-          style="padding:6px 10px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;" title="Imprime 1ª oportunidad de TODOS los grupos donde se imparte esta materia, en una sola hoja con columna GRUPO">
-          1ª (${otrosGruposMismaMateria.length + 1} grupos)
+          title="${totalGruposMateria > 1 ? 'Imprime 1ª oportunidad de TODOS los grupos donde se imparte esta materia en una sola hoja con columna GRUPO' : 'Imprime 1ª oportunidad de esta materia'}"
+          style="padding:8px 12px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+          1ª Oportunidad${sufijoGrupos}
         </button>
         <button data-action="print-extra-materia" data-subject-id="${escapeHtml(t.subjectId)}" data-op="2"
-          style="padding:6px 10px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
-          2ª (${otrosGruposMismaMateria.length + 1} grupos)
+          style="padding:8px 12px;background:#ea580c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+          2ª Oportunidad${sufijoGrupos}
         </button>
         <button data-action="print-extra-materia" data-subject-id="${escapeHtml(t.subjectId)}" data-op="3"
-          style="padding:6px 10px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
-          3ª (${otrosGruposMismaMateria.length + 1} grupos)
+          style="padding:8px 12px;background:#b91c1c;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+          3ª Oportunidad${sufijoGrupos}
         </button>
-      </div>` : ''}
+      </div>
     </div>`;
 
     const guardarTodoBtn = canCapture ? `<button data-action="save-all-extra" data-card-key="${t.key}"
