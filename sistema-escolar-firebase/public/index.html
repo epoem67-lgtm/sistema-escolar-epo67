@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Version pin: incrementar en cada deploy. El bootstrap de abajo compara
        contra localStorage; si difiere, fuerza purga total + reload. -->
-  <meta name="app-version" content="v8.17-quitar-banner-whatsapp-login">
+  <meta name="app-version" content="v8.18-reset-autonomo-pregunta-seguridad">
   <title>Sistema Escolar</title>
 
   <!-- ════════════════════════════════════════════════════════════════
@@ -112,7 +112,7 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round&display=swap" rel="stylesheet">
 
   <!-- Preload de assets criticos (anticipa descarga de los core scripts del body) -->
-  <link rel="preload" href="/js/firebase-config.js?v=6.96" as="script">
+  <link rel="preload" href="/js/firebase-config.js?v=6.97" as="script">
   <link rel="preload" href="/js/constants.js?v=8.12" as="script">
   <link rel="preload" href="/js/data-store.js?v=8.18" as="script">
   <link rel="preload" href="/js/app.js?v=7.55" as="script">
@@ -123,6 +123,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-functions-compat.js"></script>
 
   <!-- XLSX, JSZip y Chart.js se cargan bajo demanda via Lib.* (ver js/lib-loader.js) -->
 </head>
@@ -514,10 +515,10 @@
 
   <!-- ═══════ SCRIPTS ═══════ -->
   <!-- Core -->
-  <script src="/js/firebase-config.js?v=6.96"></script>
+  <script src="/js/firebase-config.js?v=6.97"></script>
   <script src="/js/constants.js?v=8.12"></script>
   <script src="/js/data-store.js?v=8.18"></script>
-  <script src="/js/app.js?v=8.64"></script>
+  <script src="/js/app.js?v=8.65"></script>
   <script src="/js/components.js?v=6.29"></script>
   <script src="/js/lib-loader.js?v=6.29"></script>
   <script src="/js/logos.js?v=6.29"></script>

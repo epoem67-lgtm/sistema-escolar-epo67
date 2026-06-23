@@ -19,6 +19,9 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
 const storage = firebase.storage();
+// Cloud Functions (region us-central1, donde estan desplegadas).
+// Usadas para reset autonomo de contrasenas (sin email, sin Olivia).
+const functions = firebase.app().functions('us-central1');
 
 // ═══════════════════════════════════════════════════════════════
 // PERSISTENCIA OFFLINE

@@ -1231,6 +1231,33 @@ const Auth = {
             <input type="tel" id="flPhone" placeholder="5512345678" required pattern="[0-9]{10}" maxlength="10" inputmode="numeric" value="${Utils.sanitize(userData.phone || '')}">
             <small style="color:#666;font-size:11px;">10 dígitos sin lada (ej: 5512345678). Lo usamos para mandarte avisos importantes y atender tus dudas rápido.</small>
           </div>
+          <div style="margin:18px 0 8px;padding-top:14px;border-top:1px solid #e5e7eb;">
+            <div style="font-weight:700;font-size:13px;color:#1e40af;margin-bottom:6px;">
+              🔐 Pregunta de seguridad (para recuperar tu contraseña sin email)
+            </div>
+            <div style="font-size:11.5px;color:#64748b;line-height:1.5;margin-bottom:8px;">
+              Si olvidas tu contraseña, podrás recuperarla TÚ MISMO respondiendo esta pregunta.
+              Escoge algo que SOLO tú sepas (no algo público).
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="flSecQuestion"><strong>Tu pregunta de seguridad</strong> <span style="color:#dc2626;">*</span></label>
+            <select id="flSecQuestion" required style="padding:9px;width:100%;font-size:13.5px;">
+              <option value="">— Escoge una —</option>
+              <option>¿Nombre de tu primer mascota?</option>
+              <option>¿Ciudad donde naciste?</option>
+              <option>¿Apellido de soltera de tu madre?</option>
+              <option>¿Nombre de tu mejor amig@ de la infancia?</option>
+              <option>¿Nombre de tu escuela primaria?</option>
+              <option>¿Modelo de tu primer coche o moto?</option>
+              <option>¿Calle donde creciste?</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="flSecAnswer"><strong>Tu respuesta</strong> <span style="color:#dc2626;">*</span></label>
+            <input type="text" id="flSecAnswer" placeholder="Escribe tu respuesta" required minlength="2" autocomplete="off">
+            <small style="color:#666;font-size:11px;">No importa mayúsculas/minúsculas ni espacios. La guardamos cifrada (ni Olivia puede verla).</small>
+          </div>
           <button type="submit" class="btn btn-primary btn-block" id="btnFirstLogin">
             <span class="material-icons-round" style="font-size:20px;vertical-align:middle;margin-right:6px;">check</span>
             Guardar y entrar
@@ -1267,6 +1294,8 @@ const Auth = {
     const confirmPwd = document.getElementById('flConfirmPwd').value;
     const recoveryEmail = document.getElementById('flRecoveryEmail').value.trim().toLowerCase();
     const phone = (document.getElementById('flPhone')?.value || '').replace(/\D/g, '');
+    const secQuestion = (document.getElementById('flSecQuestion')?.value || '').trim();
+    const secAnswer = (document.getElementById('flSecAnswer')?.value || '').trim();
 
     // Validaciones
     if (!tempPwd) { this._flShowError('Ingresa tu contraseña temporal actual'); return; }
@@ -1277,6 +1306,8 @@ const Auth = {
     if (!emailRegex.test(recoveryEmail)) { this._flShowError('Ingresa un correo de recuperación válido (ej: tu@gmail.com)'); return; }
     if (recoveryEmail.endsWith('@epo67.local')) { this._flShowError('El correo de recuperación debe ser real (gmail, hotmail, etc), no @epo67.local'); return; }
     if (phone.length !== 10) { this._flShowError('El teléfono debe tener exactamente 10 dígitos (ej: 5512345678)'); return; }
+    if (!secQuestion) { this._flShowError('Escoge una pregunta de seguridad'); return; }
+    if (secAnswer.length < 2) { this._flShowError('Tu respuesta de seguridad debe tener al menos 2 caracteres'); return; }
 
     const btn = document.getElementById('btnFirstLogin');
     btn.disabled = true;
@@ -1312,6 +1343,18 @@ const Auth = {
         passwordChangedAt: DB.timestamp()
       });
       console.log('[firstLogin] firestore updated');
+
+      // 3.4 Guardar pregunta de seguridad via Cloud Function (hash SHA-256
+      // de la respuesta — ni siquiera Olivia puede ver la respuesta real).
+      // Permite reset autonomo de contrasena sin email ni intervencion manual.
+      try {
+        const setSecQ = functions.httpsCallable('setSecurityQuestion');
+        await setSecQ({ question: secQuestion, answer: secAnswer });
+        console.log('[firstLogin] pregunta de seguridad guardada');
+      } catch (secErr) {
+        // No crítico — el usuario puede configurarla después desde su perfil
+        console.warn('[firstLogin] no se pudo guardar pregunta de seguridad:', secErr.message);
+      }
 
       // 3.5 Guardar alias para login por correo de recuperación.
       // Permite que la próxima vez el maestro inicie sesión con su correo
@@ -1491,163 +1534,264 @@ const Auth = {
    * Asi el usuario NUNCA queda sin opcion. Si el correo no llega en 5 min,
    * usa el boton de WhatsApp.
    */
+  /**
+   * Modal "Olvide mi contrasena" rediseñado completo (junio 2026 v8.18).
+   *
+   * REEMPLAZA el viejo flujo de email (que caia en SPAM y dependia de
+   * Olivia para reset manual) por un flujo 100% AUTONOMO via Cloud
+   * Functions y pregunta de seguridad:
+   *
+   *   PASO 1: usuario escribe correo
+   *   PASO 2: backend (getSecurityQuestion) devuelve la pregunta
+   *           del usuario (sin revelar si el correo existe o no)
+   *   PASO 3: usuario responde su pregunta
+   *   PASO 4: backend (resetPasswordWithSecurityQuestion) valida
+   *           la respuesta y, si es correcta, genera una contrasena
+   *           temporal y la retorna al cliente
+   *   PASO 5: cliente muestra la contrasena temporal en pantalla
+   *           — el usuario la copia/anota y entra
+   *
+   * Si el usuario no tiene pregunta de seguridad configurada (caso
+   * de cuentas viejas), le pedimos que la configure la proxima vez
+   * que entre. Hay un boton de WhatsApp como ultimo recurso para
+   * estos casos legacy.
+   */
   openForgotPassword() {
     if (typeof Modal === 'undefined') {
       alert('Por favor recarga la página y vuelve a intentar.');
       return;
     }
-    const body = `
-      <div style="margin-bottom:16px;font-size:13.5px;color:#1f2937;line-height:1.6;">
-        Escribe el correo con el que entras al sistema. Te enviaremos un enlace para crear una nueva contraseña.
-        <br><br>
-        <span style="background:#fef3c7;padding:6px 10px;border-radius:4px;font-size:12.5px;color:#92400e;display:inline-block;font-weight:600;">
-          ⚠ El correo casi siempre llega a SPAM — revisa esa carpeta
-        </span>
-      </div>
-      <div class="form-group">
-        <label for="fpEmail" style="font-weight:600;">Tu correo</label>
-        <input type="email" id="fpEmail" placeholder="tu@correo.com" autocomplete="email" style="font-size:15px;padding:11px 12px;width:100%;">
-      </div>
-      <div id="fpInfo" style="font-size:13px;color:#666;margin-top:10px;display:none;line-height:1.55;padding:12px;border-radius:8px;"></div>
 
-      <button type="button" data-action="fp-send" class="btn btn-primary"
-        style="width:100%;padding:13px;font-size:15px;font-weight:700;margin-top:16px;display:flex;align-items:center;justify-content:center;gap:8px;">
-        <span class="material-icons-round" style="font-size:20px;">send</span>
-        Enviarme el enlace al correo
-      </button>
+    // Estado del flujo multi-paso
+    const state = { step: 'email', email: '', question: '', uid: '' };
 
-      <details style="margin-top:18px;font-size:12.5px;color:#64748b;border-top:1px solid #e5e7eb;padding-top:12px;">
-        <summary style="cursor:pointer;font-weight:600;">¿Después de varios intentos sigue sin llegarte?</summary>
-        <div style="margin-top:10px;line-height:1.55;padding-left:6px;">
-          1. Asegúrate de buscar en <strong>SPAM / Correo no deseado</strong>.<br>
-          2. El correo viene de <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;font-size:11.5px;">noreply@epo67-sistema.firebaseapp.com</code><br>
-          3. Si después de 10 minutos no llega ni a SPAM, escribe a Olivia:
-          <a id="fpWhatsappBtn" href="#" target="_blank" style="color:#0d6efd;text-decoration:underline;">WhatsApp</a>
-          <span style="color:#94a3b8;">(último recurso)</span>
-        </div>
-      </details>
-    `;
-    const footer = `
-      <button class="btn btn-outline" data-action="modal-cancel">Cerrar</button>
-    `;
-    Modal.open('Recuperar contraseña', body, footer);
+    const renderStep = () => {
+      const body = stepBody();
+      const m = document.querySelector('.modal-body');
+      if (m) m.innerHTML = body;
+      bindHandlers();
+    };
 
-    // Función para actualizar el link de WhatsApp dinámicamente con el correo escrito
-    function updateWhatsappLink() {
-      const typed = document.getElementById('fpEmail').value.trim();
-      const baseMsg = typed
-        ? `Hola Olivia, soy ${typed} y necesito que me generes una contrasena nueva, no puedo entrar al sistema escolar. Gracias.`
-        : `Hola Olivia, necesito que me generes una contrasena nueva, no puedo entrar al sistema escolar. Gracias.`;
-      const url = `https://wa.me/525510782357?text=${encodeURIComponent(baseMsg)}`;
-      const btn = document.getElementById('fpWhatsappBtn');
-      if (btn) btn.href = url;
-    }
-    // Actualizar al cargar y cada vez que escriba
-    updateWhatsappLink();
-    document.getElementById('fpEmail').addEventListener('input', updateWhatsappLink);
+    const stepBody = () => {
+      if (state.step === 'email') {
+        return `
+          <div style="font-size:13.5px;color:#1f2937;line-height:1.55;margin-bottom:16px;">
+            Vamos a recuperar tu contraseña SIN enviar correo. Solo necesitas responder tu pregunta de seguridad.
+          </div>
+          <div class="form-group">
+            <label for="fpEmail" style="font-weight:600;font-size:13px;">Tu correo</label>
+            <input type="email" id="fpEmail" placeholder="tu@correo.com" autocomplete="email"
+              style="font-size:15px;padding:11px 12px;width:100%;" value="${state.email}">
+          </div>
+          <div id="fpInfo" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px;line-height:1.5;"></div>
+          <button type="button" data-action="fp-check-email" class="btn btn-primary"
+            style="width:100%;padding:12px;font-size:14.5px;font-weight:700;margin-top:14px;">
+            Continuar →
+          </button>
+        `;
+      }
 
-    // Click handler para el botón "Enviarme correo"
-    document.querySelector('.modal').addEventListener('click', async (e) => {
-      if (e.target.closest('[data-action="modal-cancel"]')) { Modal.close(); return; }
-      if (!e.target.closest('[data-action="fp-send"]')) return;
+      if (state.step === 'answer') {
+        return `
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;color:#0369a1;">
+            <strong>Cuenta:</strong> ${Utils.sanitize(state.email)}
+          </div>
+          <div class="form-group">
+            <label style="font-weight:600;font-size:13px;color:#1f2937;">Tu pregunta de seguridad:</label>
+            <div style="margin-top:6px;padding:12px 14px;background:#fef3c7;border-left:3px solid #d97706;border-radius:4px;font-size:14.5px;color:#78350f;font-weight:600;">
+              ${Utils.sanitize(state.question)}
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:14px;">
+            <label for="fpAnswer" style="font-weight:600;font-size:13px;">Tu respuesta</label>
+            <input type="text" id="fpAnswer" placeholder="Escribe tu respuesta..." autocomplete="off" autocapitalize="off"
+              style="font-size:15px;padding:11px 12px;width:100%;">
+            <div style="font-size:11.5px;color:#64748b;margin-top:4px;">
+              No importa mayusculas/minusculas ni espacios al inicio/final.
+            </div>
+          </div>
+          <div id="fpInfo" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px;line-height:1.5;"></div>
+          <button type="button" data-action="fp-verify" class="btn btn-primary"
+            style="width:100%;padding:12px;font-size:14.5px;font-weight:700;margin-top:14px;">
+            🔓 Verificar y recuperar
+          </button>
+          <button type="button" data-action="fp-back" class="btn btn-outline"
+            style="width:100%;padding:9px;font-size:13px;margin-top:8px;">
+            ← Cambiar correo
+          </button>
+        `;
+      }
 
-      const typed = document.getElementById('fpEmail').value.trim().toLowerCase();
+      if (state.step === 'success') {
+        return `
+          <div style="text-align:center;padding:6px 0 14px;">
+            <div style="width:62px;height:62px;background:#dcfce7;border-radius:50%;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;">
+              <span class="material-icons-round" style="font-size:36px;color:#15803d;">check_circle</span>
+            </div>
+            <h3 style="margin:0;font-size:18px;color:#15803d;">¡Listo!</h3>
+            <p style="margin:4px 0 0;color:#475569;font-size:13px;">Tu nueva contraseña temporal es:</p>
+          </div>
+          <div style="background:#1e293b;border-radius:8px;padding:18px;text-align:center;margin-bottom:12px;">
+            <div style="font-family:'Courier New',monospace;font-size:32px;color:#fff;font-weight:700;letter-spacing:3px;user-select:all;">
+              ${Utils.sanitize(state.tempPassword)}
+            </div>
+            <button type="button" data-action="fp-copy" class="btn"
+              style="margin-top:10px;background:#475569;color:#fff;font-size:12.5px;padding:6px 14px;border:none;">
+              📋 Copiar contraseña
+            </button>
+          </div>
+          <div style="background:#fef3c7;border-left:3px solid #d97706;border-radius:4px;padding:10px 14px;font-size:12.5px;color:#78350f;line-height:1.55;">
+            <strong>Importante:</strong>
+            <ol style="margin:6px 0 0 18px;padding:0;line-height:1.7;">
+              <li>Anota o copia esta contraseña <strong>YA</strong>.</li>
+              <li>Cierra este aviso y entra con tu correo + esta contraseña.</li>
+              <li>El sistema te pedirá cambiar la contraseña por una propia.</li>
+            </ol>
+          </div>
+          <button type="button" data-action="modal-cancel" class="btn btn-primary"
+            style="width:100%;padding:12px;font-size:14.5px;font-weight:700;margin-top:16px;">
+            Entendido, voy a entrar
+          </button>
+        `;
+      }
+
+      if (state.step === 'no-question') {
+        const waMsg = `Hola Olivia, no puedo entrar al sistema escolar y mi cuenta (${state.email}) no tiene pregunta de seguridad configurada. Necesito que me ayudes con un reset manual. Gracias.`;
+        const waUrl = `https://wa.me/525510782357?text=${encodeURIComponent(waMsg)}`;
+        return `
+          <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:14px;margin-bottom:14px;">
+            <div style="font-weight:700;color:#991b1b;font-size:14px;margin-bottom:6px;">😕 Tu cuenta aún no tiene pregunta de seguridad</div>
+            <div style="font-size:13px;color:#7f1d1d;line-height:1.55;">
+              El sistema te va a pedir configurar una la próxima vez que entres. Mientras tanto, escríbele a Olivia para que te resetee la contraseña a mano:
+            </div>
+          </div>
+          <a href="${waUrl}" target="_blank" style="text-decoration:none;">
+            <button type="button" class="btn" style="width:100%;padding:13px;font-size:14.5px;background:#25D366;color:#fff;border:none;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;">
+              <span class="material-icons-round" style="font-size:20px;">chat</span>
+              Pedir reset manual a Olivia
+            </button>
+          </a>
+          <button type="button" data-action="fp-back" class="btn btn-outline"
+            style="width:100%;padding:9px;font-size:13px;margin-top:8px;">
+            ← Cambiar correo
+          </button>
+        `;
+      }
+    };
+
+    const showMsg = (type, html) => {
       const info = document.getElementById('fpInfo');
+      if (!info) return;
       info.style.display = 'block';
-      info.style.background = '';
-      info.style.border = '';
+      const colors = {
+        ok:   { c:'#15803d', bg:'#f0fdf4', b:'#86efac' },
+        err:  { c:'#dc2626', bg:'#fef2f2', b:'#fecaca' },
+        warn: { c:'#b45309', bg:'#fef3c7', b:'#fcd34d' },
+        info: { c:'#0369a1', bg:'#f0f9ff', b:'#bae6fd' },
+      };
+      const k = colors[type] || colors.info;
+      info.style.color = k.c;
+      info.style.background = k.bg;
+      info.style.border = '1px solid ' + k.b;
+      info.innerHTML = html;
+    };
 
-      if (!typed) {
-        info.innerHTML = '⚠ Escribe tu correo primero.';
-        info.style.color = '#dc2626';
-        info.style.background = '#fef2f2';
-        info.style.border = '1px solid #fecaca';
-        return;
-      }
+    const bindHandlers = () => {
+      const modal = document.querySelector('.modal');
+      if (!modal) return;
+      modal.querySelectorAll('[data-action]').forEach(btn => {
+        const action = btn.getAttribute('data-action');
+        btn.onclick = async (e) => {
+          e.preventDefault();
+          if (action === 'modal-cancel') { Modal.close(); return; }
+          if (action === 'fp-back') { state.step = 'email'; renderStep(); return; }
+          if (action === 'fp-check-email') await checkEmail();
+          if (action === 'fp-verify') await verifyAnswer();
+          if (action === 'fp-copy') {
+            try {
+              await navigator.clipboard.writeText(state.tempPassword);
+              btn.textContent = '✓ Copiada';
+              setTimeout(() => { btn.innerHTML = '📋 Copiar contraseña'; }, 2000);
+            } catch (_) { /* sin clipboard */ }
+          }
+        };
+      });
+    };
 
-      // Caso 1: correo sintético @epo67.local — Firebase no puede enviar email
-      // a un dominio inexistente.
-      if (typed.endsWith('@epo67.local')) {
-        info.innerHTML = `⚠ El correo <strong>${typed}</strong> es interno del sistema y no recibe mensajes.<br>
-          Escribe tu correo personal (gmail, hotmail). Si no tienes uno registrado, abre el desplegable de abajo.`;
-        info.style.color = '#b45309';
-        info.style.background = '#fef3c7';
-        info.style.border = '1px solid #fcd34d';
-        return;
-      }
+    const checkEmail = async () => {
+      const input = document.getElementById('fpEmail');
+      const email = (input?.value || '').trim().toLowerCase();
+      if (!email) { showMsg('err', '⚠ Escribe tu correo.'); return; }
 
-      // Caso 2: correo real con alias (su Auth email subyacente es sintético)
+      state.email = email;
+      const btn = document.querySelector('[data-action="fp-check-email"]');
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Buscando tu cuenta...'; }
+
       try {
-        const aliasDoc = await DB.emailAliases().doc(typed).get();
-        if (aliasDoc.exists) {
-          info.innerHTML = `⚠ Este correo está registrado como respaldo pero no como correo de acceso directo.<br>
-            Intenta con el correo principal con el que entras al sistema.`;
-          info.style.color = '#b45309';
-          info.style.background = '#fef3c7';
-          info.style.border = '1px solid #fcd34d';
+        const fn = functions.httpsCallable('getSecurityQuestion');
+        const result = await fn({ email });
+        const data = result.data || {};
+        if (!data.hasSecurityQuestion) {
+          // Cuenta sin pregunta o cuenta no encontrada (no revelamos cual)
+          state.step = 'no-question';
+          renderStep();
           return;
         }
-      } catch (lookupErr) {
-        console.warn('[forgotPassword] alias lookup falló:', lookupErr.message);
-      }
-
-      // Intentar enviar el correo
-      try {
-        info.innerHTML = '⏳ Enviando correo…';
-        info.style.color = '#0369a1';
-        info.style.background = '#f0f9ff';
-        info.style.border = '1px solid #bae6fd';
-
-        await auth.sendPasswordResetEmail(typed);
-
-        // Mensaje GRANDE Y VISUAL para enfatizar SPAM. CERO mencion de WhatsApp:
-        // autonomia total — el usuario tiene toda la info para entrar solo.
-        info.innerHTML = `
-          <div style="text-align:center;padding:4px 0 10px;">
-            <div style="font-size:28px;">📧</div>
-            <div style="font-size:15px;font-weight:700;color:#15803d;margin-top:4px;">¡Correo enviado!</div>
-            <div style="font-size:12px;color:#475569;margin-top:2px;">a <strong>${typed}</strong></div>
-          </div>
-          <div style="background:#fff7ed;border:1.5px solid #fb923c;border-radius:6px;padding:10px 12px;margin-bottom:8px;">
-            <div style="font-weight:700;color:#9a3412;font-size:13px;margin-bottom:4px;">🚨 PRIMERO busca en SPAM</div>
-            <div style="font-size:12px;color:#7c2d12;line-height:1.5;">
-              El correo casi siempre llega a <strong style="background:#fef3c7;padding:1px 4px;border-radius:2px;">SPAM</strong> o
-              <strong style="background:#fef3c7;padding:1px 4px;border-radius:2px;">Correo no deseado</strong>, no a tu bandeja normal.
-            </div>
-          </div>
-          <div style="font-size:12px;color:#475569;line-height:1.65;padding:4px 2px;">
-            <div><strong>📅 Tiempo:</strong> 1 a 5 minutos.</div>
-            <div><strong>📧 Remitente:</strong> noreply@epo67-sistema.firebaseapp.com</div>
-            <div><strong>📝 Asunto:</strong> "Restablece tu contraseña..."</div>
-            <div style="margin-top:6px;color:#92400e;background:#fef3c7;padding:5px 8px;border-radius:4px;font-size:11.5px;">
-              💡 Marca el correo como <strong>"No es spam"</strong> para que los próximos lleguen directos.
-            </div>
-          </div>
-        `;
-        info.style.color = '#15803d';
-        info.style.background = '#f0fdf4';
-        info.style.border = '1.5px solid #86efac';
+        state.question = data.question;
+        state.step = 'answer';
+        renderStep();
       } catch (err) {
-        console.warn('[forgotPassword]:', err.code, err.message);
-        if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
-          info.innerHTML = `⚠ No encontramos una cuenta con <strong>${typed}</strong>.<br>
-            Verifica que esté bien escrito.`;
-          info.style.color = '#b45309';
-          info.style.background = '#fef3c7';
-          info.style.border = '1px solid #fcd34d';
-        } else if (err.code === 'auth/too-many-requests') {
-          info.innerHTML = `⚠ Demasiados intentos. Espera 10 minutos antes de volver a intentar.`;
-          info.style.color = '#b45309';
-          info.style.background = '#fef3c7';
-          info.style.border = '1px solid #fcd34d';
-        } else {
-          info.innerHTML = `⚠ ${err.message || 'Error al procesar.'}`;
-          info.style.color = '#b45309';
-          info.style.background = '#fef3c7';
-          info.style.border = '1px solid #fcd34d';
-        }
+        console.error('[forgotPassword] getSecurityQuestion:', err);
+        if (btn) { btn.disabled = false; btn.textContent = 'Continuar →'; }
+        showMsg('err', '⚠ Error al consultar. Intenta de nuevo en unos segundos.');
       }
-    });
+    };
+
+    const verifyAnswer = async () => {
+      const input = document.getElementById('fpAnswer');
+      const answer = (input?.value || '').trim();
+      if (!answer) { showMsg('err', '⚠ Escribe tu respuesta.'); return; }
+
+      const btn = document.querySelector('[data-action="fp-verify"]');
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Verificando...'; }
+
+      try {
+        const fn = functions.httpsCallable('resetPasswordWithSecurityQuestion');
+        const result = await fn({ email: state.email, answer });
+        const data = result.data || {};
+        if (data.success && data.password) {
+          state.tempPassword = data.password;
+          state.step = 'success';
+          renderStep();
+        } else {
+          if (btn) { btn.disabled = false; btn.textContent = '🔓 Verificar y recuperar'; }
+          showMsg('err', '⚠ No se pudo procesar. Intenta de nuevo.');
+        }
+      } catch (err) {
+        console.warn('[forgotPassword] verify:', err);
+        if (btn) { btn.disabled = false; btn.textContent = '🔓 Verificar y recuperar'; }
+        const msg = err.message || 'Error al verificar.';
+        showMsg('err', '⚠ ' + msg);
+      }
+    };
+
+    // Abrir modal con cuerpo placeholder, luego renderizar el primer paso.
+    Modal.open('Recuperar contraseña', '<div class="modal-body-fp"></div>',
+      '<button class="btn btn-outline" data-action="modal-cancel">Cerrar</button>');
+
+    // Modal puede no tener .modal-body — buscar o crear.
+    setTimeout(() => {
+      const modal = document.querySelector('.modal');
+      let mb = modal.querySelector('.modal-body');
+      if (!mb) {
+        mb = document.createElement('div');
+        mb.className = 'modal-body';
+        const footer = modal.querySelector('.modal-footer');
+        if (footer) modal.insertBefore(mb, footer);
+        else modal.appendChild(mb);
+      }
+      renderStep();
+    }, 30);
   },
 
   /**

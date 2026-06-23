@@ -661,5 +661,14 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isAdmin() || isSubdirector() || canReadAsDirectivo());
       allow create: if isAuthenticated() && (isAdmin() || isSubdirector() || isDirectivo());
     }
+
+    // ─── PASSWORD RESET LOG ────────────────
+    // Log de intentos de reset autonomo (creado por Cloud Functions admin SDK).
+    // Solo admin/subdirector pueden leerlo para auditoria. Nadie puede
+    // escribirlo desde el cliente (Cloud Functions bypassa rules con admin SDK).
+    match /passwordResetLog/{logId} {
+      allow read: if isAuthenticated() && (isAdmin() || isSubdirector());
+      allow write: if false;
+    }
   }
 }
