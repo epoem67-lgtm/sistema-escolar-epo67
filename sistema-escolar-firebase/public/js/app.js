@@ -780,18 +780,13 @@ const Auth = {
         return;
       }
 
-      // ═══ PREGUNTA DE SEGURIDAD OBLIGATORIA (junio 2026, v8.19) ═══
-      // Usuarios LEGACY (que pasaron primer ingreso antes de existir esta
-      // feature) no tienen pregunta de seguridad. Sin ella no pueden hacer
-      // reset autonomo de contrasena y dependen de Olivia manual.
-      // Modal bloqueante: configura tu pregunta para continuar.
-      // En 1-2 semanas todos los maestros la tienen y nunca mas necesitan
-      // a Olivia para reset.
-      if (!userData.securityQuestion || !userData.securityAnswerHash) {
-        console.log('🔒 Pregunta de seguridad faltante — modal obligatorio');
-        this.showSecurityQuestionSetupScreen(firebaseUser, userData);
-        return;
-      }
+      // ═══ PREGUNTA DE SEGURIDAD — NO BLOQUEANTE (junio 2026, v8.24) ═══
+      // CAMBIO CRITICO: la pantalla obligatoria estaba atrancando a maestros
+      // durante reunion de calificaciones. Ahora el check es NO BLOQUEANTE:
+      // si no tiene pregunta, dejamos entrar y mostramos un toast suave +
+      // banner persistente para que la configure cuando pueda. Quien sabe
+      // recuperar su pass solo es quien ya configuro la pregunta.
+      App._needsSecurityQuestion = !userData.securityQuestion || !userData.securityAnswerHash;
 
       // Mostrar app y aplicar permisos
       this.showApp();
@@ -832,6 +827,16 @@ const Auth = {
         || sessionStorage.getItem('epo67_lastRoute');
       const target = (lastRoute && Router.modules[lastRoute]) ? lastRoute : 'dashboard';
       Router.navigate(target);
+
+      // Aviso suave NO bloqueante para configurar pregunta de seguridad
+      // si no la tiene. Se muestra una sola vez por sesion, sin atorar el flujo.
+      if (App._needsSecurityQuestion) {
+        setTimeout(() => {
+          if (typeof Toast !== 'undefined' && Toast.show) {
+            Toast.show('💡 Configura tu pregunta de seguridad desde tu perfil — te servirá si olvidas tu contraseña', 'info', 8000);
+          }
+        }, 1500);
+      }
 
       // Login exitoso → resetear contador de reintentos
       this._loginRetries = 0;
