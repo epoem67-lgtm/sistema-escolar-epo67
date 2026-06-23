@@ -1297,7 +1297,8 @@ const Auth = {
       return;
     }
 
-    // SHA-256 en el cliente (mismo algoritmo que la Cloud Function).
+    // SHA-256 nativo del navegador (Web Crypto API).
+    // Mismo algoritmo que la Cloud Function — hashes compatibles.
     async function sha256(text) {
       const buf = new TextEncoder().encode(String(text).toLowerCase().trim());
       const hashBuf = await crypto.subtle.digest('SHA-256', buf);
@@ -1305,54 +1306,35 @@ const Auth = {
         .map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
-    let saved = false;
-    let cloudFnError = null;
-
-    // Intento 1: Cloud Function (recomendado, ya valida + hashea server-side)
-    console.log('[securityQuestion] intento 1: Cloud Function setSecurityQuestion');
+    // ESTRATEGIA SIMPLE Y ROBUSTA (junio 2026 v8.23):
+    // Escritura DIRECTA a Firestore desde el cliente. Sin Cloud Function.
+    // Razon: Cloud Functions v2 callable tienen problemas con el SDK compat
+    // (las llamadas se pierden en el camino, ni siquiera llegan al backend).
+    // El cliente YA esta autenticado y firestore.rules permite update con
+    // los 3 campos de pregunta de seguridad en su propio doc.
+    console.log('[securityQuestion] guardando pregunta directo en Firestore');
     try {
-      // Force refresh token para asegurar que la llamada lleve auth fresca
-      try { await auth.currentUser.getIdToken(true); } catch (_) {}
-
-      const setSecQ = functions.httpsCallable('setSecurityQuestion');
-      // Timeout defensivo de 15 segundos
-      const callPromise = setSecQ({ question, answer });
-      const timeoutPromise = new Promise((_, rej) =>
-        setTimeout(() => rej(new Error('Cloud Function timeout 15s')), 15000));
-      await Promise.race([callPromise, timeoutPromise]);
-      console.log('[securityQuestion] Cloud Function OK');
-      saved = true;
-    } catch (err) {
-      cloudFnError = err;
-      console.warn('[securityQuestion] Cloud Function fallo, intentando fallback:', err.message || err);
+      const answerHash = await sha256(answer);
+      console.log('[securityQuestion] hash listo (' + answerHash.length + ' chars), escribiendo...');
+      await DB.users().doc(uid).update({
+        securityQuestion: question,
+        securityAnswerHash: answerHash,
+        securityQuestionSetAt: DB.timestamp()
+      });
+      console.log('[securityQuestion] OK guardado en Firestore');
+    } catch (writeErr) {
+      console.error('[securityQuestion] fallo el write:', writeErr);
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+      errEl.textContent = `⚠ Error al guardar (${writeErr.code || 'no-code'}): ${writeErr.message || writeErr}. Por favor avisa a Olivia o recarga la pagina.`;
+      errEl.style.display = 'block';
+      return;
     }
 
-    // Intento 2: escritura directa al Firestore (fallback robusto)
-    if (!saved) {
-      console.log('[securityQuestion] intento 2: write directo a Firestore');
-      try {
-        const answerHash = await sha256(answer);
-        await DB.users().doc(uid).update({
-          securityQuestion: question,
-          securityAnswerHash: answerHash,
-          securityQuestionSetAt: DB.timestamp()
-        });
-        console.log('[securityQuestion] Firestore write OK');
-        saved = true;
-      } catch (writeErr) {
-        console.error('[securityQuestion] write directo tambien fallo:', writeErr);
-        btn.disabled = false;
-        btn.innerHTML = origHtml;
-        errEl.textContent = `⚠ Error al guardar (${writeErr.code || 'no-code'}): ${writeErr.message || writeErr}. Por favor avisa a Olivia.`;
-        errEl.style.display = 'block';
-        return;
-      }
-    }
-
-    // Si llegamos aqui, se guardo con exito (cloud fn o fallback)
+    // Audit log no critico
     try {
       await DB.audit('config_pregunta_seguridad', 'usuario', uid, {
-        description: `Usuario configuro su pregunta de seguridad (${cloudFnError ? 'fallback directo' : 'cloud fn'})`
+        description: `Usuario configuro su pregunta de seguridad (write directo)`
       });
     } catch (_) { /* no crítico */ }
 
