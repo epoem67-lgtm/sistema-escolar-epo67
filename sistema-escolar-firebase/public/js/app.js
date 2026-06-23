@@ -780,6 +780,19 @@ const Auth = {
         return;
       }
 
+      // ═══ PREGUNTA DE SEGURIDAD OBLIGATORIA (junio 2026, v8.19) ═══
+      // Usuarios LEGACY (que pasaron primer ingreso antes de existir esta
+      // feature) no tienen pregunta de seguridad. Sin ella no pueden hacer
+      // reset autonomo de contrasena y dependen de Olivia manual.
+      // Modal bloqueante: configura tu pregunta para continuar.
+      // En 1-2 semanas todos los maestros la tienen y nunca mas necesitan
+      // a Olivia para reset.
+      if (!userData.securityQuestion || !userData.securityAnswerHash) {
+        console.log('🔒 Pregunta de seguridad faltante — modal obligatorio');
+        this.showSecurityQuestionSetupScreen(firebaseUser, userData);
+        return;
+      }
+
       // Mostrar app y aplicar permisos
       this.showApp();
       App.applyRoleVisibility(App.currentUser.role);
@@ -1164,6 +1177,144 @@ const Auth = {
         }, 600);
       }
     } catch (_) {}
+  },
+
+  /**
+   * Pantalla OBLIGATORIA para configurar pregunta de seguridad (junio 2026, v8.19).
+   * Aparece UNA SOLA VEZ para usuarios LEGACY que pasaron primer ingreso
+   * antes de existir esta feature. Despues de configurarla, nunca mas se
+   * muestra y el usuario puede hacer reset autonomo si olvida su pass.
+   *
+   * Muy similar a showFirstLoginScreen pero solo con 2 campos:
+   * pregunta + respuesta. No requiere reauth.
+   */
+  showSecurityQuestionSetupScreen(firebaseUser, userData) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'none';
+
+    let sq = document.getElementById('securityQuestionScreen');
+    if (!sq) {
+      sq = document.createElement('div');
+      sq.id = 'securityQuestionScreen';
+      sq.className = 'login-screen';
+      sq.style.cssText = 'display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#1e3a8a 0%,#4c1d95 100%);padding:16px;';
+      document.body.appendChild(sq);
+    }
+
+    const displayName = userData.displayName || App.currentUser?.displayName || firebaseUser.email;
+    sq.innerHTML = `
+      <div class="login-card" style="max-width:480px;width:100%;padding:32px 28px;">
+        <div style="text-align:center;margin-bottom:18px;">
+          <div style="width:64px;height:64px;background:#dbeafe;border-radius:50%;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;">
+            <span class="material-icons-round" style="font-size:36px;color:#1e40af;">enhanced_encryption</span>
+          </div>
+          <h2 style="margin:0 0 4px;color:#1e3a8a;font-size:20px;">Un paso de seguridad</h2>
+          <p style="margin:0;color:#475569;font-size:13.5px;">Hola, ${Utils.sanitize(displayName)}</p>
+        </div>
+
+        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 14px;margin-bottom:18px;font-size:13px;color:#0369a1;line-height:1.55;">
+          <strong>¿Por qué esto?</strong> Para que puedas recuperar tu contraseña SOLO, sin tener que avisarle a Olivia,
+          configura una pregunta personal con su respuesta. La próxima vez que olvides tu contraseña,
+          la recuperas en 30 segundos respondiendo esta pregunta.
+        </div>
+
+        <form id="securityQuestionForm" onsubmit="App.submitSecurityQuestion(event)">
+          <div class="form-group">
+            <label for="sqQuestion" style="font-weight:600;"><strong>Tu pregunta de seguridad</strong> <span style="color:#dc2626;">*</span></label>
+            <select id="sqQuestion" required style="padding:10px;width:100%;font-size:14px;">
+              <option value="">— Escoge una —</option>
+              <option>¿Nombre de tu primer mascota?</option>
+              <option>¿Ciudad donde naciste?</option>
+              <option>¿Apellido de soltera de tu madre?</option>
+              <option>¿Nombre de tu mejor amig@ de la infancia?</option>
+              <option>¿Nombre de tu escuela primaria?</option>
+              <option>¿Modelo de tu primer coche o moto?</option>
+              <option>¿Calle donde creciste?</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-top:14px;">
+            <label for="sqAnswer" style="font-weight:600;"><strong>Tu respuesta</strong> <span style="color:#dc2626;">*</span></label>
+            <input type="text" id="sqAnswer" placeholder="Escribe tu respuesta" required minlength="2" autocomplete="off"
+              style="padding:10px;width:100%;font-size:14px;">
+            <small style="color:#64748b;font-size:11.5px;">
+              Escoge algo que SOLO tú sepas. No importa mayúsculas ni espacios. Se guarda cifrada (ni Olivia puede verla).
+            </small>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-block" id="btnSecurityQuestion"
+            style="margin-top:18px;padding:13px;font-size:14.5px;font-weight:700;">
+            <span class="material-icons-round" style="font-size:20px;vertical-align:middle;margin-right:6px;">check_circle</span>
+            Guardar y entrar al sistema
+          </button>
+        </form>
+        <div id="sqError" class="login-error" style="display:none;margin-top:12px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:6px;color:#7f1d1d;font-size:13px;"></div>
+        <div style="margin-top:12px;font-size:11.5px;color:#64748b;text-align:center;">
+          🔒 Configuración obligatoria — solo una vez. No tomará más de 30 segundos.
+        </div>
+      </div>
+    `;
+    sq.style.display = 'flex';
+  },
+
+  /**
+   * Procesa el setup de pregunta de seguridad (usuarios legacy).
+   */
+  async submitSecurityQuestion(event) {
+    event.preventDefault();
+    const errEl = document.getElementById('sqError');
+    if (errEl) errEl.style.display = 'none';
+
+    const question = (document.getElementById('sqQuestion')?.value || '').trim();
+    const answer = (document.getElementById('sqAnswer')?.value || '').trim();
+
+    if (!question) {
+      errEl.textContent = 'Escoge una pregunta';
+      errEl.style.display = 'block';
+      return;
+    }
+    if (answer.length < 2) {
+      errEl.textContent = 'Tu respuesta debe tener al menos 2 caracteres';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    const btn = document.getElementById('btnSecurityQuestion');
+    btn.disabled = true;
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:20px;vertical-align:middle;">autorenew</span> Guardando...';
+
+    try {
+      const setSecQ = functions.httpsCallable('setSecurityQuestion');
+      await setSecQ({ question, answer });
+
+      // Audit
+      try {
+        await DB.audit('config_pregunta_seguridad', 'usuario', auth.currentUser.uid, {
+          description: `Usuario configuro su pregunta de seguridad (legacy backfill)`
+        });
+      } catch (_) { /* no crítico */ }
+
+      // Quitar pantalla y entrar
+      const sq = document.getElementById('securityQuestionScreen');
+      if (sq) sq.style.display = 'none';
+
+      // Continuar flujo normal de login
+      this.showApp();
+      this.applyRoleVisibility(this.currentUser.role);
+      this.warmDefaultPartial().catch(() => {});
+      this.updateUserUI();
+      const lastRoute = localStorage.getItem('epo67_lastRoute') || sessionStorage.getItem('epo67_lastRoute');
+      const target = (lastRoute && Router.modules[lastRoute]) ? lastRoute : 'dashboard';
+      Router.navigate(target);
+
+      Toast.show('Pregunta de seguridad configurada. Ya puedes usar el sistema.', 'success');
+    } catch (err) {
+      console.error('[securityQuestion] error:', err);
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+      errEl.textContent = '⚠ Error al guardar: ' + (err.message || 'desconocido') + '. Intenta de nuevo.';
+      errEl.style.display = 'block';
+    }
   },
 
   /**
