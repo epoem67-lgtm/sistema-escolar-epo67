@@ -122,6 +122,15 @@ const IrregularesModule = (() => {
             </select>
           </div>
           <div>
+            <label style="font-size:12px;color:#475569;font-weight:600;">Parcial</label>
+            <select id="irr-parcial" class="form-input" style="margin-top:4px;width:100%;">
+              <option value="ACUM" selected>Acumulado (reglas SEP)</option>
+              <option value="P1">Primer Parcial</option>
+              <option value="P2">Segundo Parcial</option>
+              <option value="P3">Tercer Parcial</option>
+            </select>
+          </div>
+          <div>
             <button id="irr-generar" class="btn btn-primary" style="width:100%;padding:10px 16px;" disabled>
               <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">summarize</span>
               Generar reporte
@@ -206,6 +215,12 @@ const IrregularesModule = (() => {
       const groupId = _state.grupo;
       const groupDoc = (_state.allGroups || []).find(g => g.id === groupId);
       if (!groupDoc) throw new Error('Grupo no encontrado');
+
+      // v8.21: parcial seleccionado (ACUM | P1 | P2 | P3).
+      // ACUM = reglas SEP completas (3 parciales). P1/P2/P3 = snapshot del parcial:
+      // alumno es "irregular en ese parcial" si tiene >=1 materia con cal<6 en ese P.
+      const parcialMode = document.getElementById('irr-parcial')?.value || 'ACUM';
+      _state.parcialMode = parcialMode;
 
       // BLINDAJE: si el rol es orientador (no admin), verificar que el groupId
       // esté en su scope. Defensivo: nunca debería pasar porque el dropdown
@@ -299,22 +314,34 @@ const IrregularesModule = (() => {
         reprobBySex[sex].final++;
 
         // Para cada materia, calcular status del alumno
+        // v8.21: si parcialMode != ACUM, evaluamos solo ese parcial (snapshot).
+        // Si es ACUM, usamos reglas SEP completas como antes.
         const subjectsExtraMark = {}; // subjectId -> 'C' | 'F' | 'A' | null
         let materiasEnExtra = 0;
         for (const subj of subjects) {
-          const sGrades = {};
-          for (const p of ['P1', 'P2', 'P3']) {
-            const g = allGrades.find(gg => gg.studentId === stu.id && gg.subjectId === subj.id && gg.partial === p);
-            if (g) sGrades[p] = g;
-          }
-          const grades3 = [sGrades.P1 || null, sGrades.P2 || null, sGrades.P3 || null];
-          const hoursByPart = hoursBySubject[subj.id] || {};
-          const status = App.calcStatusExtraordinario({ grades3, hoursByPart, passGrade });
-          if (status.isExtra) {
-            materiasEnExtra++;
-            if (status.estatus === 'EXTRA_AMBAS') subjectsExtraMark[subj.id] = 'A';
-            else if (status.estatus === 'EXTRA_FALTAS') subjectsExtraMark[subj.id] = 'F';
-            else subjectsExtraMark[subj.id] = 'C';
+          if (parcialMode === 'ACUM') {
+            const sGrades = {};
+            for (const p of ['P1', 'P2', 'P3']) {
+              const g = allGrades.find(gg => gg.studentId === stu.id && gg.subjectId === subj.id && gg.partial === p);
+              if (g) sGrades[p] = g;
+            }
+            const grades3 = [sGrades.P1 || null, sGrades.P2 || null, sGrades.P3 || null];
+            const hoursByPart = hoursBySubject[subj.id] || {};
+            const status = App.calcStatusExtraordinario({ grades3, hoursByPart, passGrade });
+            if (status.isExtra) {
+              materiasEnExtra++;
+              if (status.estatus === 'EXTRA_AMBAS') subjectsExtraMark[subj.id] = 'A';
+              else if (status.estatus === 'EXTRA_FALTAS') subjectsExtraMark[subj.id] = 'F';
+              else subjectsExtraMark[subj.id] = 'C';
+            }
+          } else {
+            // P1, P2 o P3: el alumno reprueba la materia en este parcial si cal < 6.
+            const g = allGrades.find(gg => gg.studentId === stu.id && gg.subjectId === subj.id && gg.partial === parcialMode);
+            const cal = g ? (g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null)) : null;
+            if (cal != null && !isNaN(cal) && cal < passGrade) {
+              materiasEnExtra++;
+              subjectsExtraMark[subj.id] = 'C'; // marca como reprobada por cal (no aplicamos faltas en parcial individual)
+            }
           }
         }
 
@@ -512,7 +539,11 @@ const IrregularesModule = (() => {
         <div class="irr-title">
           <h1>ESCUELA PREPARATORIA OFICIAL NÚM. 67</h1>
           <p class="irr-subtitle">C.C.T. 15EBH0134D, TURNO ${meta.turno}. CICLO ESCOLAR ${meta.cicloEscolar}-2</p>
-          <p class="irr-ctrl">CONTROL DE IRREGULARES DE 2do SEMESTRE DEL CICLO ESCOLAR</p>
+          <p class="irr-ctrl">CONTROL DE IRREGULARES DE 2do SEMESTRE DEL CICLO ESCOLAR${
+            (_state.parcialMode && _state.parcialMode !== 'ACUM')
+              ? ` &mdash; ${_state.parcialMode === 'P1' ? 'PRIMER' : _state.parcialMode === 'P2' ? 'SEGUNDO' : 'TERCER'} PARCIAL`
+              : ''
+          }</p>
         </div>
 
         <!-- Tabla principal -->
