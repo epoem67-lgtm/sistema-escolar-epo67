@@ -42,6 +42,13 @@ const BoletaOficialModule = (function () {
                 <select id="bo-grado" disabled><option value="">Grado</option>${gradoOpts}</select></div>
               <div class="form-group"><label>Grupo</label>
                 <select id="bo-grupo" disabled><option value="">Grupo</option></select></div>
+              <div class="form-group"><label>Parcial</label>
+                <select id="bo-parcial">
+                  <option value="ACUM">Acumulado del semestre</option>
+                  <option value="P1">Primer Parcial</option>
+                  <option value="P2">Segundo Parcial</option>
+                  <option value="P3">Tercer Parcial</option>
+                </select></div>
               <div class="form-group"><label>Alumno</label>
                 <select id="bo-alumno" disabled><option value="">Alumno</option></select></div>
               <div class="form-group"><label>Fecha de boleta</label>
@@ -114,6 +121,8 @@ const BoletaOficialModule = (function () {
     const alumnoVal = document.getElementById('bo-alumno').value;
     const turno = document.getElementById('bo-turno').value;
     const grado = document.getElementById('bo-grado').value;
+    // v8.20: selector de parcial (ACUM | P1 | P2 | P3). ACUM aplica reglas SEP.
+    const parcialMode = document.getElementById('bo-parcial')?.value || 'ACUM';
     const results = document.getElementById('bo-results');
 
     if (!groupId || !alumnoVal) {
@@ -181,28 +190,40 @@ const BoletaOficialModule = (function () {
 
         groupSubjects.forEach(sub => {
           const subGrades = studentGrades.filter(g => g.subjectId === sub.id);
-          // Construir grades3 ordenado (P1, P2, P3) para reglas SEP
-          const grades3 = ['P1', 'P2', 'P3'].map(p => subGrades.find(g => g.partial === p) || null);
-          const tieneAlguna = grades3.some(g => g != null);
 
           let finalCal = blankFill;
           let obs = isTraslado ? '' : 'NO ACREDITADA';
           let reprobadoPorRegla = false;
           let motivoSEP = '';
 
-          if (tieneAlguna) {
-            // Aplica reglas SEP estrictas (3 reglas independientes):
-            //  1) promedio<6, 2) 2+ parciales reprobados, 3) >20% faltas
-            const result = App.calcCalFinalSEP({
-              grades3,
-              hoursByPart: hoursIdx[sub.id] || {}
-            });
-            if (result.calFinal != null) {
-              finalCal = result.calFinal;
-              reprobadoPorRegla = result.reprobadoPorRegla;
-              motivoSEP = result.motivo;
-              obs = finalCal >= 6 ? 'ACREDITADA' : 'NO ACREDITADA';
-              totalCal += finalCal;
+          if (parcialMode === 'ACUM') {
+            // ── ACUMULADO con reglas SEP ──
+            // Construir grades3 ordenado (P1, P2, P3) para reglas SEP
+            const grades3 = ['P1', 'P2', 'P3'].map(p => subGrades.find(g => g.partial === p) || null);
+            const tieneAlguna = grades3.some(g => g != null);
+            if (tieneAlguna) {
+              const result = App.calcCalFinalSEP({
+                grades3,
+                hoursByPart: hoursIdx[sub.id] || {}
+              });
+              if (result.calFinal != null) {
+                finalCal = result.calFinal;
+                reprobadoPorRegla = result.reprobadoPorRegla;
+                motivoSEP = result.motivo;
+                obs = finalCal >= 6 ? 'ACREDITADA' : 'NO ACREDITADA';
+                totalCal += finalCal;
+                countCal++;
+              }
+            }
+          } else {
+            // ── PARCIAL ESPECIFICO (P1, P2 o P3) ──
+            // Solo la cal de ese parcial, sin aplicar reglas SEP (que requieren los 3).
+            const gd = subGrades.find(g => g.partial === parcialMode);
+            const cal = gd ? (gd.cal != null ? Number(gd.cal) : (gd.value != null ? Number(gd.value) : null)) : null;
+            if (cal != null && !isNaN(cal)) {
+              finalCal = cal;
+              obs = cal >= 6 ? 'ACREDITADA' : 'NO ACREDITADA';
+              totalCal += cal;
               countCal++;
             }
           }
@@ -246,7 +267,12 @@ const BoletaOficialModule = (function () {
                 <span>C.C.T <strong>15EBH0134D</strong></span>
                 <span><strong>TURNO: ${Utils.sanitize(turno)}</strong></span>
               </div>
-              <div style="font-size:13px;font-weight:700;margin-top:14px;font-family:Times,serif;">BOLETA DE CALIFICACIONES</div>
+              <div style="font-size:13px;font-weight:700;margin-top:14px;font-family:Times,serif;">BOLETA DE CALIFICACIONES${
+                parcialMode === 'ACUM' ? '' :
+                parcialMode === 'P1' ? ' &mdash; PRIMER PARCIAL' :
+                parcialMode === 'P2' ? ' &mdash; SEGUNDO PARCIAL' :
+                parcialMode === 'P3' ? ' &mdash; TERCER PARCIAL' : ''
+              }</div>
             </div>
 
             <div style="font-size:11px;font-family:Times,serif;margin-bottom:6px;">
