@@ -1283,37 +1283,94 @@ const Auth = {
     const origHtml = btn.innerHTML;
     btn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:20px;vertical-align:middle;">autorenew</span> Guardando...';
 
-    try {
-      const setSecQ = functions.httpsCallable('setSecurityQuestion');
-      await setSecQ({ question, answer });
-
-      // Audit
-      try {
-        await DB.audit('config_pregunta_seguridad', 'usuario', auth.currentUser.uid, {
-          description: `Usuario configuro su pregunta de seguridad (legacy backfill)`
-        });
-      } catch (_) { /* no crítico */ }
-
-      // Quitar pantalla y entrar
-      const sq = document.getElementById('securityQuestionScreen');
-      if (sq) sq.style.display = 'none';
-
-      // Continuar flujo normal de login
-      this.showApp();
-      this.applyRoleVisibility(this.currentUser.role);
-      this.warmDefaultPartial().catch(() => {});
-      this.updateUserUI();
-      const lastRoute = localStorage.getItem('epo67_lastRoute') || sessionStorage.getItem('epo67_lastRoute');
-      const target = (lastRoute && Router.modules[lastRoute]) ? lastRoute : 'dashboard';
-      Router.navigate(target);
-
-      Toast.show('Pregunta de seguridad configurada. Ya puedes usar el sistema.', 'success');
-    } catch (err) {
-      console.error('[securityQuestion] error:', err);
+    // FALLBACK ROBUSTO (junio 2026 v8.22): si Cloud Function falla por
+    // cualquier motivo (sdk compat con v2 functions, timeout, red, etc),
+    // escribimos DIRECTO a Firestore desde el cliente. El usuario YA esta
+    // autenticado y firestore.rules le permite editar SU propio doc en /users.
+    // Asi nunca se queda atorado en esta pantalla.
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      errEl.textContent = '⚠ Sesión expirada. Recarga la pagina y vuelve a entrar.';
+      errEl.style.display = 'block';
       btn.disabled = false;
       btn.innerHTML = origHtml;
-      errEl.textContent = '⚠ Error al guardar: ' + (err.message || 'desconocido') + '. Intenta de nuevo.';
-      errEl.style.display = 'block';
+      return;
+    }
+
+    // SHA-256 en el cliente (mismo algoritmo que la Cloud Function).
+    async function sha256(text) {
+      const buf = new TextEncoder().encode(String(text).toLowerCase().trim());
+      const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+      return Array.from(new Uint8Array(hashBuf))
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    let saved = false;
+    let cloudFnError = null;
+
+    // Intento 1: Cloud Function (recomendado, ya valida + hashea server-side)
+    console.log('[securityQuestion] intento 1: Cloud Function setSecurityQuestion');
+    try {
+      // Force refresh token para asegurar que la llamada lleve auth fresca
+      try { await auth.currentUser.getIdToken(true); } catch (_) {}
+
+      const setSecQ = functions.httpsCallable('setSecurityQuestion');
+      // Timeout defensivo de 15 segundos
+      const callPromise = setSecQ({ question, answer });
+      const timeoutPromise = new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('Cloud Function timeout 15s')), 15000));
+      await Promise.race([callPromise, timeoutPromise]);
+      console.log('[securityQuestion] Cloud Function OK');
+      saved = true;
+    } catch (err) {
+      cloudFnError = err;
+      console.warn('[securityQuestion] Cloud Function fallo, intentando fallback:', err.message || err);
+    }
+
+    // Intento 2: escritura directa al Firestore (fallback robusto)
+    if (!saved) {
+      console.log('[securityQuestion] intento 2: write directo a Firestore');
+      try {
+        const answerHash = await sha256(answer);
+        await DB.users().doc(uid).update({
+          securityQuestion: question,
+          securityAnswerHash: answerHash,
+          securityQuestionSetAt: DB.timestamp()
+        });
+        console.log('[securityQuestion] Firestore write OK');
+        saved = true;
+      } catch (writeErr) {
+        console.error('[securityQuestion] write directo tambien fallo:', writeErr);
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        errEl.textContent = `⚠ Error al guardar (${writeErr.code || 'no-code'}): ${writeErr.message || writeErr}. Por favor avisa a Olivia.`;
+        errEl.style.display = 'block';
+        return;
+      }
+    }
+
+    // Si llegamos aqui, se guardo con exito (cloud fn o fallback)
+    try {
+      await DB.audit('config_pregunta_seguridad', 'usuario', uid, {
+        description: `Usuario configuro su pregunta de seguridad (${cloudFnError ? 'fallback directo' : 'cloud fn'})`
+      });
+    } catch (_) { /* no crítico */ }
+
+    // Quitar pantalla y entrar
+    const sq = document.getElementById('securityQuestionScreen');
+    if (sq) sq.style.display = 'none';
+
+    // Continuar flujo normal de login
+    this.showApp();
+    this.applyRoleVisibility(this.currentUser.role);
+    this.warmDefaultPartial().catch(() => {});
+    this.updateUserUI();
+    const lastRoute = localStorage.getItem('epo67_lastRoute') || sessionStorage.getItem('epo67_lastRoute');
+    const target = (lastRoute && Router.modules[lastRoute]) ? lastRoute : 'dashboard';
+    Router.navigate(target);
+
+    if (typeof Toast !== 'undefined' && Toast.show) {
+      Toast.show('Pregunta de seguridad configurada. Ya puedes usar el sistema.', 'success');
     }
   },
 

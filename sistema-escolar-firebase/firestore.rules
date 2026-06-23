@@ -199,10 +199,15 @@ service cloud.firestore {
       // Cualquier otro campo (role, teacherId, status) sigue siendo admin-only.
       // BUGFIX v5.95: agregado 'phone' (registro obligatorio de WhatsApp en
       // primer ingreso), 'tourCompleted' y 'tourCompletedAt' (onboarding tour).
+      // BUGFIX v8.22: agregados 'securityQuestion', 'securityAnswerHash',
+      // 'securityQuestionSetAt' — fallback cliente cuando Cloud Function
+      // falla. El usuario puede setear su pregunta de seguridad directamente.
       allow update: if isAuthenticated()
         && request.auth.uid == userId
         && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['recoveryEmail', 'phone', 'mustChangePassword', 'passwordChangedAt', 'tourCompleted', 'tourCompletedAt']);
+            .hasOnly(['recoveryEmail', 'phone', 'mustChangePassword', 'passwordChangedAt',
+                      'tourCompleted', 'tourCompletedAt',
+                      'securityQuestion', 'securityAnswerHash', 'securityQuestionSetAt']);
     }
 
     // ─── ALIAS DE CORREO PARA LOGIN ────────
