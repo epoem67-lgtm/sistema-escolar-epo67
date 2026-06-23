@@ -1497,34 +1497,35 @@ const Auth = {
       return;
     }
     const body = `
-      <div style="margin-bottom:14px;font-size:13px;color:#444;line-height:1.5;">
-        Ingresa tu correo. Tienes 2 opciones:
-        <br>· <strong>Por correo:</strong> te llega un enlace para reestablecer (revisa SPAM).
-        <br>· <strong>Por WhatsApp:</strong> Olivia te genera una contraseña al momento.
+      <div style="margin-bottom:16px;font-size:13.5px;color:#1f2937;line-height:1.6;">
+        Escribe el correo con el que entras al sistema. Te enviaremos un enlace para crear una nueva contraseña.
+        <br><br>
+        <span style="background:#fef3c7;padding:6px 10px;border-radius:4px;font-size:12.5px;color:#92400e;display:inline-block;font-weight:600;">
+          ⚠ El correo casi siempre llega a SPAM — revisa esa carpeta
+        </span>
       </div>
       <div class="form-group">
-        <label for="fpEmail">Tu correo</label>
-        <input type="email" id="fpEmail" placeholder="tu@correo.com" autocomplete="email" style="font-size:14px;padding:9px 10px;">
+        <label for="fpEmail" style="font-weight:600;">Tu correo</label>
+        <input type="email" id="fpEmail" placeholder="tu@correo.com" autocomplete="email" style="font-size:15px;padding:11px 12px;width:100%;">
       </div>
-      <div id="fpInfo" style="font-size:13px;color:#666;margin-top:10px;display:none;line-height:1.5;padding:10px 12px;border-radius:6px;"></div>
+      <div id="fpInfo" style="font-size:13px;color:#666;margin-top:10px;display:none;line-height:1.55;padding:12px;border-radius:8px;"></div>
 
-      <div style="margin-top:18px;display:flex;flex-direction:column;gap:10px;">
-        <button type="button" data-action="fp-send" class="btn btn-primary" style="width:100%;padding:11px;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;">
-          <span class="material-icons-round" style="font-size:18px;">mail</span>
-          Enviarme correo de recuperación
-        </button>
-        <a id="fpWhatsappBtn" href="#" target="_blank" style="text-decoration:none;">
-          <button type="button" class="btn" style="width:100%;padding:11px;font-size:14px;background:#25D366;color:#fff;display:flex;align-items:center;justify-content:center;gap:8px;border:none;">
-            <span class="material-icons-round" style="font-size:18px;">chat</span>
-            Pedir ayuda a Olivia por WhatsApp
-          </button>
-        </a>
-      </div>
+      <button type="button" data-action="fp-send" class="btn btn-primary"
+        style="width:100%;padding:13px;font-size:15px;font-weight:700;margin-top:16px;display:flex;align-items:center;justify-content:center;gap:8px;">
+        <span class="material-icons-round" style="font-size:20px;">send</span>
+        Enviarme el enlace al correo
+      </button>
 
-      <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:11.5px;color:#6b7280;line-height:1.5;">
-        <strong>💡 Si no recibes el correo en 5 minutos:</strong> revisa SPAM, o usa el botón verde de WhatsApp.
-        Olivia te atiende directo (Lun a Vie, 8am - 5pm).
-      </div>
+      <details style="margin-top:18px;font-size:12.5px;color:#64748b;border-top:1px solid #e5e7eb;padding-top:12px;">
+        <summary style="cursor:pointer;font-weight:600;">¿Después de varios intentos sigue sin llegarte?</summary>
+        <div style="margin-top:10px;line-height:1.55;padding-left:6px;">
+          1. Asegúrate de buscar en <strong>SPAM / Correo no deseado</strong>.<br>
+          2. El correo viene de <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;font-size:11.5px;">noreply@epo67-sistema.firebaseapp.com</code><br>
+          3. Si después de 10 minutos no llega ni a SPAM, escribe a Olivia:
+          <a id="fpWhatsappBtn" href="#" target="_blank" style="color:#0d6efd;text-decoration:underline;">WhatsApp</a>
+          <span style="color:#94a3b8;">(último recurso)</span>
+        </div>
+      </details>
     `;
     const footer = `
       <button class="btn btn-outline" data-action="modal-cancel">Cerrar</button>
@@ -1568,7 +1569,7 @@ const Auth = {
       // a un dominio inexistente.
       if (typed.endsWith('@epo67.local')) {
         info.innerHTML = `⚠ El correo <strong>${typed}</strong> es interno del sistema y no recibe mensajes.<br>
-          <strong>Usa el botón verde de WhatsApp ↓</strong> para que Olivia te genere una contraseña.`;
+          Escribe tu correo personal (gmail, hotmail). Si no tienes uno registrado, abre el desplegable de abajo.`;
         info.style.color = '#b45309';
         info.style.background = '#fef3c7';
         info.style.border = '1px solid #fcd34d';
@@ -1580,7 +1581,7 @@ const Auth = {
         const aliasDoc = await DB.emailAliases().doc(typed).get();
         if (aliasDoc.exists) {
           info.innerHTML = `⚠ Este correo está registrado como respaldo pero no como correo de acceso directo.<br>
-            <strong>Usa el botón verde de WhatsApp ↓</strong> para que Olivia te genere una contraseña.`;
+            Intenta con el correo principal con el que entras al sistema.`;
           info.style.color = '#b45309';
           info.style.background = '#fef3c7';
           info.style.border = '1px solid #fcd34d';
@@ -1599,31 +1600,48 @@ const Auth = {
 
         await auth.sendPasswordResetEmail(typed);
 
-        info.innerHTML = `✅ <strong>Correo enviado a ${typed}</strong><br><br>
-          📥 Revisa tu bandeja de entrada <strong>Y la carpeta de SPAM</strong>.<br>
-          ⏱ Puede tardar hasta <strong>5 minutos</strong> en llegar.<br>
-          📧 El remitente es <em>noreply@epo67-sistema.firebaseapp.com</em><br><br>
-          <strong>Si no llega:</strong> usa el botón verde de WhatsApp ↓`;
+        // Mensaje GRANDE Y VISUAL para enfatizar SPAM. CERO mencion de WhatsApp:
+        // autonomia total — el usuario tiene toda la info para entrar solo.
+        info.innerHTML = `
+          <div style="text-align:center;padding:4px 0 10px;">
+            <div style="font-size:28px;">📧</div>
+            <div style="font-size:15px;font-weight:700;color:#15803d;margin-top:4px;">¡Correo enviado!</div>
+            <div style="font-size:12px;color:#475569;margin-top:2px;">a <strong>${typed}</strong></div>
+          </div>
+          <div style="background:#fff7ed;border:1.5px solid #fb923c;border-radius:6px;padding:10px 12px;margin-bottom:8px;">
+            <div style="font-weight:700;color:#9a3412;font-size:13px;margin-bottom:4px;">🚨 PRIMERO busca en SPAM</div>
+            <div style="font-size:12px;color:#7c2d12;line-height:1.5;">
+              El correo casi siempre llega a <strong style="background:#fef3c7;padding:1px 4px;border-radius:2px;">SPAM</strong> o
+              <strong style="background:#fef3c7;padding:1px 4px;border-radius:2px;">Correo no deseado</strong>, no a tu bandeja normal.
+            </div>
+          </div>
+          <div style="font-size:12px;color:#475569;line-height:1.65;padding:4px 2px;">
+            <div><strong>📅 Tiempo:</strong> 1 a 5 minutos.</div>
+            <div><strong>📧 Remitente:</strong> noreply@epo67-sistema.firebaseapp.com</div>
+            <div><strong>📝 Asunto:</strong> "Restablece tu contraseña..."</div>
+            <div style="margin-top:6px;color:#92400e;background:#fef3c7;padding:5px 8px;border-radius:4px;font-size:11.5px;">
+              💡 Marca el correo como <strong>"No es spam"</strong> para que los próximos lleguen directos.
+            </div>
+          </div>
+        `;
         info.style.color = '#15803d';
         info.style.background = '#f0fdf4';
-        info.style.border = '1px solid #86efac';
+        info.style.border = '1.5px solid #86efac';
       } catch (err) {
         console.warn('[forgotPassword]:', err.code, err.message);
         if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
-          info.innerHTML = `⚠ No encontramos una cuenta con el correo <strong>${typed}</strong>.<br>
-            <strong>Usa el botón verde de WhatsApp ↓</strong> para que Olivia te ayude.`;
+          info.innerHTML = `⚠ No encontramos una cuenta con <strong>${typed}</strong>.<br>
+            Verifica que esté bien escrito.`;
           info.style.color = '#b45309';
           info.style.background = '#fef3c7';
           info.style.border = '1px solid #fcd34d';
         } else if (err.code === 'auth/too-many-requests') {
-          info.innerHTML = `⚠ Demasiados intentos. Espera unos minutos.<br>
-            <strong>O usa el botón verde de WhatsApp ↓</strong> ahora mismo.`;
+          info.innerHTML = `⚠ Demasiados intentos. Espera 10 minutos antes de volver a intentar.`;
           info.style.color = '#b45309';
           info.style.background = '#fef3c7';
           info.style.border = '1px solid #fcd34d';
         } else {
-          info.innerHTML = `⚠ ${err.message || 'Error al procesar.'}<br>
-            <strong>Usa el botón verde de WhatsApp ↓</strong> para resolver al momento.`;
+          info.innerHTML = `⚠ ${err.message || 'Error al procesar.'}`;
           info.style.color = '#b45309';
           info.style.background = '#fef3c7';
           info.style.border = '1px solid #fcd34d';
