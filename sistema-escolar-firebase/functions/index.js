@@ -180,7 +180,84 @@ exports.resetPasswordWithSecurityQuestion = onCall(
 );
 
 // ═══════════════════════════════════════════════════════════════
-// FUNCTION 3: setSecurityQuestion
+// FUNCTION 3: adminResetPassword
+// Un ADMIN logueado resetea la contrasena de cualquier usuario con
+// UN CLIC (sin terminal). Genera una temporal dictable por WhatsApp,
+// la aplica en Firebase Auth y la retorna para mostrarla en pantalla.
+//
+// Resuelve el problema raiz: ~97% de los usuarios no tienen pregunta
+// de seguridad y ~94% tienen correo sintetico @epo67.local, asi que
+// el reset por Olivia (admin) es la unica via realista — pero antes
+// exigia correr un script en terminal. Ahora es 1 clic.
+// ═══════════════════════════════════════════════════════════════
+function genAdminTempPassword() {
+  // Patron facil de dictar por WhatsApp: epo67- + 4 digitos.
+  const digits = 1000 + Math.floor(Math.random() * 9000);
+  return `epo67-${digits}`;
+}
+
+exports.adminResetPassword = onCall(
+  { region: 'us-central1', maxInstances: 10, cors: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Inicia sesion primero.');
+    }
+
+    // Verificar que QUIEN llama es admin (no confiar en el cliente)
+    const callerUid = request.auth.uid;
+    const callerDoc = await db.collection('users').doc(callerUid).get();
+    const callerRole = callerDoc.exists ? callerDoc.data().role : null;
+    if (callerRole !== 'admin') {
+      throw new HttpsError('permission-denied',
+        'Solo un administrador puede resetear contrasenas.');
+    }
+
+    const { userId } = request.data || {};
+    if (!userId || typeof userId !== 'string') {
+      throw new HttpsError('invalid-argument', 'Falta el userId del usuario a resetear.');
+    }
+
+    // El docId de users/{uid} ES el uid de Firebase Auth.
+    const targetUid = userId;
+
+    // Confirmar que existe la cuenta en Auth
+    let userRecord;
+    try {
+      userRecord = await auth.getUser(targetUid);
+    } catch (e) {
+      throw new HttpsError('not-found',
+        'No se encontro la cuenta en Firebase Auth para ese usuario.');
+    }
+
+    const newPassword = genAdminTempPassword();
+
+    try {
+      await auth.updateUser(targetUid, { password: newPassword });
+      // Marcar para forzar cambio en el proximo ingreso + limpiar bloqueos
+      await db.collection('users').doc(targetUid).set({
+        mustChangePassword: true,
+        resetFailedAttempts: 0,
+        resetLockedUntil: null,
+        lastPasswordResetAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+      await logAttempt(targetUid, true, `admin-reset-by:${callerUid}`);
+
+      const tData = userRecord.toJSON ? userRecord.toJSON() : userRecord;
+      return {
+        success: true,
+        password: newPassword,
+        email: tData.email || '',
+        displayName: tData.displayName || tData.email || ''
+      };
+    } catch (e) {
+      console.error('[adminResetPassword] falla al actualizar:', e);
+      throw new HttpsError('internal', 'Error al aplicar la nueva contrasena: ' + e.message);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// FUNCTION 4: setSecurityQuestion
 // El usuario LOGUEADO configura su pregunta+respuesta de seguridad.
 // La respuesta se guarda como SHA-256 hash.
 // (Nota: el cliente ya usa write directo a Firestore para esto,

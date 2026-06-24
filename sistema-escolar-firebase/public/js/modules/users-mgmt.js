@@ -442,31 +442,53 @@ const UsersMgmt = (() => {
 
     if (!confirm(
       `Reset de contraseña para:\n${user.displayName || user.email}\n\n` +
-      `Voy a generar una contraseña temporal nueva. ` +
-      `Despues necesitas correr 1 comando en tu terminal para aplicarla en Firebase Auth ` +
-      `(te muestro las instrucciones).\n\n¿Continuar?`
+      `Se generará una contraseña temporal nueva y se aplicará automáticamente ` +
+      `en Firebase Auth (sin terminal). Después podrás enviársela por WhatsApp.\n\n¿Continuar?`
     )) return;
 
-    const newPwd = _generateTempPassword();
-
-    // 1) Marcar mustChangePassword en Firestore (para que lo cambie tras entrar)
+    // Llamar a la Cloud Function adminResetPassword (server-side, 1 clic).
+    // Usamos fetch() con el ID token del admin para evitar problemas del SDK
+    // v8 compat con Cloud Functions v2.
+    let resp;
     try {
-      await DB.users().doc(userId).update({ mustChangePassword: true });
-      DB.audit('reset_pwd_admin', 'usuario', userId, {
-        description: `Admin solicitó reset de contraseña para: ${user.displayName || user.email}`,
+      const idToken = await firebase.auth().currentUser.getIdToken();
+      const r = await fetch('https://us-central1-epo67-sistema.cloudfunctions.net/adminResetPassword', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + idToken
+        },
+        body: JSON.stringify({ data: { userId } })
       });
-      Store.invalidate('users');
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok || json.error) {
+        const msg = (json.error && (json.error.message || json.error.status)) || `HTTP ${r.status}`;
+        throw new Error(msg);
+      }
+      resp = json.result || json;
     } catch (e) {
-      Toast.show('No se pudo marcar mustChangePassword: ' + e.message, 'error');
+      Toast.show('No se pudo resetear: ' + e.message, 'error');
       return;
     }
 
-    // 2) Abrir modal con instrucciones + plantilla WhatsApp
-    const teacherPhone = _normalizePhone(user.phone || user.whatsapp || '');
-    const userEmail = user.email || '';
-    const displayName = user.displayName || userEmail;
+    if (!resp || !resp.success || !resp.password) {
+      Toast.show('El servidor no devolvió una contraseña válida.', 'error');
+      return;
+    }
 
-    // Plantilla de mensaje WhatsApp para el maestro
+    const newPwd = resp.password;
+    try {
+      DB.audit('reset_pwd_admin', 'usuario', userId, {
+        description: `Admin reseteó contraseña (1 clic) para: ${user.displayName || user.email}`,
+      });
+      Store.invalidate('users');
+    } catch (_) { /* auditoría best-effort */ }
+
+    // Abrir modal con la contraseña aplicada + plantilla WhatsApp
+    const teacherPhone = _normalizePhone(user.phone || user.whatsapp || '');
+    const userEmail = resp.email || user.email || '';
+    const displayName = resp.displayName || user.displayName || userEmail;
+
     const waMessage = `Hola ${displayName.split(' ')[0] || ''}, soy Olivia del Sistema Escolar EPO 67.\n\n` +
       `Te he reseteado tu contraseña. Tus datos para entrar son:\n\n` +
       `🔗 https://epo67-sistema.web.app\n` +
@@ -478,53 +500,44 @@ const UsersMgmt = (() => {
       ? `https://wa.me/52${teacherPhone}?text=${encodeURIComponent(waMessage)}`
       : `https://wa.me/?text=${encodeURIComponent(waMessage)}`;
 
-    const cmd = `cd sistema-escolar-firebase && node scripts/fixes/reset-user-password.js ${userId} ${newPwd}`;
-
     const body = `
       <div style="display:flex;flex-direction:column;gap:14px;">
-        <div style="background:#fef3c7;border-left:4px solid #d97706;padding:10px 14px;border-radius:6px;">
-          <strong style="color:#78350f;">Paso 1: aplica el reset en Firebase Auth</strong><br>
-          <span style="font-size:12px;color:#78350f;">Abre tu Terminal en la Mac y pega este comando:</span>
-          <div style="position:relative;margin-top:6px;">
-            <input id="resetCmd" readonly value="${Utils.sanitize(cmd)}" style="width:100%;padding:8px 100px 8px 10px;font-family:monospace;font-size:11px;border:1px solid #d97706;border-radius:4px;background:#fff;">
-            <button id="copyCmd" class="btn btn-sm btn-warning" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);padding:4px 10px;">Copiar</button>
+        <div style="background:#dcfce7;border-left:4px solid #16a34a;padding:12px 14px;border-radius:6px;">
+          <strong style="color:#166534;font-size:14px;">✅ Contraseña reseteada y aplicada</strong>
+          <div style="margin-top:8px;font-size:13px;color:#166534;">Nueva contraseña temporal:</div>
+          <div style="background:#1e293b;border-radius:6px;padding:12px;text-align:center;margin-top:6px;">
+            <span style="font-family:'Courier New',monospace;font-size:26px;color:#fff;font-weight:700;letter-spacing:2px;user-select:all;">${Utils.sanitize(newPwd)}</span>
           </div>
+          <button id="copyPwd" class="btn btn-sm btn-outline" style="margin-top:8px;">📋 Copiar contraseña</button>
         </div>
 
-        <div style="background:#dcfce7;border-left:4px solid #16a34a;padding:10px 14px;border-radius:6px;">
-          <strong style="color:#166534;">Paso 2: avísale al maestro por WhatsApp</strong><br>
-          <span style="font-size:12px;color:#166534;">Abre WhatsApp con el mensaje pre-llenado y mándalo:</span>
+        <div style="background:#eff6ff;border-left:4px solid #3182ce;padding:10px 14px;border-radius:6px;">
+          <strong style="color:#1e40af;">Avísale al maestro por WhatsApp</strong><br>
           <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
             <a href="${waHref}" target="_blank" rel="noopener" class="btn btn-sm" style="background:#25d366;color:#fff;font-weight:700;">
-              <span style="font-family:monospace;">📱</span> Abrir WhatsApp con el mensaje
+              📱 Abrir WhatsApp con el mensaje
             </a>
             <button id="copyMsg" class="btn btn-sm btn-outline">Copiar mensaje</button>
           </div>
-          <details style="margin-top:8px;font-size:11px;color:#166534;">
+          <details style="margin-top:8px;font-size:11px;color:#1e40af;">
             <summary style="cursor:pointer;font-weight:600;">Ver mensaje completo</summary>
             <pre style="background:#fff;padding:8px;border-radius:4px;white-space:pre-wrap;font-size:11px;color:#1e293b;margin-top:6px;">${Utils.sanitize(waMessage)}</pre>
           </details>
         </div>
 
-        <div style="background:#eff6ff;border-left:4px solid #3182ce;padding:10px 14px;border-radius:6px;font-size:12px;color:#1e40af;">
-          <strong>Resumen:</strong>
-          <ul style="margin:4px 0 0 18px;padding:0;">
-            <li>Usuario: <strong>${Utils.sanitize(displayName)}</strong></li>
-            <li>Correo: <strong>${Utils.sanitize(userEmail)}</strong></li>
-            <li>Nueva contraseña: <strong style="background:#fff;padding:2px 6px;border-radius:3px;font-family:monospace;">${Utils.sanitize(newPwd)}</strong></li>
-            <li>El usuario tendrá que cambiar la contraseña al entrar (mustChangePassword=true ✓ ya marcado).</li>
-          </ul>
+        <div style="font-size:12px;color:#64748b;">
+          Usuario: <strong>${Utils.sanitize(displayName)}</strong> · Correo: <strong>${Utils.sanitize(userEmail)}</strong><br>
+          El maestro deberá cambiar la contraseña al entrar (mustChangePassword ✓).
         </div>
       </div>`;
 
     const footer = `<button class="btn btn-primary" data-action="modal-cancel">Listo</button>`;
     Modal.open('Reset de contraseña — ' + (displayName.split(' ')[0] || ''), body, footer);
 
-    // Botones copiar
     setTimeout(() => {
-      document.getElementById('copyCmd')?.addEventListener('click', () => {
-        navigator.clipboard?.writeText(cmd);
-        Toast.show('Comando copiado', 'success');
+      document.getElementById('copyPwd')?.addEventListener('click', () => {
+        navigator.clipboard?.writeText(newPwd);
+        Toast.show('Contraseña copiada', 'success');
       });
       document.getElementById('copyMsg')?.addEventListener('click', () => {
         navigator.clipboard?.writeText(waMessage);
