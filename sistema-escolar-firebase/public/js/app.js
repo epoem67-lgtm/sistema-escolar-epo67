@@ -1913,6 +1913,23 @@ const Auth = {
       });
     };
 
+    // Llamada directa con fetch() en lugar del SDK httpsCallable para evitar
+    // problemas de compatibilidad entre el SDK v8 compat y Cloud Functions v2.
+    const _callFn = async (fnName, data) => {
+      const url = `https://us-central1-epo67-sistema.cloudfunctions.net/${fnName}`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data })
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || json.error) {
+        const msg = (json.error && (json.error.message || json.error.status)) || `HTTP ${resp.status}`;
+        throw new Error(msg);
+      }
+      return json.result || json;
+    };
+
     const checkEmail = async () => {
       const input = document.getElementById('fpEmail');
       const email = (input?.value || '').trim().toLowerCase();
@@ -1923,9 +1940,7 @@ const Auth = {
       if (btn) { btn.disabled = true; btn.textContent = '⏳ Buscando tu cuenta...'; }
 
       try {
-        const fn = functions.httpsCallable('getSecurityQuestion');
-        const result = await fn({ email });
-        const data = result.data || {};
+        const data = await _callFn('getSecurityQuestion', { email });
         if (!data.hasSecurityQuestion) {
           // Cuenta sin pregunta o cuenta no encontrada (no revelamos cual)
           state.step = 'no-question';
@@ -1951,9 +1966,7 @@ const Auth = {
       if (btn) { btn.disabled = true; btn.textContent = '⏳ Verificando...'; }
 
       try {
-        const fn = functions.httpsCallable('resetPasswordWithSecurityQuestion');
-        const result = await fn({ email: state.email, answer });
-        const data = result.data || {};
+        const data = await _callFn('resetPasswordWithSecurityQuestion', { email: state.email, answer });
         if (data.success && data.password) {
           state.tempPassword = data.password;
           state.step = 'success';
@@ -1965,7 +1978,7 @@ const Auth = {
       } catch (err) {
         console.warn('[forgotPassword] verify:', err);
         if (btn) { btn.disabled = false; btn.textContent = '🔓 Verificar y recuperar'; }
-        const msg = err.message || 'Error al verificar.';
+        const msg = Utils.sanitize(err.message || 'Error al verificar.');
         showMsg('err', '⚠ ' + msg);
       }
     };

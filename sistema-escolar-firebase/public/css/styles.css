@@ -382,6 +382,25 @@ body {
   display: flex;
 }
 
+/* Módulos clave resaltados en el sidebar */
+.nav-item.nav-item-destacado {
+  border-left: 3px solid #60a5fa;
+  background: rgba(96, 165, 250, 0.06);
+}
+.nav-item.nav-item-destacado:hover {
+  background: rgba(96, 165, 250, 0.14);
+}
+.nav-item.nav-item-destacado.active {
+  border-left-color: #93c5fd;
+}
+.nav-badge-star {
+  font-size: 11px;
+  line-height: 1;
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
 .sidebar-footer {
   padding: var(--spacing-lg);
   border-top: 1px solid var(--color-sidebar-border);
@@ -3826,5 +3845,94 @@ body.role-secretario_admin:not(.module-school-config) input.grade-faltas:not([re
 body.role-secretario_admin:not(.module-school-config) input.horas-input:not([readonly]) {
   display: none !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   CHIP FILTERS — reemplaza dropdowns en cascada por chips coloridos
+   ═══════════════════════════════════════════════════════════════ */
+.chip-filter-bar {
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.chip-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.chip-filter-row:last-child { margin-bottom: 0; }
+.chip-filter-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: #475569;
+  text-transform: uppercase;
+  min-width: 70px;
+}
+.chip-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 2px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+  transition: all 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+  user-select: none;
+}
+.chip:hover {
+  border-color: #cbd5e0;
+  background: #f8fafc;
+}
+.chip.active {
+  background: #3182ce;
+  color: #fff;
+  border-color: #3182ce;
+  box-shadow: 0 2px 6px rgba(49,130,206,0.25);
+}
+.chip.active.chip-turno-mat {
+  background: #dc2626;
+  border-color: #dc2626;
+  box-shadow: 0 2px 6px rgba(220,38,38,0.25);
+}
+.chip.active.chip-turno-vesp {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  box-shadow: 0 2px 6px rgba(124,58,237,0.25);
+}
+.chip.active.chip-grado {
+  background: #059669;
+  border-color: #059669;
+  box-shadow: 0 2px 6px rgba(5,150,105,0.25);
+}
+.chip.active.chip-parcial {
+  background: #d97706;
+  border-color: #d97706;
+  box-shadow: 0 2px 6px rgba(217,119,6,0.25);
+}
+.chip-filter-actions {
+  display: flex;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 10px;
+  border-top: 1px solid #e2e8f0;
+  flex-wrap: wrap;
+}
+.chip-filter-actions .btn { min-height: 38px; }
 
 /* End of styles.css */

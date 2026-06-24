@@ -2881,11 +2881,15 @@ const GradesModule = (function () {
     container.addEventListener('focusout', (e) => {
       const input = e.target;
       if (!_isGradeInput(input)) return;
-      if (input.value.trim() === '') { _snapshotPending = false; return; }
       const maxVal = parseFloat(input.max) || 10;
       const isInteger = input.classList.contains('grade-faltas');
-      let v = parseFloat(input.value.replace(',', '.'));
+      // Usar valueAsNumber como fuente primaria: algunos navegadores (Safari móvil)
+      // sanitizan input.value a '' cuando el valor excede max, causando que se guarde 0.
+      // valueAsNumber devuelve el número real incluso en esos casos.
+      let v = input.valueAsNumber;
+      if (isNaN(v)) v = parseFloat((input.value || '').replace(',', '.'));
       if (isNaN(v)) { input.value = ''; input.classList.remove('ge-input-invalid'); _snapshotPending = false; return; }
+      if (input.value.trim() === '' && isNaN(input.valueAsNumber)) { _snapshotPending = false; return; }
       v = Math.max(0, Math.min(v, maxVal));
       v = isInteger ? Math.round(v) : Math.round(v * 10) / 10;
       input.value = v;
@@ -3580,13 +3584,16 @@ const GradesModule = (function () {
           scaledCount++;
         }
 
-        // Inválido: marcar rojo, NO aplicar
-        if (isNaN(num) || num < 0 || num > max) {
+        // Inválido (no-numérico o negativo): marcar rojo, NO aplicar
+        if (isNaN(num) || num < 0) {
           cellInput.classList.add('paste-invalid');
           invalidInputs.push(cellInput);
           invalidCount++;
           continue;
         }
+
+        // Si excede el máximo: clampar al máximo (no rechazar)
+        if (num > max) num = max;
 
         // Aplicar: redondear a 1 decimal (rubros) o entero (faltas)
         const finalVal = isInt ? Math.round(num) : Math.round(num * 10) / 10;
@@ -4592,13 +4599,14 @@ const GradesModule = (function () {
       if (row.dataset.traslado === '1') return;
       rubros.forEach(r => {
         const input = row.querySelector(`input[data-field="${r.key}"]`);
-        if (input && input.value.trim() !== '') {
-          let v = parseFloat(input.value.replace(',', '.'));
-          if (isNaN(v) || v < 0 || v > r.max) {
-            validationErrors++;
-            input.classList.add('ge-input-invalid');
+        if (input && (input.value.trim() !== '' || !isNaN(input.valueAsNumber))) {
+          // Preferir valueAsNumber: en Safari móvil, input.value se sanitiza a ''
+          // cuando el valor excede max, causando que se guarde 0 en vez del máximo.
+          let v = isNaN(input.valueAsNumber) ? parseFloat((input.value || '').replace(',', '.')) : input.valueAsNumber;
+          if (isNaN(v) || v < 0) {
+            if (input.value.trim() !== '') { validationErrors++; input.classList.add('ge-input-invalid'); }
           } else {
-            // Auto-fix: clamp and round before save
+            // Auto-fix: clamp and round before save (overflow → max, underflow → 0)
             v = Math.max(0, Math.min(v, r.max));
             v = Math.round(v * 10) / 10;
             input.value = v;

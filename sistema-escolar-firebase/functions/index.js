@@ -2,28 +2,9 @@
 // CLOUD FUNCTIONS — Sistema Escolar EPO 67
 // Reset autonomo de contrasenas (junio 2026).
 //
-// PROBLEMA RESUELTO:
-//   - Firebase manda correos desde noreply@firebaseapp.com
-//   - Esos correos caen en SPAM masivamente (Gmail, Hotmail)
-//   - Los maestros NUNCA los encuentran -> Olivia tiene que resetear
-//     a mano via terminal todos los dias
-//   - Esta solucion es 100% AUTONOMA: sin email, sin Olivia
-//
-// FLUJO:
-//   1. Maestro configura pregunta+respuesta de seguridad en su perfil
-//   2. Si olvida pass, va a "Recuperar contrasena":
-//      a. Escribe su correo
-//      b. Le mostramos SU pregunta de seguridad
-//      c. Responde
-//      d. Si la respuesta es correcta, generamos contrasena temporal
-//         y se la mostramos EN PANTALLA (no por email)
-//   3. Entra con esa pass y el sistema le pide cambiarla
-//
-// SEGURIDAD:
-//   - Respuestas almacenadas como SHA-256 hash (no texto plano)
-//   - Rate limit: max 5 intentos por hora por IP
-//   - Despues de 3 intentos fallidos consecutivos, bloqueo de 1 hora
-//   - Logs en activityLog para auditoria
+// NOTA (v8.63): El cliente usa fetch() directo en lugar del SDK
+// httpsCallable para evitar incompatibilidades entre SDK v8 compat
+// y Cloud Functions v2 (Cloud Run).
 // ═══════════════════════════════════════════════════════════════
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
@@ -72,7 +53,7 @@ async function logAttempt(uid, success, reason = '') {
 // (sin revelar si el email existe o no para evitar enumeracion).
 // ═══════════════════════════════════════════════════════════════
 exports.getSecurityQuestion = onCall(
-  { region: 'us-central1', maxInstances: 10 },
+  { region: 'us-central1', maxInstances: 10, cors: true },
   async (request) => {
     const { email } = request.data || {};
 
@@ -115,7 +96,7 @@ exports.getSecurityQuestion = onCall(
 // correcta, genera contrasena temporal y la retorna al cliente.
 // ═══════════════════════════════════════════════════════════════
 exports.resetPasswordWithSecurityQuestion = onCall(
-  { region: 'us-central1', maxInstances: 10 },
+  { region: 'us-central1', maxInstances: 10, cors: true },
   async (request) => {
     const { email, answer } = request.data || {};
 
@@ -202,9 +183,11 @@ exports.resetPasswordWithSecurityQuestion = onCall(
 // FUNCTION 3: setSecurityQuestion
 // El usuario LOGUEADO configura su pregunta+respuesta de seguridad.
 // La respuesta se guarda como SHA-256 hash.
+// (Nota: el cliente ya usa write directo a Firestore para esto,
+//  pero se mantiene la función por compatibilidad.)
 // ═══════════════════════════════════════════════════════════════
 exports.setSecurityQuestion = onCall(
-  { region: 'us-central1', maxInstances: 10 },
+  { region: 'us-central1', maxInstances: 10, cors: true },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Inicia sesion primero.');
