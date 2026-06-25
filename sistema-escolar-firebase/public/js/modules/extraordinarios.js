@@ -141,7 +141,7 @@ const ExtraordinariosModule = (() => {
     const verb = open ? 'ABRIR' : 'CERRAR';
     if (!confirm(`¿${verb} la captura de extraordinarios para todos los maestros?`)) return;
     try {
-      await window.db.collection('config').doc('extraordinarioWindow').set({
+      await db.collection('config').doc('extraordinarioWindow').set({
         open: !!open,
         updatedAt: new Date(),
         updatedBy: App.currentUser?.uid || '',
@@ -174,7 +174,7 @@ const ExtraordinariosModule = (() => {
 
       // Estado de la ventana de captura (interruptor admin). Default ABIERTA.
       try {
-        const wdoc = await window.db.collection('config').doc('extraordinarioWindow').get();
+        const wdoc = await db.collection('config').doc('extraordinarioWindow').get();
         _extraWindowOpen = !wdoc.exists || wdoc.data().open !== false;
       } catch (_) { _extraWindowOpen = true; }
 
@@ -427,13 +427,13 @@ const ExtraordinariosModule = (() => {
   // ═══════════════════════════════════════════════════════════════
 
   async function _loadHoursForGroups(groupIds) {
-    if (!groupIds || groupIds.length === 0 || !window.db) return [];
+    if (!groupIds || groupIds.length === 0 || !db) return [];
     const all = [];
     const chunks = [];
     for (let i = 0; i < groupIds.length; i += 30) chunks.push(groupIds.slice(i, i + 30));
     for (const chunk of chunks) {
       try {
-        const snap = await window.db.collection('teacherHours').where('groupId', 'in', chunk).get();
+        const snap = await db.collection('teacherHours').where('groupId', 'in', chunk).get();
         snap.forEach(d => all.push({ id: d.id, ...d.data() }));
       } catch (e) { console.warn('hours chunk falló:', e); }
     }
@@ -441,13 +441,13 @@ const ExtraordinariosModule = (() => {
   }
 
   async function _loadExtrasForGroups(groupIds) {
-    if (!groupIds || groupIds.length === 0 || !window.db) return [];
+    if (!groupIds || groupIds.length === 0 || !db) return [];
     const all = [];
     const chunks = [];
     for (let i = 0; i < groupIds.length; i += 30) chunks.push(groupIds.slice(i, i + 30));
     for (const chunk of chunks) {
       try {
-        const snap = await window.db.collection('extraordinarios').where('groupId', 'in', chunk).get();
+        const snap = await db.collection('extraordinarios').where('groupId', 'in', chunk).get();
         snap.forEach(d => all.push({ id: d.id, ...d.data() }));
       } catch (e) { console.warn('extraordinarios chunk falló:', e); }
     }
@@ -1082,7 +1082,7 @@ const ExtraordinariosModule = (() => {
   }
 
   async function _persistExtra(tarjeta, alumno, oportunidad, row) {
-    if (!window.db) throw new Error('Firebase no disponible');
+    if (!db) throw new Error('Firebase no disponible');
     // GUARDA DEFENSIVA: bloquea cualquier intento de guardar de quien no
     // sea admin/subdirector/maestro-asignado. La regla de Firestore es el
     // backstop autoritario, pero esto da feedback inmediato y evita rondas
@@ -1125,10 +1125,10 @@ const ExtraordinariosModule = (() => {
       fechaCaptura: new Date(),
       comentario: row.comentario || '',
       ciclo: cicloEscolar,
-      updatedBy: window.auth?.currentUser?.uid || '',
+      updatedBy: auth?.currentUser?.uid || '',
       updatedByName: App.currentUser?.displayName || App.currentUser?.email || '',
     };
-    await window.db.collection('extraordinarios').doc(docId).set(data, { merge: true });
+    await db.collection('extraordinarios').doc(docId).set(data, { merge: true });
 
     // ═══ CAL VIGENTE: actualizar registro academico oficial (junio 2026) ═══
     // Cuando un extraordinario CIERRA el caso (APROBADO en cualquier op,
@@ -1196,11 +1196,11 @@ const ExtraordinariosModule = (() => {
       // Trazabilidad
       ciclo: cicloEscolar,
       fechaCaptura: new Date(),
-      updatedBy: window.auth?.currentUser?.uid || '',
+      updatedBy: auth?.currentUser?.uid || '',
       updatedByName: App.currentUser?.displayName || App.currentUser?.email || '',
     };
     try {
-      await window.db.collection('studentsFinalGrades').doc(docId).set(data, { merge: true });
+      await db.collection('studentsFinalGrades').doc(docId).set(data, { merge: true });
     } catch (e) {
       console.warn('[extraordinarios] no se pudo actualizar studentsFinalGrades:', e.message);
       // No revertimos el extraordinario — esa data ya esta guardada. Solo log.
@@ -1222,7 +1222,7 @@ const ExtraordinariosModule = (() => {
     if (!App.schoolConfig?.staff?.director?.nombre ||
         !App.schoolConfig?.staff?.subdirector?.nombre) {
       try {
-        const doc = await window.db.collection('config').doc('school').get();
+        const doc = await db.collection('config').doc('school').get();
         if (doc.exists) {
           App.schoolConfig = doc.data();
         }
@@ -1450,7 +1450,7 @@ const ExtraordinariosModule = (() => {
     if (!App.schoolConfig?.staff?.director?.nombre ||
         !App.schoolConfig?.staff?.subdirector?.nombre) {
       try {
-        const doc = await window.db.collection('config').doc('school').get();
+        const doc = await db.collection('config').doc('school').get();
         if (doc.exists) App.schoolConfig = doc.data();
       } catch (e) { console.warn('No se pudo cargar config/school:', e); }
     }
