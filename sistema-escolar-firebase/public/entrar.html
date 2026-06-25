@@ -119,6 +119,7 @@
   <!-- Firebase compat -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script>
     // ═══════════════════════════════════════════════════════════
     // PASO 0: PURGA AGRESIVA — esta pagina debe ser inmune al
@@ -149,6 +150,7 @@
       appId: "1:425082037377:web:4bd72a502c874acfa25980"
     });
     const auth = firebase.auth();
+    const db = firebase.firestore();
 
     const $ = id => document.getElementById(id);
     const msg = $('msg');
@@ -203,10 +205,10 @@
       const hasIssues = checkPassChars(rawPass);
 
       // Limpiar
-      const email = rawEmail.trim().toLowerCase();
+      const typedEmail = rawEmail.trim().toLowerCase();
       const password = rawPass.trim();
 
-      if (!email || !password) {
+      if (!typedEmail || !password) {
         showMsg('err', '⚠ Escribe correo y contrasena.');
         return;
       }
@@ -215,6 +217,26 @@
       btn.disabled = true;
       btn.textContent = '⏳ Entrando...';
       showMsg('info', '⏳ Verificando con Firebase...');
+
+      // Traducir correo personal (gmail/hotmail) → correo del sistema vía alias.
+      // Igual que la app principal: el maestro puede entrar con el correo que
+      // mejor recuerda (su correo de recuperación) en vez del @epo67.local.
+      let email = typedEmail;
+      if (!typedEmail.endsWith('@epo67.local')) {
+        try {
+          const aliasDoc = await db.collection('email_aliases').doc(typedEmail).get();
+          if (aliasDoc.exists) {
+            const realEmail = aliasDoc.data().email;
+            if (realEmail && realEmail !== typedEmail) {
+              console.log('🔁 Alias de correo: ' + typedEmail + ' → ' + realEmail);
+              email = realEmail;
+            }
+          }
+        } catch (e) {
+          console.warn('[entrar] Falló lookup de alias:', e.message);
+          // No bloqueamos: intentamos con el correo tal cual.
+        }
+      }
 
       try {
         const cred = await auth.signInWithEmailAndPassword(email, password);
