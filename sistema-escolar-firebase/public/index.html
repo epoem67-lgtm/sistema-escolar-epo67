@@ -606,24 +606,46 @@
           // Auto-recarga: cuando un SW nuevo toma el control (porque el deploy
           // hizo skipWaiting+clientsClaim), forzamos reload de la pestania.
           // Asi el usuario ve la version nueva sin tocar Cmd+Shift+R.
+          // v8.72 FLUIDEZ: NO recargar a la fuerza a media sesión. Antes, al
+          // detectar versión nueva, se hacía window.location.reload() inmediato
+          // → expulsaba al usuario a mitad de captura ("se traba y refresco").
+          // Ahora: si la pestaña está OCULTA, recarga en silencio; si el usuario
+          // está trabajando, muestra un aviso discreto y él decide cuándo.
           let didReload = false;
-          const forceReload = (reason) => {
+          const doReloadNow = (reason) => {
             if (didReload) return;
             didReload = true;
             console.log('[sw] ' + reason + ' - recargando...');
             window.location.reload();
           };
+          const onUpdateReady = (reason) => {
+            // Pestaña oculta o login screen visible → recargar en silencio.
+            if (document.visibilityState === 'hidden') { doReloadNow(reason + ' (oculta)'); return; }
+            if (document.getElementById('sw-update-bar')) return; // ya avisado
+            const bar = document.createElement('div');
+            bar.id = 'sw-update-bar';
+            bar.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99999;background:#1e293b;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);display:flex;align-items:center;gap:12px;font-family:system-ui,sans-serif;font-size:13px;max-width:92vw;';
+            bar.innerHTML = '<span>✨ Hay una versión nueva del sistema.</span>' +
+              '<button id="sw-update-btn" style="background:#3182ce;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;font-size:13px;">Actualizar</button>' +
+              '<button id="sw-update-dismiss" title="Más tarde" style="background:transparent;color:#cbd5e1;border:none;cursor:pointer;font-size:18px;line-height:1;padding:0 4px;">&times;</button>';
+            document.body.appendChild(bar);
+            document.getElementById('sw-update-btn').onclick = () => doReloadNow('usuario aceptó');
+            document.getElementById('sw-update-dismiss').onclick = () => bar.remove();
+            // Si el usuario cambia de pestaña, aprovechamos para recargar en silencio.
+            const onHide = () => {
+              if (document.visibilityState === 'hidden') {
+                document.removeEventListener('visibilitychange', onHide);
+                doReloadNow('pestaña oculta tras aviso');
+              }
+            };
+            document.addEventListener('visibilitychange', onHide);
+          };
           navigator.serviceWorker.addEventListener('controllerchange', () => {
-            forceReload('controllerchange');
+            onUpdateReady('controllerchange');
           });
-          // v8.44: recarga forzada también cuando el SW nuevo se activa y
-          // manda mensaje SW_ACTIVATED_RELOAD a todas las pestañas (incluso
-          // las que ya tenían un SW controlando, donde controllerchange no
-          // se dispara). Esto cubre el caso en que el usuario no sabe hacer
-          // Ctrl+Shift+R manualmente.
           navigator.serviceWorker.addEventListener('message', (event) => {
             if (event.data && event.data.type === 'SW_ACTIVATED_RELOAD') {
-              forceReload('SW activado v' + (event.data.version || '?'));
+              onUpdateReady('SW activado v' + (event.data.version || '?'));
             }
           });
 
