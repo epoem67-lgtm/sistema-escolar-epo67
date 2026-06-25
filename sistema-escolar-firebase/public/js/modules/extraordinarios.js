@@ -43,6 +43,11 @@ const ExtraordinariosModule = (() => {
   let _filters = { search: '', soloConCasos: false };
   let _expandedCards = new Set();
   let _data = null;
+  // Ventana de captura de extraordinarios (interruptor admin "a placer").
+  // Doc: config/extraordinarioWindow = { open: bool }. Default ABIERTA si el
+  // doc no existe (no rompe el comportamiento previo). Cuando está CERRADA,
+  // los maestros pasan a solo-lectura; admin/subdirector siempre capturan.
+  let _extraWindowOpen = true;
   // BUGFIX (v7.59): el listener se agregaba en cada _renderUI() (cada toggle, cada
   // filtro, cada save). Resultado: con N renders, cada click disparaba N veces el
   // handler → toggle 2 veces = no-op → "no se puede cerrar ni abrir otra tarjeta".
@@ -68,8 +73,11 @@ const ExtraordinariosModule = (() => {
     const user = App.currentUser;
     if (!user) return false;
     const role = user.role;
-    // 1) Admin y subdirector siempre pueden (override administrativo)
+    // 1) Admin y subdirector siempre pueden (override administrativo) —
+    //    incluso con la ventana cerrada, para poder corregir/ajustar.
     if (role === 'admin' || role === 'subdirector') return true;
+    // 1.5) Ventana de captura CERRADA por Dirección → ningún maestro captura.
+    if (!_extraWindowOpen) return false;
     // 2) Cualquier otro rol DEBE tener teacherId, Y debe coincidir con
     //    el teacherId de la asignación. Esto cubre: maestro, orientador_docente,
     //    presidente_academia con asignación real, e interim (porque el interim
@@ -78,6 +86,77 @@ const ExtraordinariosModule = (() => {
     if (!myTeacherId) return false;
     if (!t || !t.teacherId) return false;
     return t.teacherId === myTeacherId;
+  }
+
+  // Banner del estado de la ventana de captura. Admin/subdirector ven el
+  // interruptor para abrir/cerrar a placer; los maestros sólo ven el aviso
+  // cuando está cerrada (en solo-lectura).
+  function _extraWindowBanner() {
+    const role = App.currentUser?.role;
+    const isAdminLike = role === 'admin' || role === 'subdirector';
+    if (_extraWindowOpen) {
+      if (!isAdminLike) return '';
+      return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#f0fdf4;border:1.5px solid #16a34a;border-radius:10px;padding:12px 16px;margin-bottom:14px;">
+        <span class="material-icons-round" style="color:#15803d;font-size:22px;">lock_open</span>
+        <div style="flex:1;min-width:200px;">
+          <div style="font-weight:700;color:#166534;font-size:14px;">Captura de extraordinarios: ABIERTA</div>
+          <div style="font-size:12px;color:#166534;">Los maestros pueden capturar sus extraordinarios.</div>
+        </div>
+        <button data-action="extra-toggle-window" data-open="false"
+          style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:13px;cursor:pointer;">
+          🔒 Cerrar captura
+        </button>
+      </div>`;
+    }
+    // Cerrada
+    if (isAdminLike) {
+      return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#fef2f2;border:1.5px solid #dc2626;border-radius:10px;padding:12px 16px;margin-bottom:14px;">
+        <span class="material-icons-round" style="color:#b91c1c;font-size:22px;">lock</span>
+        <div style="flex:1;min-width:200px;">
+          <div style="font-weight:700;color:#991b1b;font-size:14px;">Captura de extraordinarios: CERRADA</div>
+          <div style="font-size:12px;color:#7f1d1d;">Los maestros NO pueden capturar (solo lectura). Tú (Dirección) sí puedes seguir ajustando.</div>
+        </div>
+        <button data-action="extra-toggle-window" data-open="true"
+          style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:13px;cursor:pointer;">
+          🔓 Abrir captura
+        </button>
+      </div>`;
+    }
+    // Maestro con ventana cerrada → aviso de solo-lectura.
+    return `<div style="display:flex;align-items:center;gap:12px;background:#fffbeb;border:1.5px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:14px;">
+      <span class="material-icons-round" style="color:#b45309;font-size:22px;">lock</span>
+      <div style="font-size:13px;color:#78350f;line-height:1.45;">
+        <strong>La captura de extraordinarios está CERRADA por Dirección.</strong><br>
+        Puedes consultar, pero no registrar ni modificar calificaciones hasta que se vuelva a abrir.
+      </div>
+    </div>`;
+  }
+
+  async function _toggleExtraWindow(open) {
+    const role = App.currentUser?.role;
+    if (role !== 'admin' && role !== 'subdirector') {
+      Toast.show('Solo Dirección puede abrir o cerrar la captura.', 'error');
+      return;
+    }
+    const verb = open ? 'ABRIR' : 'CERRAR';
+    if (!confirm(`¿${verb} la captura de extraordinarios para todos los maestros?`)) return;
+    try {
+      await window.db.collection('config').doc('extraordinarioWindow').set({
+        open: !!open,
+        updatedAt: new Date(),
+        updatedBy: App.currentUser?.uid || '',
+        updatedByName: App.currentUser?.displayName || App.currentUser?.email || ''
+      }, { merge: true });
+      _extraWindowOpen = !!open;
+      try { DB.audit(open ? 'abrir_extraordinarios' : 'cerrar_extraordinarios', 'config', 'extraordinarioWindow', {
+        description: `Captura de extraordinarios ${open ? 'abierta' : 'cerrada'} por ${App.currentUser?.displayName || App.currentUser?.email}`
+      }); } catch (_) {}
+      Toast.show(`Captura de extraordinarios ${open ? 'ABIERTA' : 'CERRADA'}`, 'success');
+      await render();
+    } catch (e) {
+      console.error('toggleExtraWindow:', e);
+      Toast.show('Error al cambiar el estado: ' + (e.message || e), 'error');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -92,6 +171,12 @@ const ExtraordinariosModule = (() => {
     try {
       const user = App.currentUser || {};
       const role = user.role;
+
+      // Estado de la ventana de captura (interruptor admin). Default ABIERTA.
+      try {
+        const wdoc = await window.db.collection('config').doc('extraordinarioWindow').get();
+        _extraWindowOpen = !wdoc.exists || wdoc.data().open !== false;
+      } catch (_) { _extraWindowOpen = true; }
 
       // ─── VISIBILIDAD v8.03 ───
       // Extraordinarios es un módulo CENTRADO EN CAPTURA. Por eso:
@@ -447,6 +532,8 @@ const ExtraordinariosModule = (() => {
         '⚠️ Extraordinarios',
         'Tres oportunidades (1ª, 2ª, 3ª) · El sistema decide automáticamente cuál capturar según el historial · La cal extraordinaria sustituye a la ordinaria'
       ),
+
+      _extraWindowBanner(),
 
       // KPIs por oportunidad
       `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;">
@@ -869,10 +956,12 @@ const ExtraordinariosModule = (() => {
         if (!btn) return;
         // Verificar que el botón es de extraordinarios (tiene una de NUESTRAS acciones)
         const action = btn.dataset.action;
-        const ourActions = ['toggle-card', 'save-extra', 'save-all-extra', 'print-extra'];
+        const ourActions = ['toggle-card', 'save-extra', 'save-all-extra', 'print-extra', 'print-extra-materia', 'extra-toggle-window'];
         if (!ourActions.includes(action)) return;
 
-        if (action === 'toggle-card') {
+        if (action === 'extra-toggle-window') {
+          _toggleExtraWindow(btn.dataset.open === 'true');
+        } else if (action === 'toggle-card') {
           const key = btn.dataset.cardKey;
           if (_expandedCards.has(key)) _expandedCards.delete(key);
           else _expandedCards.add(key);

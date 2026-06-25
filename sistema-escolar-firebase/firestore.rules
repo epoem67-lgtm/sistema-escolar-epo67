@@ -132,6 +132,14 @@ service cloud.firestore {
       );
     }
 
+    // ¿La captura de EXTRAORDINARIOS está abierta? Interruptor manual de
+    // Dirección en config/extraordinarioWindow.open. Default ABIERTA si el
+    // doc no existe (no rompe el comportamiento previo).
+    function isExtraordinarioWindowOpen() {
+      return !exists(/databases/$(database)/documents/config/extraordinarioWindow) ||
+        get(/databases/$(database)/documents/config/extraordinarioWindow).data.open == true;
+    }
+
     // v8.07: ¿la ventana de correcciones está abierta AHORA?
     function isCorrectionsWindowOpen() {
       return exists(/databases/$(database)/documents/config/correctionsWindow) &&
@@ -188,7 +196,7 @@ service cloud.firestore {
     match /config/{docId} {
       allow read: if isAuthenticated();
       allow write: if (
-        docId == 'correctionsWindow' || docId == 'captureWindow'
+        docId == 'correctionsWindow' || docId == 'captureWindow' || docId == 'extraordinarioWindow'
           ? isAdminOrSubdirector()
           : canManageSchoolConfig()
       );
@@ -401,6 +409,8 @@ service cloud.firestore {
               canMaestro()
               && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId)
               && request.resource.data.teacherId == getTeacherId()
+              // Ventana de captura de extraordinarios ABIERTA por Dirección.
+              && isExtraordinarioWindowOpen()
             )
         )
       );
