@@ -1824,10 +1824,17 @@ const Auth = {
               <span class="material-icons-round" style="font-size:36px;color:#15803d;">check_circle</span>
             </div>
             <h3 style="margin:0;font-size:18px;color:#15803d;">¡Listo!</h3>
-            <p style="margin:4px 0 0;color:#475569;font-size:13px;">Tu nueva contraseña temporal es:</p>
+            <p style="margin:4px 0 0;color:#475569;font-size:13px;">Estos son tus datos para entrar:</p>
           </div>
-          <div style="background:#1e293b;border-radius:8px;padding:18px;text-align:center;margin-bottom:12px;">
-            <div style="font-family:'Courier New',monospace;font-size:32px;color:#fff;font-weight:700;letter-spacing:3px;user-select:all;">
+          <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;margin-bottom:10px;">
+            <div style="font-size:12px;color:#1e40af;font-weight:600;">📧 Tu correo para entrar (el del sistema, NO tu correo personal):</div>
+            <div style="font-family:'Courier New',monospace;font-size:16px;color:#1e3a8a;font-weight:700;margin-top:4px;user-select:all;word-break:break-all;">
+              ${Utils.sanitize(state.email)}
+            </div>
+          </div>
+          <div style="background:#1e293b;border-radius:8px;padding:16px;text-align:center;margin-bottom:12px;">
+            <div style="font-size:12px;color:#cbd5e1;margin-bottom:4px;">🔑 Tu contraseña temporal:</div>
+            <div style="font-family:'Courier New',monospace;font-size:30px;color:#fff;font-weight:700;letter-spacing:3px;user-select:all;">
               ${Utils.sanitize(state.tempPassword)}
             </div>
             <button type="button" data-action="fp-copy" class="btn"
@@ -1838,8 +1845,8 @@ const Auth = {
           <div style="background:#fef3c7;border-left:3px solid #d97706;border-radius:4px;padding:10px 14px;font-size:12.5px;color:#78350f;line-height:1.55;">
             <strong>Importante:</strong>
             <ol style="margin:6px 0 0 18px;padding:0;line-height:1.7;">
-              <li>Anota o copia esta contraseña <strong>YA</strong>.</li>
-              <li>Cierra este aviso y entra con tu correo + esta contraseña.</li>
+              <li>Anota o copia estos datos <strong>YA</strong>.</li>
+              <li>Entra con el <strong>correo del sistema de arriba</strong> (no tu Gmail) + esta contraseña.</li>
               <li>El sistema te pedirá cambiar la contraseña por una propia.</li>
             </ol>
           </div>
