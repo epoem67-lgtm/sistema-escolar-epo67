@@ -969,7 +969,12 @@ const PartialCloseModule = (() => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(23, 59, 0, 0);
-    const defaultVal = tomorrow.toISOString().slice(0, 16);
+    // BUG FIX: NO usar toISOString() (devuelve UTC). El input datetime-local
+    // interpreta su valor como hora LOCAL, así que toISOString corría el
+    // default +6h (México UTC-6): "24 jun 23:59" salía como "25 jun 05:59" y
+    // los cierres ocurrían a horas equivocadas. Construir desde partes locales.
+    const _pad = (n) => String(n).padStart(2, '0');
+    const defaultVal = `${tomorrow.getFullYear()}-${_pad(tomorrow.getMonth() + 1)}-${_pad(tomorrow.getDate())}T${_pad(tomorrow.getHours())}:${_pad(tomorrow.getMinutes())}`;
 
     const bodyHTML = `
       <p>Programar cierre automático de <strong>${Utils.sanitize(partialName)}</strong>.</p>
