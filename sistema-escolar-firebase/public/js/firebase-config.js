@@ -23,6 +23,17 @@ const storage = firebase.storage();
 // Usadas para reset autonomo de contrasenas (sin email, sin Olivia).
 const functions = firebase.app().functions('us-central1');
 
+// Exponer en window. Varios modulos (dashboard, grades, my-lists, audit-data,
+// examen-extraordinario) referencian window.db / window.auth asumiendo que
+// existian, pero un `const` de nivel superior NO se cuelga de window → estaban
+// undefined y esas rutas se saltaban en silencio (banner de correcciones
+// pendientes, horas en el calculo de riesgo, reparador de materias huerfanas,
+// etc.). Esto las reconecta de un solo lugar.
+window.db = db;
+window.auth = auth;
+window.storage = storage;
+window.functions = functions;
+
 // ═══════════════════════════════════════════════════════════════
 // PERSISTENCIA OFFLINE
 // Cachea documentos en IndexedDB para reducir reads al servidor.
