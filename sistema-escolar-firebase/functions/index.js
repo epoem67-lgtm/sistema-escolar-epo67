@@ -180,6 +180,99 @@ exports.resetPasswordWithSecurityQuestion = onCall(
 );
 
 // ═══════════════════════════════════════════════════════════════
+// FUNCTION 2b: resetPasswordWithRecoveryEmail
+// Auto-servicio para maestros SIN pregunta de seguridad (97% de los
+// usuarios). Verifica la identidad contra el `recoveryEmail` personal
+// guardado en su doc (62 de 67 usuarios lo tienen). Si coincide,
+// genera contrasena temporal y la retorna.
+//
+// Seguridad: factor de conocimiento (su correo personal) + mismo
+// lockout de 3 intentos/1h que la pregunta de seguridad. Respuestas
+// genericas para no filtrar si la cuenta existe (anti-enumeracion).
+// ═══════════════════════════════════════════════════════════════
+exports.resetPasswordWithRecoveryEmail = onCall(
+  { region: 'us-central1', maxInstances: 10, cors: true },
+  async (request) => {
+    const { email, recoveryEmail } = request.data || {};
+
+    if (!email || !recoveryEmail) {
+      throw new HttpsError('invalid-argument', 'Faltan datos.');
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanRecovery = String(recoveryEmail).trim().toLowerCase();
+
+    // Mensaje generico compartido (no revela si la cuenta existe)
+    const GENERIC_FAIL = 'El correo de recuperación no coincide con el registrado en tu cuenta.';
+
+    // Buscar usuario por email de login
+    let userRecord;
+    try {
+      userRecord = await auth.getUserByEmail(cleanEmail);
+    } catch (e) {
+      await logAttempt(null, false, `recovery-email-not-found:${cleanEmail}`);
+      throw new HttpsError('permission-denied', GENERIC_FAIL);
+    }
+
+    const userDocRef = db.collection('users').doc(userRecord.uid);
+    const userDoc = await userDocRef.get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+
+    // Verificar bloqueo por intentos fallidos
+    if (userData.resetLockedUntil) {
+      const lockedUntil = userData.resetLockedUntil.toDate
+        ? userData.resetLockedUntil.toDate()
+        : new Date(userData.resetLockedUntil);
+      if (lockedUntil > new Date()) {
+        const mins = Math.ceil((lockedUntil - new Date()) / 60000);
+        throw new HttpsError('resource-exhausted',
+          `Demasiados intentos fallidos. Espera ${mins} minuto(s) antes de volver a intentar.`);
+      }
+    }
+
+    const storedRecovery = String(userData.recoveryEmail || '').trim().toLowerCase();
+
+    // Sin recoveryEmail registrado, o no coincide → fallo generico + contador
+    if (!storedRecovery || storedRecovery !== cleanRecovery) {
+      const failedCount = (userData.resetFailedAttempts || 0) + 1;
+      const update = { resetFailedAttempts: failedCount };
+      if (failedCount >= 3) {
+        update.resetLockedUntil = new Date(Date.now() + 60 * 60 * 1000); // +1h
+        update.resetFailedAttempts = 0;
+      }
+      try { await userDocRef.set(update, { merge: true }); } catch (_) { /* doc puede no existir */ }
+      await logAttempt(userRecord.uid, false, storedRecovery ? 'recovery-mismatch' : 'no-recovery-on-file');
+      const left = Math.max(0, 3 - failedCount);
+      throw new HttpsError('permission-denied',
+        GENERIC_FAIL + (left > 0 ? ` Te queda(n) ${left} intento(s).` : ''));
+    }
+
+    // Coincide → resetear
+    const newPassword = generateTempPassword();
+    try {
+      await auth.updateUser(userRecord.uid, { password: newPassword });
+      await userDocRef.set({
+        mustChangePassword: true,
+        resetFailedAttempts: 0,
+        resetLockedUntil: null,
+        lastPasswordResetAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+      await logAttempt(userRecord.uid, true, 'auto-reset-via-recovery-email');
+
+      return {
+        success: true,
+        password: newPassword,
+        email: cleanEmail,
+        displayName: userRecord.displayName || cleanEmail
+      };
+    } catch (e) {
+      console.error('[resetPasswordWithRecoveryEmail] falla al actualizar:', e);
+      throw new HttpsError('internal', 'Error al aplicar la nueva contrasena. Reporta a Olivia.');
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
 // FUNCTION 3: adminResetPassword
 // Un ADMIN logueado resetea la contrasena de cualquier usuario con
 // UN CLIC (sin terminal). Genera una temporal dictable por WhatsApp,

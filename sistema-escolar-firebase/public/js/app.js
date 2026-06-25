@@ -1771,7 +1771,7 @@ const Auth = {
       if (state.step === 'email') {
         return `
           <div style="font-size:13.5px;color:#1f2937;line-height:1.55;margin-bottom:16px;">
-            Vamos a recuperar tu contraseña SIN enviar correo. Solo necesitas responder tu pregunta de seguridad.
+            Vamos a recuperar tu contraseña SIN enviar correo. Verificaremos tu identidad con tu pregunta de seguridad o con tu correo personal de recuperación.
           </div>
           <div class="form-group">
             <label for="fpEmail" style="font-weight:600;font-size:13px;">Tu correo</label>
@@ -1850,19 +1850,30 @@ const Auth = {
         `;
       }
 
-      if (state.step === 'no-question') {
-        const waMsg = `Hola Olivia, no puedo entrar al sistema escolar y mi cuenta (${state.email}) no tiene pregunta de seguridad configurada. Necesito que me ayudes con un reset manual. Gracias.`;
+      if (state.step === 'recovery') {
+        const waMsg = `Hola Olivia, no puedo entrar al sistema escolar (mi cuenta: ${state.email}) y no recuerdo mi correo de recuperación. Necesito que me ayudes con un reset manual. Gracias.`;
         const waUrl = `https://wa.me/525510782357?text=${encodeURIComponent(waMsg)}`;
         return `
-          <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:14px;margin-bottom:14px;">
-            <div style="font-weight:700;color:#991b1b;font-size:14px;margin-bottom:6px;">😕 Tu cuenta aún no tiene pregunta de seguridad</div>
-            <div style="font-size:13px;color:#7f1d1d;line-height:1.55;">
-              El sistema te va a pedir configurar una la próxima vez que entres. Mientras tanto, escríbele a Olivia para que te resetee la contraseña a mano:
-            </div>
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;color:#0369a1;">
+            <strong>Cuenta:</strong> ${Utils.sanitize(state.email)}
           </div>
+          <div style="font-size:13px;color:#1f2937;line-height:1.55;margin-bottom:12px;">
+            Tu cuenta no tiene pregunta de seguridad. Verifica tu identidad con el <strong>correo personal de recuperación</strong> que registraste (tu Gmail/correo propio, no el del sistema).
+          </div>
+          <div class="form-group">
+            <label for="fpRecovery" style="font-weight:600;font-size:13px;">Tu correo personal de recuperación</label>
+            <input type="email" id="fpRecovery" placeholder="tunombre@gmail.com" autocomplete="email" autocapitalize="off"
+              style="font-size:15px;padding:11px 12px;width:100%;">
+          </div>
+          <div id="fpInfo" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px;line-height:1.5;"></div>
+          <button type="button" data-action="fp-verify-recovery" class="btn btn-primary"
+            style="width:100%;padding:12px;font-size:14.5px;font-weight:700;margin-top:14px;">
+            🔓 Verificar y recuperar
+          </button>
+          <div style="text-align:center;font-size:12px;color:#94a3b8;margin:12px 0 8px;">¿No recuerdas tu correo de recuperación?</div>
           <a href="${waUrl}" target="_blank" style="text-decoration:none;">
-            <button type="button" class="btn" style="width:100%;padding:13px;font-size:14.5px;background:#25D366;color:#fff;border:none;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;">
-              <span class="material-icons-round" style="font-size:20px;">chat</span>
+            <button type="button" class="btn" style="width:100%;padding:11px;font-size:13.5px;background:#25D366;color:#fff;border:none;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;">
+              <span class="material-icons-round" style="font-size:19px;">chat</span>
               Pedir reset manual a Olivia
             </button>
           </a>
@@ -1902,6 +1913,7 @@ const Auth = {
           if (action === 'fp-back') { state.step = 'email'; renderStep(); return; }
           if (action === 'fp-check-email') await checkEmail();
           if (action === 'fp-verify') await verifyAnswer();
+          if (action === 'fp-verify-recovery') await verifyRecovery();
           if (action === 'fp-copy') {
             try {
               await navigator.clipboard.writeText(state.tempPassword);
@@ -1942,8 +1954,9 @@ const Auth = {
       try {
         const data = await _callFn('getSecurityQuestion', { email });
         if (!data.hasSecurityQuestion) {
-          // Cuenta sin pregunta o cuenta no encontrada (no revelamos cual)
-          state.step = 'no-question';
+          // Sin pregunta de seguridad → ofrecer auto-servicio por correo
+          // de recuperación (con WhatsApp a Olivia como fallback).
+          state.step = 'recovery';
           renderStep();
           return;
         }
@@ -1977,6 +1990,34 @@ const Auth = {
         }
       } catch (err) {
         console.warn('[forgotPassword] verify:', err);
+        if (btn) { btn.disabled = false; btn.textContent = '🔓 Verificar y recuperar'; }
+        const msg = Utils.sanitize(err.message || 'Error al verificar.');
+        showMsg('err', '⚠ ' + msg);
+      }
+    };
+
+    const verifyRecovery = async () => {
+      const input = document.getElementById('fpRecovery');
+      const recoveryEmail = (input?.value || '').trim().toLowerCase();
+      if (!recoveryEmail || !recoveryEmail.includes('@')) {
+        showMsg('err', '⚠ Escribe tu correo personal de recuperación.'); return;
+      }
+
+      const btn = document.querySelector('[data-action="fp-verify-recovery"]');
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Verificando...'; }
+
+      try {
+        const data = await _callFn('resetPasswordWithRecoveryEmail', { email: state.email, recoveryEmail });
+        if (data.success && data.password) {
+          state.tempPassword = data.password;
+          state.step = 'success';
+          renderStep();
+        } else {
+          if (btn) { btn.disabled = false; btn.textContent = '🔓 Verificar y recuperar'; }
+          showMsg('err', '⚠ No se pudo procesar. Intenta de nuevo.');
+        }
+      } catch (err) {
+        console.warn('[forgotPassword] verifyRecovery:', err);
         if (btn) { btn.disabled = false; btn.textContent = '🔓 Verificar y recuperar'; }
         const msg = Utils.sanitize(err.message || 'Error al verificar.');
         showMsg('err', '⚠ ' + msg);
