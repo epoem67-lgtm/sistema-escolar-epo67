@@ -202,7 +202,12 @@ const App = {
     try {
       const role = App.currentUser?.role;
       const fs = firebase.firestore();
-      const uid = firebase.auth().currentUser?.uid;
+      // En modo "Ver como", contar las correcciones del docente impersonado
+      // (no las del admin real) para que el badge coincida con su vista.
+      const _cu = App.currentUser || {};
+      const uid = (_cu._impersonating && _cu._impersonatedUid)
+        ? _cu._impersonatedUid
+        : firebase.auth().currentUser?.uid;
       if (!uid) return;
 
       // ─── Para maestros: solicitudes propias con cambio de status ───

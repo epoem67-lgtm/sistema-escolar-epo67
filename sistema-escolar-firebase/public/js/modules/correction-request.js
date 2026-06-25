@@ -1246,7 +1246,16 @@ const CorrectionRequestModule = (() => {
     const root = document.getElementById('cr-recent');
     if (!root) return;
     try {
-      const uid = firebase.auth().currentUser?.uid;
+      // En modo "Ver como" (impersonación) la sesión real sigue siendo la del
+      // admin, así que firebase.auth().uid es el del admin. Para que la lista
+      // refleje EXACTAMENTE lo que ve el docente impersonado (solo SUS
+      // correcciones), usamos su uid impersonado. Sin esto, las solicitudes
+      // que el admin creó (requestedBy = admin) se filtran como "propias" y
+      // aparecen en la vista del maestro, confundiendo (parecen suyas y no lo son).
+      const _cu = App.currentUser || {};
+      const uid = (_cu._impersonating && _cu._impersonatedUid)
+        ? _cu._impersonatedUid
+        : firebase.auth().currentUser?.uid;
       if (!uid) {
         _renderMyRecent({});
         return;
@@ -1307,6 +1316,18 @@ const CorrectionRequestModule = (() => {
       });
       console.log('[correction-request] cargadas', docs.length, 'solicitudes,', Object.keys(byFolio).length, 'folios');
       _renderMyRecent(byFolio);
+
+      // Marcar como "visto": al abrir este módulo, el usuario ya vio el estado
+      // actual de sus solicitudes → limpiar el badge rojo del menú. Volverá a
+      // aparecer SOLO cuando una solicitud cambie de estado DESPUÉS de ahora
+      // (lo nuevo de verdad). No marcamos durante impersonación para no alterar
+      // el estado "visto" del admin mientras ve la vista de otro docente.
+      if (!_cu._impersonating) {
+        try {
+          localStorage.setItem('epo67_lastSeenCorrections', String(Date.now()));
+          App._setNavBadge?.('correction-request', 0);
+        } catch (_) { /* localStorage bloqueado: no crítico */ }
+      }
     } catch (e) {
       console.error('Error cargando solicitudes recientes:', e);
       // Mostrar error visible al maestro en lugar de quedarse en silencio
