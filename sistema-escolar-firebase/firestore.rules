@@ -155,6 +155,19 @@ service cloud.firestore {
         );
     }
 
+    // ¿El maestro tiene permiso para PEDIR corrección de este parcial,
+    // otorgado por Dirección a un docente específico SIN abrir la ventana
+    // global de correcciones? docId determinístico `${partial}_${teacherId}`.
+    // Válido si existe Y (no tiene closesAt o closesAt > ahora).
+    function teacherHasCorrectionGrant(partial) {
+      return canMaestro() &&
+        exists(/databases/$(database)/documents/correctionGrants/$(partial + '_' + getTeacherId())) &&
+        (
+          get(/databases/$(database)/documents/correctionGrants/$(partial + '_' + getTeacherId())).data.closesAt == null ||
+          get(/databases/$(database)/documents/correctionGrants/$(partial + '_' + getTeacherId())).data.closesAt > request.time
+        );
+    }
+
     // El maestro puede escribir grades si el parcial NO está cerrado
     // para el grado del grupo, o si tiene override vigente.
     function canMaestroWriteGradesFor(partial) {
@@ -443,6 +456,15 @@ service cloud.firestore {
       allow write: if isAdminOrSubdirector();
     }
 
+    // Permiso INDIVIDUAL para PEDIR corrección de un parcial cerrado sin abrir
+    // la ventana global. docId determinístico `${partial}_${teacherId}`.
+    // Lo otorga/retira Dirección; cualquier autenticado puede leer (las reglas
+    // de gradeCorrections hacen get() para validar la solicitud del maestro).
+    match /correctionGrants/{grantId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdminOrSubdirector();
+    }
+
     // ─── RESPALDO EN LA NUBE DE BORRADORES ─────────────────────────
     // v8.36: cada vez que un maestro teclea calificaciones, el editor
     // escribe un draft en localStorage Y aquí en Firestore con docId
@@ -615,7 +637,9 @@ service cloud.firestore {
                 // v8.07 — bloqueos adicionales para maestros:
                 && 'grado' in request.resource.data
                 && isPartialLockedForGrade(request.resource.data.partial, request.resource.data.grado)
-                && isCorrectionsWindowOpen())
+                // Ventana GLOBAL abierta, O permiso INDIVIDUAL otorgado por
+                // Dirección a este docente para este parcial (correctionGrants).
+                && (isCorrectionsWindowOpen() || teacherHasCorrectionGrant(request.resource.data.partial)))
             )
           ) ||
           // FLUJO 2 (aplicación directa): solo admin/subdirector,

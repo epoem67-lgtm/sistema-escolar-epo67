@@ -10,6 +10,7 @@
 
 const PartialCloseModule = (() => {
   let overrides = [];
+  let correctionGrants = []; // permisos individuales para PEDIR corrección
 
   async function render() {
     const container = document.getElementById('moduleContainer');
@@ -448,6 +449,12 @@ const PartialCloseModule = (() => {
     } catch (e) {
       overrides = [];
     }
+    try {
+      const gsnap = await db.collection('correctionGrants').get();
+      correctionGrants = gsnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    } catch (e) {
+      correctionGrants = [];
+    }
   }
 
   async function loadAndRenderPartials() {
@@ -652,6 +659,39 @@ const PartialCloseModule = (() => {
       }
     }
 
+    // Permisos individuales de SOLICITUD de corrección (correctionGrants).
+    let grantsHTML = '';
+    if (isLocked && isAdmin) {
+      const now = new Date();
+      const activeGrants = correctionGrants.filter(g => {
+        if (g.partialId !== partial.id) return false;
+        if (!g.closesAt) return true;
+        const c = g.closesAt.toDate ? g.closesAt.toDate() : new Date(g.closesAt);
+        return c > now;
+      });
+      if (activeGrants.length > 0) {
+        grantsHTML = `
+          <div style="margin-top:8px;padding:6px 8px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:6px;">
+            <div style="font-size:10px;font-weight:600;color:#166534;margin-bottom:4px;">Pueden PEDIR corrección:</div>
+            ${activeGrants.map(g => {
+              const expInfo = g.closesAt
+                ? `<span style="font-size:9px;color:#6b7280;">hasta ${_formatDate(g.closesAt)}</span>`
+                : '<span style="font-size:9px;color:#6b7280;">sin expiración</span>';
+              return `
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                <div>
+                  <span style="font-weight:600;font-size:11px;">${Utils.sanitize(Utils.displayName(g.teacherName))}</span>
+                  ${expInfo}
+                </div>
+                <button class="btn btn-sm" style="color:#dc2626;padding:2px 6px;font-size:11px;" data-action="remove-correction-grant" data-grant-id="${g.id}">&times;</button>
+              </div>`;
+            }).join('')}
+          </div>
+        `;
+      }
+    }
+    overridesHTML += grantsHTML;
+
     // v8.07: estado por GRADO (lockedByGrade)
     // Si el doc tiene lockedByGrade, mostrar matriz por grado. Si no, fallback global.
     const lockedByGrade = (data.lockedByGrade && typeof data.lockedByGrade === 'object') ? data.lockedByGrade : {};
@@ -698,8 +738,15 @@ const PartialCloseModule = (() => {
                   data-action="teacher-override"
                   data-partial-id="${partial.id}"
                   data-partial-name="${Utils.sanitize(data.nombre || partial.nombre)}">
-            <span class="material-icons-round" style="font-size:14px;vertical-align:middle;margin-right:4px;">person_add</span>
-            Desbloquear Docente
+            <span class="material-icons-round" style="font-size:14px;vertical-align:middle;margin-right:4px;">edit</span>
+            Dejar que un docente CAPTURE
+          </button>
+          <button class="btn btn-outline btn-sm w-full"
+                  data-action="correction-grant"
+                  data-partial-id="${partial.id}"
+                  data-partial-name="${Utils.sanitize(data.nombre || partial.nombre)}">
+            <span class="material-icons-round" style="font-size:14px;vertical-align:middle;margin-right:4px;">rate_review</span>
+            Dejar que un docente PIDA corrección
           </button>
         ` : `
           <button class="btn btn-outline btn-sm w-full"
@@ -759,12 +806,16 @@ const PartialCloseModule = (() => {
         showGradeLockConfirm(partialId, partialName, grado, action === 'lock-grade');
       } else if (action === 'teacher-override') {
         showTeacherOverrideModal(partialId, partialName);
+      } else if (action === 'correction-grant') {
+        showCorrectionGrantModal(partialId, partialName);
       } else if (action === 'schedule-close' || action === 'reschedule-close') {
         showScheduleCloseModal(partialId, partialName);
       } else if (action === 'cancel-schedule') {
         cancelScheduledClose(partialId, partialName);
       } else if (action === 'remove-override') {
         removeOverride(btn.dataset.overrideId);
+      } else if (action === 'remove-correction-grant') {
+        removeCorrectionGrant(btn.dataset.grantId);
       } else if (action === 'cw-edit') {
         // BUGFIX v5.89: el listener directo en renderCaptureWindowPanel se
         // perdía porque bindEvents() clona el container. Ahora se maneja
@@ -962,6 +1013,73 @@ const PartialCloseModule = (() => {
     });
   }
 
+  // Otorga a UN docente permiso para PEDIR corrección de este parcial cerrado,
+  // sin abrir la ventana global a todos. Escribe correctionGrants/{partial}_{teacherId}.
+  // El docente verá el parcial habilitado en "Cambios de Calificación" y podrá
+  // mandar su solicitud, que Dirección aprueba como cualquier corrección.
+  async function showCorrectionGrantModal(partialId, partialName) {
+    const teachers = await Store.getTeachers();
+    const activeTeachers = teachers.filter(t => t.status === 'active')
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    const teacherOptions = activeTeachers.map(t =>
+      `<option value="${t.id}" data-name="${Utils.sanitize(t.nombre)}">${Utils.sanitize(Utils.displayName ? Utils.displayName(t.nombre) : t.nombre)} (${Utils.sanitize(t.turno || '')})</option>`
+    ).join('');
+
+    const bodyHTML = `
+      <p>Permite a un docente <strong>pedir corrección</strong> de <strong>${Utils.sanitize(partialName)}</strong> (cerrado) sin abrir la ventana general a todos.</p>
+      <div style="background:#eff6ff;border-left:3px solid #3182ce;padding:8px 12px;font-size:12px;color:#1e40af;border-radius:4px;margin-bottom:12px;line-height:1.45;">
+        El docente NO captura directo: manda una <strong>solicitud</strong> que tú apruebas en "Cambios de Calificación".
+      </div>
+      <div class="form-group">
+        <label>Docente</label>
+        <select id="grantTeacher">
+          <option value="">Seleccionar docente...</option>
+          ${teacherOptions}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Cierra el (opcional)</label>
+        <input type="datetime-local" id="grantExpiry">
+        <p class="text-muted" style="font-size:11px;margin-top:4px;">Si lo dejas vacío, el permiso queda hasta que lo retires manualmente.</p>
+      </div>
+    `;
+    const footerHTML = `
+      <button class="btn btn-outline" id="cancelGrant">Cancelar</button>
+      <button class="btn btn-primary" id="confirmGrant">Otorgar permiso</button>
+    `;
+    Modal.open('Permitir solicitud de corrección', bodyHTML, footerHTML);
+    document.getElementById('cancelGrant').addEventListener('click', () => Modal.close());
+    document.getElementById('confirmGrant').addEventListener('click', async () => {
+      const select = document.getElementById('grantTeacher');
+      const teacherId = select.value;
+      if (!teacherId) { Toast.show('Selecciona un docente', 'warning'); return; }
+      const teacherName = select.options[select.selectedIndex].dataset.name;
+      const expiryInput = document.getElementById('grantExpiry').value;
+      const closesAt = expiryInput ? new Date(expiryInput) : null;
+      try {
+        await db.collection('correctionGrants').doc(`${partialId}_${teacherId}`).set({
+          partialId,
+          teacherId,
+          teacherName,
+          closesAt,
+          grantedBy: App.currentUser.uid,
+          grantedByName: App.currentUser.displayName || App.currentUser.email,
+          grantedAt: new Date()
+        });
+        DB.audit('otorgar_permiso_correccion', 'parcial', partialId, {
+          description: `Permiso de solicitud de corrección otorgado a ${teacherName} en ${partialName}`
+        });
+        Modal.close();
+        Toast.show(`${teacherName} ya puede pedir corrección de ${partialName}`, 'success');
+        await loadAndRenderPartials();
+        bindEvents();
+      } catch (e) {
+        console.error('correction-grant:', e);
+        Toast.show('Error al otorgar permiso: ' + (e.message || e), 'error');
+      }
+    });
+  }
+
   // v8.08: programar cierre por grado(s) — útil cuando un parcial tiene fechas
   // distintas por nivel (ej. P3: 3° cierra 12 jun, 1°+2° cierran 24 jun).
   function showScheduleCloseModal(partialId, partialName) {
@@ -1105,6 +1223,18 @@ const PartialCloseModule = (() => {
     } catch (error) {
       console.error('Error removing override:', error);
       Toast.show('Error al retirar acceso', 'error');
+    }
+  }
+
+  async function removeCorrectionGrant(grantId) {
+    try {
+      await db.collection('correctionGrants').doc(grantId).delete();
+      Toast.show('Permiso de corrección retirado', 'success');
+      await loadAndRenderPartials();
+      bindEvents();
+    } catch (error) {
+      console.error('Error removing correction grant:', error);
+      Toast.show('Error al retirar permiso', 'error');
     }
   }
 
