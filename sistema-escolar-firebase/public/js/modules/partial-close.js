@@ -913,23 +913,28 @@ const PartialCloseModule = (() => {
         update.closedAt = null;
       }
 
-      // BUG FIX: al ABRIR un grado, limpiar su cierre programado. Sin esto el
-      // auto-cierre del render (loadAndRenderPartials) ve una fecha programada
-      // ya vencida y RE-CIERRA el grado al instante — el admin "abre" y se
-      // vuelve a cerrar solo, obligándolo a mover/cancelar fechas a mano.
-      // El toggle global (executeAction) ya hacía esto; el por-grado faltaba.
+      // GARANTÍA: al ABRIR un grado, eliminar CUALQUIER cierre programado que
+      // pudiera re-cerrarlo solo en el siguiente render (loadAndRenderPartials).
+      // Sin esto, el admin "abre" y el auto-cierre lo vuelve a cerrar, obligándolo
+      // a mover/cancelar fechas a mano. Un grado abierto manualmente NUNCA debe
+      // re-cerrarse por una fecha programada — la acción manual siempre gana.
       if (!isLock) {
+        const g = String(grado);
         const schedBG = (current.scheduledCloseByGrade && typeof current.scheduledCloseByGrade === 'object')
           ? { ...current.scheduledCloseByGrade } : {};
-        if (String(grado) in schedBG) {
-          delete schedBG[String(grado)];
-          update.scheduledCloseByGrade = schedBG;
-        }
-        // El scheduledCloseAt global cierra los 3 grados al render si ya venció.
+        // 1) Quitar el cierre programado de ESTE grado (si lo tenía).
+        delete schedBG[g];
+        // 2) El scheduledCloseAt GLOBAL cierra los 3 grados al vencer — cerraría
+        //    también el que acabamos de abrir. Lo "bajamos" a los OTROS grados
+        //    (preservando su intención de cierre) y limpiamos el global. Así el
+        //    grado abierto queda sin ninguna fecha que lo afecte.
         if (current.scheduledCloseAt) {
-          const sd = current.scheduledCloseAt.toDate ? current.scheduledCloseAt.toDate() : new Date(current.scheduledCloseAt);
-          if (sd <= new Date()) update.scheduledCloseAt = null;
+          ['1', '2', '3'].forEach(other => {
+            if (other !== g && !(other in schedBG)) schedBG[other] = current.scheduledCloseAt;
+          });
+          update.scheduledCloseAt = null;
         }
+        update.scheduledCloseByGrade = schedBG;
       }
 
       await docRef.set(update, { merge: true });
