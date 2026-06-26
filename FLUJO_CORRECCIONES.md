@@ -59,7 +59,10 @@ MAESTRO pide  →  (papel firmado por la Directora)  →  DIRECCIÓN aplica  →
    exacta**, no un "error" sin explicación.
 4. **ID determinístico de calificación** — `{studentId}_{subjectId}_{partial}` es la única fuente
    de verdad; evita documentos duplicados y promedios inconsistentes.
-5. **Reintento idempotente** — si algo se interrumpe, volver a darle "Aplicar" no daña nada: si la
+5. **Aplicación ATÓMICA** — por cada alumno, cambiar la calificación y marcar la solicitud como
+   "aplicada" se guardan **juntos en una sola operación** (batch de Firestore): o se guardan los
+   dos, o ninguno. Nunca queda el estado raro de "cal cambiada pero solicitud pendiente".
+6. **Reintento idempotente** — si algo se interrumpe, volver a darle "Aplicar" no daña nada: si la
    cal ya está en el valor correcto, solo termina de marcar la solicitud como aplicada.
 
 ## 4. Si algo sale mal (guía rápida para Dirección)

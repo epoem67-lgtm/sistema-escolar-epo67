@@ -1878,6 +1878,9 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
         const isReplication = it.source === 'replication_request';
         const repRubros = isReplication ? (it.replicationRubros || {}) : null;
 
+        // ATÓMICO: la cal se ESCRIBE junto con el marcado "aplicada" en un solo
+        // batch (ambos o ninguno). Aquí solo PREPARAMOS la escritura de la cal.
+        let gradeWrite;
         if (!gradeSnap.exists) {
           // Crear con ID determinístico (no .add() que genera random).
           const payload = {
@@ -1901,7 +1904,7 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
             if (repRubros.ex != null) payload.ex = repRubros.ex;
             if (it.replicationFaltas != null) payload.faltas = it.replicationFaltas;
           }
-          await gradeRef.set(payload);
+          gradeWrite = (b) => b.set(gradeRef, payload);
         } else {
           const existing = gradeSnap.data() || {};
           const currentReal = Number(existing.cal);
@@ -1947,20 +1950,26 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
             if (repRubros.ex != null) updates.ex = repRubros.ex;
             if (it.replicationFaltas != null) updates.faltas = it.replicationFaltas;
           }
-          await gradeRef.update(updates);
+          gradeWrite = (b) => b.update(gradeRef, updates);
         }
 
-        // 2) Marcar solicitud como aplicada (con oficio si lo capturo)
-        const updates = {
+        // 2) ATÓMICO: la cal (paso 1) y el marcado "aplicada" (paso 2) se
+        //    guardan JUNTOS en un solo batch. Si algo falla, NO se escribe nada
+        //    (estado limpio, reintentable) — nunca queda "cal cambiada pero
+        //    solicitud pendiente".
+        const corrUpdates = {
           status: 'applied',
           appliedAt: now,
           appliedBy: uid,
-          appliedByName: _currentUserName(),
+          appliedByName: _currentUserName(), // blindado (try/catch, no truena)
         };
         if (typeof oficio === 'string' && oficio.trim()) {
-          updates.authOficio = oficio.trim();
+          corrUpdates.authOficio = oficio.trim();
         }
-        await db.collection('gradeCorrections').doc(it.id).update(updates);
+        const batch = db.batch();
+        gradeWrite(batch);
+        batch.update(db.collection('gradeCorrections').doc(it.id), corrUpdates);
+        await batch.commit();
 
         // 3) Bitacora
         if (typeof DB !== 'undefined' && DB.audit) {
