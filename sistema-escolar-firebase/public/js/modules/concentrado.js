@@ -933,7 +933,12 @@ html, body { margin:0; padding:0; height:100%; }
   // Devuelve { sheets: [{name, aoa, merges, cols}] } que se serializa en un Web Worker
   // (XlsxWorker.serialize) o en main thread como fallback. Antes usaba XLSX directamente
   // en el main thread bloqueando la UI durante exports masivos.
-  function buildOrientacionWorkbookSpec(targetGroups, partial, partialLabel, cicloEscolar, turno) {
+  // ASYNC: carga horas por grupo (await en línea ~967). Todos los callers la
+  // esperan con `await`. Bug histórico (jun-2026): se le agregó un `await`
+  // interno sin marcar la función async → SyntaxError que tronaba TODO
+  // concentrado.js al parsear (módulo no registraba → orientadores no podían
+  // generar su concentrado/Excel). Corregido v8.80.
+  async function buildOrientacionWorkbookSpec(targetGroups, partial, partialLabel, cicloEscolar, turno) {
     if (!turno && targetGroups.length > 0) turno = targetGroups[0].turno;
     const sheets = [];
     const allBest = []; // para hoja "mejores promedios"
@@ -1865,7 +1870,7 @@ html, body { margin:0; padding:0; height:100%; }
       Toast.show(`Generando concentrado para ${targetGroups.length} grupo(s)...`, 'info');
       console.log('[exportOrientación]', { turno, grado, grupoSel, partial, targetGroups: targetGroups.length, subsForGrado: subsForGrado.length, students: allStudents.length, grades: allGrades.length });
 
-      const spec = buildOrientacionWorkbookSpec(targetGroups, partial, partialLabel, cicloEscolar, turno);
+      const spec = await buildOrientacionWorkbookSpec(targetGroups, partial, partialLabel, cicloEscolar, turno);
       const groupTag = grupoSel ? targetGroups[0].nombre : `${grado}\u00ba`;
       const fname = `Concentrado_Orientación_${turno}_${groupTag}_${partial}.xlsx`;
       const buf = await XlsxWorker.serialize(spec);
@@ -2296,7 +2301,7 @@ html, body { margin:0; padding:0; height:100%; }
         const groupsOri = byOrientador[ori];
 
         // Construir spec con portada al inicio
-        const spec = buildOrientacionWorkbookSpec(groupsOri, partial, partialLabel, cicloEscolar, turno);
+        const spec = await buildOrientacionWorkbookSpec(groupsOri, partial, partialLabel, cicloEscolar, turno);
         const portada = {
           name: 'Portada',
           aoa: [
@@ -2480,7 +2485,7 @@ html, body { margin:0; padding:0; height:100%; }
     }
 
     Toast.show('Generando Excel…', 'info', 4000);
-    const spec = buildOrientacionWorkbookSpec(myGroups, partial, partialLabel, cicloEscolar, turno);
+    const spec = await buildOrientacionWorkbookSpec(myGroups, partial, partialLabel, cicloEscolar, turno);
     const portada = {
       name: 'Portada',
       aoa: [
@@ -2619,7 +2624,7 @@ html, body { margin:0; padding:0; height:100%; }
     for (let oi = 0; oi < orientadores.length; oi++) {
       const { display: ori, groups: groupsOri } = orientadores[oi];
 
-      const spec = buildOrientacionWorkbookSpec(groupsOri, partial, partialLabel, cicloEscolar, turno);
+      const spec = await buildOrientacionWorkbookSpec(groupsOri, partial, partialLabel, cicloEscolar, turno);
       // Portada al inicio
       const portada = {
         name: 'Portada',
