@@ -28,7 +28,12 @@ const GradeCorrectionsModule = (function () {
     return (Utils.displayName ? Utils.displayName(name) : name) || '';
   }
   function _currentUserName() {
-    const raw = _currentUserName();
+    // BUG FIX (jun 2026): antes hacía `const raw = _currentUserName()` → se
+    // llamaba a sí misma → "Maximum call stack exceeded". Eso reventaba el
+    // paso 2 de aplicar correcciones (appliedByName) y abrir/cerrar la ventana,
+    // dejando la calificación cambiada pero la solicitud en "pendiente".
+    const u = App.currentUser || {};
+    const raw = u.displayName || u.email || '';
     return _fmtName(raw);
   }
 
