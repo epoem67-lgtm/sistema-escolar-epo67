@@ -1846,6 +1846,9 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
     const uid = firebase.auth().currentUser.uid;
     const now = firebase.firestore.FieldValue.serverTimestamp();
     let applied = 0, errors = 0;
+    // BLINDAJE: _currentUserName() ya va envuelto en try/catch (nunca truena).
+    const errorMsgs = [];   // razones REALES de error (para no mostrar "error" a secas)
+    let allowLower = null;  // decisión única: ¿aplicar también los cambios que BAJAN la cal?
 
     const blocked = [];
     for (const it of items) {
@@ -1906,9 +1909,25 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
           // PERO la replicación autorizada por Dirección puede SUBIR o BAJAR
           // (depende del caso autorizado). Skip el chequeo si es replicación.
           if (!isReplication && !isNaN(currentReal) && Number(it.newGrade) < currentReal) {
-            blocked.push(`${it.studentName} (actual ${currentReal}, solicitada ${it.newGrade})`);
-            errors++;
-            continue;
+            // La cal solicitada es MENOR que la actual (suele ser una solicitud
+            // vieja: el maestro ya re-capturó más alto). Antes esto BLOQUEABA y
+            // dejaba la solicitud atorada para siempre. Ahora Dirección decide:
+            // tiene autoridad para aplicarla con el oficio firmado. Se pregunta
+            // UNA vez por folio y se respeta la decisión.
+            if (allowLower === null) {
+              allowLower = confirm(
+                `Aviso: hay cambios que BAJAN la calificación.\n\n` +
+                `Ej.: ${it.studentName} tiene ${currentReal} en el sistema y se solicitó ${it.newGrade}.\n\n` +
+                `¿Aplicarlos de todos modos? Solo si Dirección lo autoriza con el oficio firmado.\n\n` +
+                `Aceptar = aplicar también los que bajan.\n` +
+                `Cancelar = omitir SOLO esos (los demás sí se aplican).`
+              );
+            }
+            if (!allowLower) {
+              blocked.push(`${it.studentName} (actual ${currentReal}, solicitada ${it.newGrade}) — omitido por ti`);
+              continue; // omitido por TU decisión, NO cuenta como error
+            }
+            // Autorizado por Dirección → continúa y aplica el cambio normalmente.
           }
           const updates = {
             cal: it.newGrade,
@@ -1954,6 +1973,8 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
         applied++;
       } catch (e) {
         console.error('Error aplicando ' + it.id + ':', e);
+        // BLINDAJE: guardar la RAZÓN real para mostrarla (no un "error" a secas).
+        errorMsgs.push(`${it.studentName || it.studentId}: ${(e && e.message) || e}`);
         errors++;
       }
     }
@@ -1963,13 +1984,19 @@ table.main td { padding:4px 6px; border:0.5pt solid #888; line-height:1.3; }
     } else {
       Toast.show(`Folio ${folio}: ${applied} aplicado(s), ${errors} con error.`, 'warning');
     }
-    if (blocked.length) {
-      // Aviso explicito: hubo solicitudes que se intentaron bajar la cal.
+    if (errorMsgs.length) {
+      // Mostrar el motivo técnico real para que Dirección sepa qué pasó y no
+      // se quede con un "error" sin explicación.
       alert(
-        'Las siguientes solicitudes NO se aplicaron porque la calificación solicitada ' +
-        'es MENOR que la actual en el sistema:\n\n' + blocked.join('\n') +
-        '\n\nLa regla EPO 67 prohibe bajar calificaciones via solicitud de cambio. ' +
-        'Quedan pendientes hasta que el maestro corrija la solicitud.'
+        'Algunas no se aplicaron por un error técnico:\n\n' + errorMsgs.join('\n') +
+        '\n\nRefresca la página e intenta de nuevo. Si persiste, reporta a Soporte (WhatsApp 55 1078 2357).'
+      );
+    }
+    if (blocked.length) {
+      // Solicitudes que BAJAN la cal y que TÚ decidiste omitir (siguen pendientes).
+      alert(
+        'Estas solicitudes BAJAN la calificación y las OMITISTE (siguen pendientes):\n\n' + blocked.join('\n') +
+        '\n\nSi Dirección autoriza bajarlas, vuelve a darle "Autorizar y aplicar" y elige "Aceptar" en el aviso.'
       );
     }
 
