@@ -32,9 +32,18 @@ const GradeCorrectionsModule = (function () {
     // llamaba a sí misma → "Maximum call stack exceeded". Eso reventaba el
     // paso 2 de aplicar correcciones (appliedByName) y abrir/cerrar la ventana,
     // dejando la calificación cambiada pero la solicitud en "pendiente".
-    const u = App.currentUser || {};
-    const raw = u.displayName || u.email || '';
-    return _fmtName(raw);
+    //
+    // BLINDAJE: este nombre es COSMÉTICO (solo para mostrar quién aplicó). NUNCA
+    // debe poder tronar y bloquear una operación crítica (aplicar corrección,
+    // abrir/cerrar ventana). Por eso va envuelto en try/catch con fallback.
+    try {
+      const u = App.currentUser || {};
+      const raw = u.displayName || u.email || '';
+      return _fmtName(raw);
+    } catch (_) {
+      const u = App.currentUser || {};
+      return u.displayName || u.email || '';
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
