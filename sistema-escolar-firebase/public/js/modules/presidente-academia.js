@@ -1,95 +1,185 @@
 /**
- * PRESIDENTE DE ACADEMIA — Sistema Escolar EPO 67
+ * PRESIDENTE / SECRETARIO DE ACADEMIA — Sistema Escolar EPO 67
  *
- * Rol nuevo: 'presidente_academia'. Un docente que coordina una academia
- * (área académica: Matemáticas, Comunicación, Ciencias Sociales, etc.).
- * Su responsabilidad: monitorear los indicadores de SUS materias en SUS
- * grados (no de toda la escuela).
+ * Rol ADITIVO: el docente conserva su role base (maestro u
+ * orientador_docente) y adicionalmente coordina la academia de un grado+turno.
+ * En App.effectiveRoles se le agrega 'presidente_academia' en memoria (app.js)
+ * cuando el user doc tiene academiaGrado + academiaTurno seteados.
  *
- * Asignación de la academia:
- *   El admin asigna a este usuario los IDs de materias y grados que coordina
- *   editando su documento en `users/{uid}`:
- *     {
- *       academiaNombre: 'Academia de Matemáticas',
- *       academiaSubjects: ['math1', 'math2', 'math3'],  // subject IDs
- *       academiaGrados:   [1, 2, 3]                      // 1°, 2°, 3°
- *     }
+ * MODELO DE DATOS (users/{uid}):
+ *   academiaGrado: number   // 1, 2 o 3
+ *   academiaTurno: string   // 'MATUTINO' | 'VESPERTINO'
+ *   academiaRol:   string   // 'presidente' | 'secretario'
  *
- * Vista:
- *   - Dashboard: KPIs por materia bajo su academia (alumnos atendidos,
- *     promedio, % reprobación, top profes)
- *   - Botón para descargar Excel comparativo de su academia
- *   - Filtros: parcial / turno / grado
+ * Sembrado por: scripts/fixes/asignar-presidentes-academia.js
+ *
+ * Permisos en firestore.rules:
+ *   - students: isAcademiaScopeOf(groupId) — lee alumnos del grado+turno
+ *   - grades:   canMaestro() — los 12 son maestros, ya cubre lectura
+ *   - groups/subjects/partials: lectura abierta a autenticados
+ *   - NO se consulta /assignments (queda sólo para captura de calificaciones)
  */
 
 const PresidenteAcademiaModule = (() => {
   let _data = null;
-  let _filters = { parcial: 'P2', turno: '', grado: '' };
+  // Default parcial = el último capturado/abierto (calculado en App.warmDefaultPartial
+  // al login). Se lee al render, no al init del módulo, para usar el cache más fresco.
+  let _filters = { parcial: null };
 
-  // ─── Helpers ─────────────────────────────────────────────────
-  function _getMyConfig() {
-    const u = App.currentUser || {};
-    const subjects = Array.isArray(u.academiaSubjects) ? u.academiaSubjects : [];
-    const grados = Array.isArray(u.academiaGrados) ? u.academiaGrados.map(Number) : [];
-    const nombre = u.academiaNombre || 'Mi Academia';
-    return { subjects, grados, nombre };
+  // Orden oficial SEP de materias por grado. Copia de INDICADORES_SUBJECTS
+  // (concentrado.js:2482). Si se actualiza allá, replicar aquí.
+  const SEP_ORDER = {
+    1: [
+      'LENGUA Y COMUNICACION II', 'INGLES II', 'PENSAMIENTO MATEMATICO II',
+      'CULTURA DIGITAL II', 'CIENCIAS NATURALES EXPERIMENTALES Y TECNOLOGIA II',
+      'TALLER DE CIENCIAS I', 'PENSAMIENTO FILOSOFICO Y HUMANIDADES II',
+      'CIENCIAS SOCIALES II', 'ACTIVIDADES FISICAS Y DEPORTIVAS II',
+      'EDUCACION PARA LA SALUD II', 'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS II',
+    ],
+    2: [
+      'PENSAMIENTO LITERARIO', 'INGLES IV', 'TEMAS SELECTOS DE MATEMATICAS I',
+      'CONCIENCIA HISTORICA I', 'TALLER DE CULTURA DIGITAL',
+      'REACCIONES QUIMICAS Y CONSERVACION DE LA MATERIA', 'ESPACIO Y SOCIEDAD',
+      'CIENCIAS SOCIALES III', 'COMUNIDADES VIRTUALES', 'MANTENIMIENTO DE REDES DE COMPUTO',
+      'ACTIVIDADES ARTISTICAS Y CULTURALES I', 'EDUCACION INTEGRAL EN SEXUALIDAD Y GENERO II',
+      'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS IV',
+    ],
+    3: [
+      'CIENCIAS DE LA COMUNICACION I', 'TEMAS SELECTOS DE INGLES II',
+      'TEMAS SELECTOS DE MATEMATICAS II', 'CONCIENCIA HISTORICA III', 'ORGANISMOS',
+      'TEMAS SELECTOS DE FILOSOFIA', 'ECONOMIA I', 'PAGINAS WEB', 'DISENO DIGITAL',
+      'ACTIVIDADES ARTISTICAS Y CULTURALES III', 'PRACTICA Y COLABORACION CIUDADANA II',
+      'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS VI',
+    ],
+  };
+
+  function _normSubj(s) {
+    return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
   }
 
-  // ─── Render: Dashboard de presidente de academia ────────────
-  async function renderDashboard(container) {
-    const cfg = _getMyConfig();
-    container.innerHTML = UI.loadingState('Cargando datos de tu academia…');
+  // Ordena `subjects` según el orden oficial SEP del grado. Las materias que
+  // no estén en la lista (raro) van al final, alfabéticamente.
+  function _sortBySEP(subjects, grado) {
+    const order = (SEP_ORDER[grado] || []).map(_normSubj);
+    const idxOf = name => {
+      const n = _normSubj(name);
+      const i = order.findIndex(o => o === n || o.includes(n) || n.includes(o));
+      return i === -1 ? 9999 : i;
+    };
+    return subjects.slice().sort((a, b) => {
+      const ia = idxOf(a.nombre || a.id);
+      const ib = idxOf(b.nombre || b.id);
+      if (ia !== ib) return ia - ib;
+      return (a.nombre || '').localeCompare(b.nombre || '');
+    });
+  }
 
-    if (cfg.subjects.length === 0) {
+  function _canAdminOverride() {
+    return App.canActAs('admin') || App.canActAs('subdirector') || App.canActAs('directivo');
+  }
+
+  function _getMyConfig() {
+    const u = App.currentUser || {};
+    const canOverride = _canAdminOverride();
+
+    // ADMIN OVERRIDE: si el usuario es admin/subdirector/directivo y eligió
+    // grado+turno con el selector, mostrar esa academia. Permite ver
+    // CUALQUIER academia sin tener que impersonar a un presidente.
+    if (canOverride && _filters.adminGrado && _filters.adminTurno) {
+      const grado = Number(_filters.adminGrado);
+      const turno = _filters.adminTurno;
+      const turnoLabel = turno === 'MATUTINO' ? 'Matutino' : 'Vespertino';
+      return {
+        grado, turno,
+        rol: 'admin-view',
+        cargo: 'Vista de Administrador',
+        nombre: `Academia · ${grado}° ${turnoLabel}`,
+        isAdminView: true,
+      };
+    }
+
+    // ADMIN SIN OVERRIDE elegido todavía: default a 1° matutino para que
+    // el módulo cargue algo (en lugar del mensaje "no configurada").
+    if (canOverride && (!u.academiaGrado || !u.academiaTurno)) {
+      return {
+        grado: 1, turno: 'MATUTINO',
+        rol: 'admin-view',
+        cargo: 'Vista de Administrador',
+        nombre: 'Academia · 1° Matutino',
+        isAdminView: true,
+      };
+    }
+
+    // Presidente/Secretario normal: lee de su user doc
+    const grado = u.academiaGrado != null ? Number(u.academiaGrado) : null;
+    const turno = u.academiaTurno || null;
+    const rol = (u.academiaRol || '').toLowerCase();
+    const cargo = rol === 'secretario' ? 'Secretario' : 'Presidente';
+    const turnoLabel = turno === 'MATUTINO' ? 'Matutino' : turno === 'VESPERTINO' ? 'Vespertino' : '';
+    const nombre = grado && turno
+      ? `${cargo} de Academia · ${grado}° ${turnoLabel}`
+      : 'Mi Academia';
+    return { grado, turno, rol, cargo, nombre, isAdminView: false };
+  }
+
+  async function renderDashboard(container) {
+    // Si aún no hay parcial elegido por el usuario, usar el default global
+    // (último capturado). Refresca el cache si está vacío.
+    if (!_filters.parcial) {
+      try { await App.warmDefaultPartial(); } catch (_) {}
+      _filters.parcial = App.getDefaultPartial();
+    }
+    const cfg = _getMyConfig();
+    container.innerHTML = UI.loadingState('Cargando indicadores de tu academia…');
+
+    if (!cfg.grado || !cfg.turno) {
       container.innerHTML = UI.moduleContainer([
-        UI.pageHeader(cfg.nombre, 'Indicadores académicos de tus materias'),
+        UI.pageHeader(cfg.nombre, 'Indicadores académicos de tu grado y turno'),
         `<div class="alert alert-warning" style="margin:14px 0;">
-          <strong>⚠ No tienes materias asignadas a tu academia todavía.</strong><br>
-          Pide al administrador que configure tu academia editando tu cuenta de usuario
-          (campos <code>academiaSubjects</code> y <code>academiaGrados</code>).
+          <strong>⚠ Tu academia no está configurada todavía.</strong><br>
+          Pide a un administrador que ejecute el script
+          <code>scripts/fixes/asignar-presidentes-academia.js --apply</code>
+          o que edite tu usuario para asignar
+          <code>academiaGrado</code>, <code>academiaTurno</code> y
+          <code>academiaRol</code>.
         </div>`
       ].join(''));
       return;
     }
 
     try {
-      const [groupsAll, subjectsAll, partials, assignments] = await Promise.all([
-        Store.getGroups(), Store.getSubjects(), Store.getPartials(), Store.getAssignments(),
+      const [groupsAll, subjectsAll, partials] = await Promise.all([
+        Store.getGroups(), Store.getSubjects(), Store.getPartials(),
       ]);
 
-      const subjectSet = new Set(cfg.subjects);
-      const gradoSet = cfg.grados.length > 0 ? new Set(cfg.grados) : null;
-
-      // Grupos en scope (todos los grupos de los grados que cubro)
-      const scopedGroups = gradoSet
-        ? groupsAll.filter(g => gradoSet.has(Number(g.grado)))
-        : groupsAll;
-
-      // Subjects de mi academia (resueltos a objetos)
-      const subjectsMine = subjectsAll.filter(s => subjectSet.has(s.id));
-
-      // Assignments donde la materia pertenece a mi academia
-      const myAssignments = assignments.filter(a =>
-        subjectSet.has(a.subjectId) &&
-        scopedGroups.some(g => g.id === a.groupId)
+      const scopedGroups = groupsAll.filter(g =>
+        Number(g.grado) === cfg.grado && g.turno === cfg.turno
       );
-
-      // Alumnos de los grupos en scope
       const groupIds = scopedGroups.map(g => g.id);
+
       const students = groupIds.length > 0
         ? await Store.getStudentsByGroups(groupIds)
         : [];
       const activeStudents = students.filter(s => (s.estatus || '').toUpperCase() === 'ACTIVO');
 
-      // Grades de los grupos en scope (filtramos por subject después)
       let allGrades = [];
       try {
-        allGrades = groupIds.length > 0 ? await Store.getGradesByGroups(groupIds) : [];
+        allGrades = groupIds.length > 0 ? await Store.getGradesByGroups(groupIds, true) : [];
       } catch (e) { console.warn('grades load deferred', e); }
 
+      // FIX v8.06: solo subjectIds del grado actual (drop G2_ leftovers en 3°, etc.).
+      // Antes incluía cualquier subjectId que apareciera en grades — incluyendo
+      // datos huérfanos donde el subjectId pertenece a otro grado.
+      const gradoPrefix = cfg.grado ? `G${cfg.grado}_` : null;
+      const subjectIdsInScope = new Set(
+        allGrades
+          .map(g => g.subjectId)
+          .filter(sid => !gradoPrefix || String(sid).startsWith(gradoPrefix))
+      );
+      const subjectsMine = subjectsAll.filter(s => subjectIdsInScope.has(s.id));
+
       _data = {
-        cfg, groupsAll, scopedGroups, subjectsMine, students, activeStudents, allGrades,
-        partials, myAssignments,
+        cfg, scopedGroups, subjectsMine, students, activeStudents, allGrades, partials,
       };
 
       _renderFull();
@@ -103,34 +193,42 @@ const PresidenteAcademiaModule = (() => {
     const container = document.getElementById('moduleContainer');
     if (!container || !_data) return;
 
-    const { cfg, scopedGroups, subjectsMine, activeStudents, allGrades, partials, myAssignments } = _data;
+    const { cfg, scopedGroups, activeStudents, allGrades } = _data;
 
-    // Filtros del parcial / turno / grado
-    let grades = allGrades.filter(g => cfg.subjects.includes(g.subjectId));
-    if (_filters.parcial && _filters.parcial !== 'all') {
+    let grades = allGrades;
+    if (_filters.parcial && _filters.parcial !== 'ACUM') {
       grades = grades.filter(g => g.partial === _filters.parcial);
     }
 
-    let filteredGroups = [...scopedGroups];
-    if (_filters.turno) filteredGroups = filteredGroups.filter(g => g.turno === _filters.turno);
-    if (_filters.grado) filteredGroups = filteredGroups.filter(g => Number(g.grado) === Number(_filters.grado));
+    const filteredGroups = scopedGroups;
     const filteredGroupIds = new Set(filteredGroups.map(g => g.id));
 
     const studentsFiltered = activeStudents.filter(s => filteredGroupIds.has(s.groupId));
     const studentIds = new Set(studentsFiltered.map(s => s.id));
     grades = grades.filter(g => studentIds.has(g.studentId) && filteredGroupIds.has(g.groupId));
 
-    // ═══ MÉTRICAS ═══
-    // - PROMEDIO: promedio de TODAS las calificaciones capturadas (valor numérico)
-    // - ALUMNOS APROBADOS = alumnos SIN materias reprobadas en mi academia
-    // - ALUMNOS IRREGULARES = alumnos CON ≥1 materia reprobada en mi academia
-    // - INCIDENCIAS = total de calificaciones < 6 (sumatoria, magnitud)
+    // Solo mostrar materias con al menos 1 calificación VÁLIDA (numérica) en
+    // el parcial actual. Algunas materias tienen docs en `grades` con cal=null
+    // (placeholder de captura abierta sin valor) — sin checar validez aparecen
+    // con "0 alumnos eval / — / — / —" en pantalla.
+    const subjectsConDatos = new Set(
+      grades
+        .filter(g => {
+          const c = Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN));
+          return !isNaN(c);
+        })
+        .map(g => g.subjectId)
+    );
+    const subjectsMine = _sortBySEP(
+      _data.subjectsMine.filter(s => subjectsConDatos.has(s.id)),
+      cfg.grado
+    );
+
     const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
     const cals = grades.map(g => Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN))).filter(c => !isNaN(c));
     const promedio = cals.length ? (cals.reduce((a, b) => a + b, 0) / cals.length).toFixed(2) : '—';
     const incidencias = cals.filter(c => c < passGrade).length;
 
-    // Métricas alumno-céntricas
     const failsByStudent = {};
     const evaluatedSet = new Set();
     grades.forEach(g => {
@@ -153,9 +251,6 @@ const PresidenteAcademiaModule = (() => {
     const promCumple = promedio !== '—' && parseFloat(promedio) >= META_PROM;
     const irregCumple = pctIrreg !== '—' && parseFloat(pctIrreg) <= META_IRREG;
 
-    // ─── Tabla por materia ───
-    // En cada materia, contamos ALUMNOS aprobados/irregulares (no calificaciones).
-    // Aprobado = alumno que NO reprobó esa materia · Irregular = la reprobó.
     const matRows = subjectsMine.map(subj => {
       const subjGrades = grades.filter(g => g.subjectId === subj.id);
       const subjCals = subjGrades.map(g => Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN))).filter(c => !isNaN(c));
@@ -182,8 +277,6 @@ const PresidenteAcademiaModule = (() => {
       </tr>`;
     }).join('');
 
-    // ─── Tabla por grupo ───
-    // Mismo principio: alumnos aprobados / irregulares en mi academia dentro del grupo.
     const grpRows = filteredGroups.map(grp => {
       const grpStudents = studentsFiltered.filter(s => s.groupId === grp.id);
       const grpGrades = grades.filter(g => g.groupId === grp.id);
@@ -205,7 +298,6 @@ const PresidenteAcademiaModule = (() => {
       const irrBg = grpPctIrr !== '—' && parseFloat(grpPctIrr) > META_IRREG ? 'background:#fee2e2;' : '';
       return `<tr>
         <td><strong>${Utils.sanitize(grp.nombre)}</strong></td>
-        <td style="text-align:center;">${grp.turno}</td>
         <td style="text-align:center;">${grpStudents.length}</td>
         <td style="text-align:center;font-weight:700;${promBg}">${grpProm}</td>
         <td style="text-align:center;color:#16a34a;font-weight:600;">${grpTotalEval > 0 ? grpAprob : '—'}</td>
@@ -216,8 +308,9 @@ const PresidenteAcademiaModule = (() => {
     container.innerHTML = UI.moduleContainer([
       UI.pageHeader(
         cfg.nombre,
-        `Indicadores académicos de tus ${numMaterias} materia${numMaterias === 1 ? '' : 's'}, en ${numGrupos} grupos`
+        `Indicadores de ${numAlumnos} alumnos en ${numGrupos} grupos · ${numMaterias} materias activas`
       ),
+      _renderAdminSelector(cfg),
       _renderFilters(),
       _renderKPIs({ numAlumnos, numGrupos, numMaterias, promedio, totalEval, aprobados, irregulares, pctAprob, pctIrreg, incidencias, promCumple, irregCumple }),
       _renderDownloads(),
@@ -231,12 +324,12 @@ const PresidenteAcademiaModule = (() => {
         </p>
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
-            <thead style="background:#f9fafb;"><tr>
-              <th style="text-align:left;padding:10px 14px;">Materia</th>
-              <th style="text-align:center;padding:10px 14px;">Alumnos eval.</th>
-              <th style="text-align:center;padding:10px 14px;">Promedio</th>
-              <th style="text-align:center;padding:10px 14px;">Aprobados</th>
-              <th style="text-align:center;padding:10px 14px;">Irregulares</th>
+            <thead style="background:#1e40af;color:#fff;"><tr>
+              <th style="text-align:left;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Materia</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Alumnos eval.</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Promedio</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Aprobados</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Irregulares</th>
             </tr></thead>
             <tbody>${matRows || '<tr><td colspan="5" style="padding:18px;text-align:center;color:#9ca3af;">Sin datos en este parcial.</td></tr>'}</tbody>
           </table>
@@ -245,22 +338,21 @@ const PresidenteAcademiaModule = (() => {
       `<div class="card" style="margin-top:14px;">
         <div style="padding:14px 18px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
           <h3 style="margin:0;font-size:18px;">👥 Por Grupo</h3>
-          <span style="font-size:12px;color:#6b7280;">${filteredGroups.length} grupos</span>
+          <span style="font-size:12px;color:#6b7280;">${filteredGroups.length} grupos · ${cfg.grado}° ${cfg.turno}</span>
         </div>
         <p style="margin:0;padding:0 18px 6px;font-size:11px;color:#6b7280;">
-          <strong>Irregulares:</strong> alumnos del grupo con ≥1 reprobada en CUALQUIER materia de mi academia.
+          <strong>Irregulares:</strong> alumnos del grupo con ≥1 reprobada en CUALQUIER materia.
         </p>
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
-            <thead style="background:#f9fafb;"><tr>
-              <th style="text-align:left;padding:10px 14px;">Grupo</th>
-              <th style="text-align:center;padding:10px 14px;">Turno</th>
-              <th style="text-align:center;padding:10px 14px;">Alumnos</th>
-              <th style="text-align:center;padding:10px 14px;">Promedio</th>
-              <th style="text-align:center;padding:10px 14px;">Aprobados</th>
-              <th style="text-align:center;padding:10px 14px;">Irregulares</th>
+            <thead style="background:#1e40af;color:#fff;"><tr>
+              <th style="text-align:left;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Grupo</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Alumnos</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Promedio</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Aprobados</th>
+              <th style="text-align:center;padding:12px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Irregulares</th>
             </tr></thead>
-            <tbody>${grpRows || '<tr><td colspan="6" style="padding:18px;text-align:center;color:#9ca3af;">No hay grupos en este filtro.</td></tr>'}</tbody>
+            <tbody>${grpRows || '<tr><td colspan="5" style="padding:18px;text-align:center;color:#9ca3af;">No hay grupos en tu academia.</td></tr>'}</tbody>
           </table>
         </div>
       </div>`,
@@ -269,8 +361,31 @@ const PresidenteAcademiaModule = (() => {
     _bindEvents();
   }
 
+  // Selector de academia visible SOLO para admin/subdirector/directivo.
+  // Permite ver cualquier grado + turno sin tener que impersonar.
+  function _renderAdminSelector(cfg) {
+    if (!cfg.isAdminView) return '';
+    const gradoOpts = [1, 2, 3].map(g =>
+      `<option value="${g}"${cfg.grado === g ? ' selected' : ''}>${g}° Grado</option>`
+    ).join('');
+    const turnoOpts = ['MATUTINO', 'VESPERTINO'].map(t =>
+      `<option value="${t}"${cfg.turno === t ? ' selected' : ''}>${t === 'MATUTINO' ? 'Matutino' : 'Vespertino'}</option>`
+    ).join('');
+    return `<div class="card" style="padding:14px 18px;margin-bottom:14px;background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border-left:5px solid #d97706;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div>
+          <strong style="color:#92400e;font-size:15px;">🛠️ Vista de Administrador</strong>
+          <div style="font-size:13px;color:#78350f;margin-top:2px;">Como admin puedes ver cualquier academia. Selecciona grado y turno:</div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <select id="adm-acad-grado" class="form-control" style="padding:8px 14px;border:1px solid #d97706;border-radius:8px;font-weight:600;background:#fff;">${gradoOpts}</select>
+          <select id="adm-acad-turno" class="form-control" style="padding:8px 14px;border:1px solid #d97706;border-radius:8px;font-weight:600;background:#fff;">${turnoOpts}</select>
+        </div>
+      </div>
+    </div>`;
+  }
+
   function _renderFilters() {
-    const cfg = _data?.cfg || { grados: [] };
     return `<div class="chip-filter-bar" style="padding:12px 16px;margin-bottom:14px;display:flex;gap:18px;flex-wrap:wrap;">
       <div class="chip-filter-row" style="margin:0;display:flex;align-items:center;gap:8px;">
         <span class="chip-filter-label" style="font-weight:600;">Parcial:</span>
@@ -279,22 +394,6 @@ const PresidenteAcademiaModule = (() => {
           <button class="chip${_filters.parcial === 'ACUM' ? ' active' : ''}" data-filter="parcial" data-value="ACUM">📊 Acumulado</button>
         </div>
       </div>
-      <div class="chip-filter-row" style="margin:0;display:flex;align-items:center;gap:8px;">
-        <span class="chip-filter-label" style="font-weight:600;">Turno:</span>
-        <div class="chip-group">
-          <button class="chip${!_filters.turno ? ' active' : ''}" data-filter="turno" data-value="">Todos</button>
-          <button class="chip${_filters.turno === 'MATUTINO' ? ' active' : ''}" data-filter="turno" data-value="MATUTINO">Matutino</button>
-          <button class="chip${_filters.turno === 'VESPERTINO' ? ' active' : ''}" data-filter="turno" data-value="VESPERTINO">Vespertino</button>
-        </div>
-      </div>
-      ${cfg.grados.length > 1 ? `
-      <div class="chip-filter-row" style="margin:0;display:flex;align-items:center;gap:8px;">
-        <span class="chip-filter-label" style="font-weight:600;">Grado:</span>
-        <div class="chip-group">
-          <button class="chip${!_filters.grado ? ' active' : ''}" data-filter="grado" data-value="">Todos</button>
-          ${cfg.grados.map(g => `<button class="chip${Number(_filters.grado) === g ? ' active' : ''}" data-filter="grado" data-value="${g}">${g}°</button>`).join('')}
-        </div>
-      </div>` : ''}
     </div>`;
   }
 
@@ -310,11 +409,10 @@ const PresidenteAcademiaModule = (() => {
     };
     return `<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:14px;margin-bottom:18px;">
       ${card('👥', 'Alumnos', k.numAlumnos, `en ${k.numGrupos} grupos`)}
-      ${card('📚', 'Materias', k.numMaterias, 'de tu academia')}
+      ${card('📚', 'Materias', k.numMaterias, 'con captura')}
       ${card('📈', 'Promedio', k.promedio, 'meta ≥ 8.3', k.promCumple)}
       ${card('✅', 'Alumnos Aprobados', k.totalEval > 0 ? `${k.aprobados}` : '—', k.totalEval > 0 ? `de ${k.totalEval} (${k.pctAprob}%) sin reprobadas` : 'sin datos')}
       ${card('🚨', 'Alumnos Irregulares', k.totalEval > 0 ? `${k.irregulares}` : '—', k.totalEval > 0 ? `${k.pctIrreg}% · meta ≤ 14%` : 'sin datos', k.irregCumple)}
-      ${card('📊', 'Incidencias', k.incidencias, 'total de calif. < 6 (sumatoria)')}
     </div>`;
   }
 
@@ -338,7 +436,6 @@ const PresidenteAcademiaModule = (() => {
     const container = document.getElementById('moduleContainer');
     if (!container) return;
 
-    // Chips de filtro
     container.querySelectorAll('.chip[data-filter]').forEach(chip => {
       chip.addEventListener('click', () => {
         const f = chip.dataset.filter;
@@ -348,14 +445,26 @@ const PresidenteAcademiaModule = (() => {
       });
     });
 
-    // Botón de Excel
     const downloadBtn = container.querySelector('[data-action="download-excel"]');
     if (downloadBtn) {
       downloadBtn.addEventListener('click', () => _downloadExcel());
     }
+
+    // Admin selector: al cambiar grado o turno, recargar dashboard completo
+    // (los datos vienen de Firestore filtrados por grupo, así que cambiar el
+    // scope requiere fetch nuevo de students/grades).
+    const admGrado = container.querySelector('#adm-acad-grado');
+    const admTurno = container.querySelector('#adm-acad-turno');
+    const onAdminChange = () => {
+      if (!admGrado || !admTurno) return;
+      _filters.adminGrado = admGrado.value;
+      _filters.adminTurno = admTurno.value;
+      renderDashboard(container);
+    };
+    if (admGrado) admGrado.addEventListener('change', onAdminChange);
+    if (admTurno) admTurno.addEventListener('change', onAdminChange);
   }
 
-  // ─── Excel download ──────────────────────────────────────────
   async function _downloadExcel() {
     if (!_data) return;
     Toast.show('Generando Excel…', 'info');
@@ -363,71 +472,435 @@ const PresidenteAcademiaModule = (() => {
       await Lib.exceljs();
       const ExcelJS = window.ExcelJS;
       const wb = new ExcelJS.Workbook();
-      const { cfg, scopedGroups, subjectsMine, activeStudents, allGrades } = _data;
+      wb.creator = 'EPO 67';
+      wb.created = new Date();
 
-      // Hoja 1: Resumen general
-      const ws1 = wb.addWorksheet('Resumen');
-      ws1.columns = [
-        { header: 'Concepto', key: 'k', width: 30 },
-        { header: 'Valor', key: 'v', width: 30 },
-      ];
-      ws1.addRow({ k: 'Academia', v: cfg.nombre });
-      ws1.addRow({ k: 'Materias', v: subjectsMine.map(s => s.nombre || s.id).join(' · ') });
-      ws1.addRow({ k: 'Grados', v: cfg.grados.join('°, ') + '°' });
-      ws1.addRow({ k: 'Grupos en scope', v: scopedGroups.length });
-      ws1.addRow({ k: 'Alumnos activos', v: activeStudents.length });
-      ws1.addRow({ k: 'Filtro parcial', v: _filters.parcial });
-      ws1.addRow({ k: 'Filtro turno', v: _filters.turno || 'Todos' });
-      ws1.addRow({ k: 'Generado', v: new Date().toLocaleString('es-MX') });
-      ws1.getRow(1).font = { bold: true };
-
-      // Hoja 2: Por Materia × Grupo
-      const ws2 = wb.addWorksheet('Materia × Grupo');
-      ws2.columns = [
-        { header: 'Materia', key: 'mat', width: 32 },
-        { header: 'Grupo', key: 'grp', width: 14 },
-        { header: 'Turno', key: 'turno', width: 12 },
-        { header: 'Alumnos', key: 'n', width: 10 },
-        { header: 'Calificaciones', key: 'cnt', width: 14 },
-        { header: 'Promedio', key: 'prom', width: 12 },
-        { header: 'Reprobados', key: 'rep', width: 12 },
-        { header: '% Reprob.', key: 'pctRep', width: 12 },
-      ];
+      const { cfg, scopedGroups, activeStudents, allGrades } = _data;
       const passGrade = (K.THRESHOLDS && K.THRESHOLDS.PASS_GRADE) || 6;
+      const META_PROM = 8.3, META_IRREG = 14;
       const parcialFiltro = _filters.parcial;
+      const parcialLabel = parcialFiltro === 'ACUM'
+        ? 'Acumulado'
+        : (K.PARCIALES.find(p => p.id === parcialFiltro)?.nombre || parcialFiltro);
 
-      for (const subj of subjectsMine) {
-        for (const grp of scopedGroups) {
-          let gs = allGrades.filter(g => g.subjectId === subj.id && g.groupId === grp.id);
-          if (parcialFiltro && parcialFiltro !== 'ACUM') {
-            gs = gs.filter(g => g.partial === parcialFiltro);
-          }
-          if (gs.length === 0) continue;
-          const grpStuds = activeStudents.filter(s => s.groupId === grp.id);
-          const cals = gs.map(g => Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN))).filter(c => !isNaN(c));
-          const prom = cals.length ? cals.reduce((a, b) => a + b, 0) / cals.length : null;
-          const rep = cals.filter(c => c < passGrade).length;
-          const pctRep = cals.length ? (rep * 100) / cals.length : 0;
-          ws2.addRow({
-            mat: subj.nombre || subj.id,
-            grp: grp.nombre,
-            turno: grp.turno,
-            n: grpStuds.length,
-            cnt: cals.length,
-            prom: prom != null ? +prom.toFixed(2) : '',
-            rep,
-            pctRep: +pctRep.toFixed(1),
-          });
+      const escuelaNombre = (App.schoolConfig && App.schoolConfig.nombre) || 'EPO 67';
+      const cicloEscolar = (App.schoolConfig && App.schoolConfig.cicloEscolar) || '2025-2026';
+
+      // ─── Estilos comunes ───
+      const thinBorder = {
+        top: { style: 'thin', color: { argb: 'FF1E40AF' } },
+        left: { style: 'thin', color: { argb: 'FF1E40AF' } },
+        bottom: { style: 'thin', color: { argb: 'FF1E40AF' } },
+        right: { style: 'thin', color: { argb: 'FF1E40AF' } }
+      };
+      const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+      const headerFont = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+      const titleFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0891B2' } };
+      const titleFont = { bold: true, color: { argb: 'FFFFFFFF' }, size: 16 };
+      const subtitleFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } };
+      const subtitleFont = { bold: true, color: { argb: 'FF1E3A8A' }, size: 11 };
+      const center = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      const left = { horizontal: 'left', vertical: 'middle', wrapText: true };
+
+      function applyHeaderRow(ws, row, fromCol, toCol) {
+        for (let c = fromCol; c <= toCol; c++) {
+          const cell = ws.getCell(row, c);
+          cell.font = headerFont;
+          cell.fill = headerFill;
+          cell.alignment = center;
+          cell.border = thinBorder;
         }
+        ws.getRow(row).height = 28;
       }
-      ws2.getRow(1).font = { bold: true };
 
+      // ═══ Pre-cálculo de stats ═══
+      // Grades del scope filtradas por parcial
+      let grades = allGrades;
+      if (parcialFiltro && parcialFiltro !== 'ACUM') {
+        grades = grades.filter(g => g.partial === parcialFiltro);
+      }
+      const studentIds = new Set(activeStudents.map(s => s.id));
+      grades = grades.filter(g => studentIds.has(g.studentId));
+
+      // Solo materias con al menos 1 calificación VÁLIDA (numérica) en el
+      // parcial actual. Algunas materias tienen docs en `grades` con cal=null
+      // (placeholder) — sin checar validez salen filas vacías en el Excel.
+      const subjectsConDatos = new Set(
+        grades
+          .filter(g => {
+            const c = Number(g.cal != null ? g.cal : (g.value != null ? g.value : NaN));
+            return !isNaN(c);
+          })
+          .map(g => g.subjectId)
+      );
+      const subjectsMine = _sortBySEP(
+        _data.subjectsMine.filter(s => subjectsConDatos.has(s.id)),
+        cfg.grado
+      );
+
+      // Reprobadas por alumno
+      const failsByStudent = {};
+      const failsBySubjectByStudent = {};
+      const evaluatedSet = new Set();
+      grades.forEach(g => {
+        const cal = Number(g.cal != null ? g.cal : g.value);
+        if (isNaN(cal)) return;
+        evaluatedSet.add(g.studentId);
+        if (cal < passGrade) {
+          failsByStudent[g.studentId] = (failsByStudent[g.studentId] || 0) + 1;
+          if (!failsBySubjectByStudent[g.studentId]) failsBySubjectByStudent[g.studentId] = [];
+          failsBySubjectByStudent[g.studentId].push(g.subjectId);
+        }
+      });
+      const totalEvaluados = evaluatedSet.size;
+      const totalIrregulares = Object.keys(failsByStudent).length;
+      const totalAprobados = totalEvaluados - totalIrregulares;
+      const promGlobal = (() => {
+        const cals = grades.map(g => Number(g.cal != null ? g.cal : g.value)).filter(c => !isNaN(c));
+        return cals.length > 0 ? +(cals.reduce((a, b) => a + b, 0) / cals.length).toFixed(2) : null;
+      })();
+      const pctIrregGlobal = totalEvaluados > 0 ? +((totalIrregulares * 100) / totalEvaluados).toFixed(1) : 0;
+      const pctAprobGlobal = totalEvaluados > 0 ? +((totalAprobados * 100) / totalEvaluados).toFixed(1) : 0;
+
+      // ═══════════════════════════════════════════════════════════════
+      // HOJA 1 — RESUMEN
+      // ═══════════════════════════════════════════════════════════════
+      const ws1 = wb.addWorksheet('Resumen', {
+        pageSetup: { paperSize: 1, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+      });
+      ws1.getColumn(1).width = 28;
+      ws1.getColumn(2).width = 22;
+      ws1.getColumn(3).width = 18;
+      ws1.getColumn(4).width = 22;
+
+      // Título
+      ws1.mergeCells('A1:D1');
+      ws1.getCell('A1').value = escuelaNombre;
+      ws1.getCell('A1').font = titleFont;
+      ws1.getCell('A1').fill = titleFill;
+      ws1.getCell('A1').alignment = center;
+      ws1.getRow(1).height = 32;
+
+      ws1.mergeCells('A2:D2');
+      ws1.getCell('A2').value = cfg.nombre;
+      ws1.getCell('A2').font = { bold: true, color: { argb: 'FF1E40AF' }, size: 13 };
+      ws1.getCell('A2').fill = subtitleFill;
+      ws1.getCell('A2').alignment = center;
+      ws1.getRow(2).height = 24;
+
+      // Info de cabecera
+      const infoRows = [
+        ['Escuela',          escuelaNombre],
+        ['Ciclo escolar',    cicloEscolar],
+        ['Academia',         `${cfg.grado}° ${cfg.turno}`],
+        ['Rol',              cfg.cargo],
+        ['Parcial',          parcialLabel],
+        ['Generado',         new Date().toLocaleString('es-MX')],
+      ];
+      infoRows.forEach(([k, v], i) => {
+        const r = 4 + i;
+        ws1.getCell(r, 1).value = k;
+        ws1.getCell(r, 1).font = { bold: true, color: { argb: 'FF374151' } };
+        ws1.getCell(r, 1).alignment = left;
+        ws1.getCell(r, 1).border = thinBorder;
+        ws1.mergeCells(r, 2, r, 4);
+        ws1.getCell(r, 2).value = v;
+        ws1.getCell(r, 2).alignment = left;
+        ws1.getCell(r, 2).border = thinBorder;
+      });
+
+      // KPIs principales
+      const kpiStart = 11;
+      ws1.mergeCells(kpiStart, 1, kpiStart, 4);
+      ws1.getCell(kpiStart, 1).value = '📊 INDICADORES DE TU ACADEMIA';
+      ws1.getCell(kpiStart, 1).font = subtitleFont;
+      ws1.getCell(kpiStart, 1).fill = subtitleFill;
+      ws1.getCell(kpiStart, 1).alignment = center;
+      ws1.getRow(kpiStart).height = 24;
+
+      const kpiHeaders = ['Indicador', 'Valor', 'Meta', 'Estado'];
+      kpiHeaders.forEach((h, i) => {
+        const c = ws1.getCell(kpiStart + 1, 1 + i);
+        c.value = h;
+        c.font = headerFont;
+        c.fill = headerFill;
+        c.alignment = center;
+        c.border = thinBorder;
+      });
+
+      const kpiData = [
+        ['Alumnos del scope',     activeStudents.length,                              '—',          ''],
+        ['Grupos',                scopedGroups.length,                                '—',          ''],
+        ['Materias con captura',  subjectsMine.length,                                '—',          ''],
+        ['Alumnos evaluados',     totalEvaluados,                                     '—',          ''],
+        ['Promedio',              promGlobal != null ? promGlobal : '—',              `≥ ${META_PROM}`,    promGlobal != null && promGlobal >= META_PROM ? '✓' : '✗'],
+        ['Alumnos aprobados',     totalAprobados,                                     '—',          ''],
+        ['% Aprobación',          totalEvaluados > 0 ? pctAprobGlobal + '%' : '—',    '—',          ''],
+        ['Alumnos irregulares',   totalIrregulares,                                   '—',          ''],
+        ['% Reprobación',         totalEvaluados > 0 ? pctIrregGlobal + '%' : '—',    `≤ ${META_IRREG}%`,  totalEvaluados > 0 && pctIrregGlobal <= META_IRREG ? '✓' : '✗'],
+      ];
+      kpiData.forEach((row, i) => {
+        const r = kpiStart + 2 + i;
+        row.forEach((v, ci) => {
+          const c = ws1.getCell(r, 1 + ci);
+          c.value = v;
+          c.alignment = ci === 0 ? left : center;
+          c.border = thinBorder;
+          if (ci === 0) c.font = { bold: true };
+          if (ci === 3) {
+            if (v === '✓') {
+              c.font = { bold: true, color: { argb: 'FF16A34A' }, size: 13 };
+              c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+            } else if (v === '✗') {
+              c.font = { bold: true, color: { argb: 'FFDC2626' }, size: 13 };
+              c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+            }
+          }
+        });
+      });
+
+      // ═══════════════════════════════════════════════════════════════
+      // HOJA 2 — POR MATERIA
+      // ═══════════════════════════════════════════════════════════════
+      const ws2 = wb.addWorksheet('Por Materia', {
+        pageSetup: { paperSize: 1, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+      });
+      ws2.getColumn(1).width = 40;
+      [14, 14, 14, 14, 14, 14].forEach((w, i) => ws2.getColumn(2 + i).width = w);
+
+      ws2.mergeCells('A1:G1');
+      ws2.getCell('A1').value = `📚 INDICADORES POR MATERIA · ${cfg.grado}° ${cfg.turno} · ${parcialLabel}`;
+      ws2.getCell('A1').font = titleFont;
+      ws2.getCell('A1').fill = titleFill;
+      ws2.getCell('A1').alignment = center;
+      ws2.getRow(1).height = 32;
+
+      const matHeaders = ['Materia', 'Alumnos evaluados', 'Promedio', 'Aprobados', '% Aprobación', 'Irregulares', '% Reprobación'];
+      matHeaders.forEach((h, i) => {
+        ws2.getCell(2, 1 + i).value = h;
+      });
+      applyHeaderRow(ws2, 2, 1, 7);
+
+      const matData = subjectsMine.map(subj => {
+        const subjGrades = grades.filter(g => g.subjectId === subj.id);
+        const cals = subjGrades.map(g => Number(g.cal != null ? g.cal : g.value)).filter(c => !isNaN(c));
+        const prom = cals.length > 0 ? +(cals.reduce((a, b) => a + b, 0) / cals.length).toFixed(2) : null;
+        const evalSet = new Set();
+        let rep = 0;
+        subjGrades.forEach(g => {
+          const c = Number(g.cal != null ? g.cal : g.value);
+          if (isNaN(c)) return;
+          evalSet.add(g.studentId);
+          if (c < passGrade) rep++;
+        });
+        const tot = evalSet.size;
+        const aprob = tot - rep;
+        const pctAprob = tot > 0 ? +((aprob * 100) / tot).toFixed(1) : null;
+        const pctRep = tot > 0 ? +((rep * 100) / tot).toFixed(1) : null;
+        return { nombre: subj.nombre || subj.id, tot, prom, aprob, pctAprob, rep, pctRep };
+      }); // ya viene en orden SEP porque subjectsMine fue ordenado con _sortBySEP
+
+      matData.forEach((m, i) => {
+        const r = 3 + i;
+        ws2.getCell(r, 1).value = m.nombre;
+        ws2.getCell(r, 1).alignment = left;
+        ws2.getCell(r, 2).value = m.tot;
+        ws2.getCell(r, 3).value = m.prom != null ? m.prom : '—';
+        ws2.getCell(r, 4).value = m.tot > 0 ? m.aprob : '—';
+        ws2.getCell(r, 5).value = m.pctAprob != null ? m.pctAprob / 100 : '—';
+        ws2.getCell(r, 5).numFmt = '0.0%';
+        ws2.getCell(r, 6).value = m.tot > 0 ? m.rep : '—';
+        ws2.getCell(r, 7).value = m.pctRep != null ? m.pctRep / 100 : '—';
+        ws2.getCell(r, 7).numFmt = '0.0%';
+
+        for (let c = 1; c <= 7; c++) {
+          ws2.getCell(r, c).border = thinBorder;
+          if (c !== 1) ws2.getCell(r, c).alignment = center;
+        }
+
+        // Resaltar promedio bajo
+        if (m.prom != null && m.prom < META_PROM) {
+          ws2.getCell(r, 3).font = { bold: true, color: { argb: 'FFB91C1C' } };
+          ws2.getCell(r, 3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        }
+        // Resaltar % reprobación alto
+        if (m.pctRep != null && m.pctRep > META_IRREG) {
+          ws2.getCell(r, 7).font = { bold: true, color: { argb: 'FFB91C1C' } };
+          ws2.getCell(r, 7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        }
+      });
+
+      // ═══════════════════════════════════════════════════════════════
+      // HOJA 3 — POR GRUPO
+      // ═══════════════════════════════════════════════════════════════
+      const ws3 = wb.addWorksheet('Por Grupo', {
+        pageSetup: { paperSize: 1, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+      });
+      ws3.getColumn(1).width = 18;
+      [14, 14, 14, 14, 14, 14].forEach((w, i) => ws3.getColumn(2 + i).width = w);
+
+      ws3.mergeCells('A1:G1');
+      ws3.getCell('A1').value = `👥 INDICADORES POR GRUPO · ${cfg.grado}° ${cfg.turno} · ${parcialLabel}`;
+      ws3.getCell('A1').font = titleFont;
+      ws3.getCell('A1').fill = titleFill;
+      ws3.getCell('A1').alignment = center;
+      ws3.getRow(1).height = 32;
+
+      const grpHeaders = ['Grupo', 'Alumnos del grupo', 'Promedio', 'Aprobados', '% Aprobación', 'Irregulares', '% Reprobación'];
+      grpHeaders.forEach((h, i) => { ws3.getCell(2, 1 + i).value = h; });
+      applyHeaderRow(ws3, 2, 1, 7);
+
+      const grpData = scopedGroups.map(grp => {
+        const grpStudents = activeStudents.filter(s => s.groupId === grp.id);
+        const grpStudentIds = new Set(grpStudents.map(s => s.id));
+        const grpGrades = grades.filter(g => grpStudentIds.has(g.studentId));
+        const cals = grpGrades.map(g => Number(g.cal != null ? g.cal : g.value)).filter(c => !isNaN(c));
+        const prom = cals.length > 0 ? +(cals.reduce((a, b) => a + b, 0) / cals.length).toFixed(2) : null;
+        const failsInGrp = {};
+        const evalInGrp = new Set();
+        grpGrades.forEach(g => {
+          const c = Number(g.cal != null ? g.cal : g.value);
+          if (isNaN(c)) return;
+          evalInGrp.add(g.studentId);
+          if (c < passGrade) failsInGrp[g.studentId] = (failsInGrp[g.studentId] || 0) + 1;
+        });
+        const tot = evalInGrp.size;
+        const rep = Object.keys(failsInGrp).length;
+        const aprob = tot - rep;
+        const pctAprob = tot > 0 ? +((aprob * 100) / tot).toFixed(1) : null;
+        const pctRep = tot > 0 ? +((rep * 100) / tot).toFixed(1) : null;
+        return { nombre: grp.nombre, totalAlumnos: grpStudents.length, tot, prom, aprob, pctAprob, rep, pctRep };
+      }).sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+      grpData.forEach((g, i) => {
+        const r = 3 + i;
+        ws3.getCell(r, 1).value = g.nombre;
+        ws3.getCell(r, 1).font = { bold: true };
+        ws3.getCell(r, 1).alignment = center;
+        ws3.getCell(r, 2).value = g.totalAlumnos;
+        ws3.getCell(r, 3).value = g.prom != null ? g.prom : '—';
+        ws3.getCell(r, 4).value = g.tot > 0 ? g.aprob : '—';
+        ws3.getCell(r, 5).value = g.pctAprob != null ? g.pctAprob / 100 : '—';
+        ws3.getCell(r, 5).numFmt = '0.0%';
+        ws3.getCell(r, 6).value = g.tot > 0 ? g.rep : '—';
+        ws3.getCell(r, 7).value = g.pctRep != null ? g.pctRep / 100 : '—';
+        ws3.getCell(r, 7).numFmt = '0.0%';
+
+        for (let c = 1; c <= 7; c++) {
+          ws3.getCell(r, c).border = thinBorder;
+          if (c >= 2) ws3.getCell(r, c).alignment = center;
+        }
+
+        if (g.prom != null && g.prom < META_PROM) {
+          ws3.getCell(r, 3).font = { bold: true, color: { argb: 'FFB91C1C' } };
+          ws3.getCell(r, 3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        }
+        if (g.pctRep != null && g.pctRep > META_IRREG) {
+          ws3.getCell(r, 7).font = { bold: true, color: { argb: 'FFB91C1C' } };
+          ws3.getCell(r, 7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        }
+      });
+
+      // ═══════════════════════════════════════════════════════════════
+      // HOJA 4 — ALUMNOS IRREGULARES (con materias reprobadas)
+      // ═══════════════════════════════════════════════════════════════
+      const ws4 = wb.addWorksheet('Alumnos Irregulares', {
+        pageSetup: { paperSize: 1, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+      });
+      ws4.getColumn(1).width = 6;
+      ws4.getColumn(2).width = 36;
+      ws4.getColumn(3).width = 12;
+      ws4.getColumn(4).width = 14;
+      ws4.getColumn(5).width = 60;
+
+      ws4.mergeCells('A1:E1');
+      ws4.getCell('A1').value = `🚨 ALUMNOS IRREGULARES · ${cfg.grado}° ${cfg.turno} · ${parcialLabel}`;
+      ws4.getCell('A1').font = titleFont;
+      ws4.getCell('A1').fill = titleFill;
+      ws4.getCell('A1').alignment = center;
+      ws4.getRow(1).height = 32;
+
+      const irrHeaders = ['#', 'Apellidos y nombre', 'Grupo', 'Materias reprobadas', 'Materias'];
+      irrHeaders.forEach((h, i) => { ws4.getCell(2, 1 + i).value = h; });
+      applyHeaderRow(ws4, 2, 1, 5);
+
+      const subjectMap = {}; subjectsMine.forEach(s => { subjectMap[s.id] = s.nombre || s.id; });
+      const groupMap = {}; scopedGroups.forEach(g => { groupMap[g.id] = g.nombre; });
+
+      const irregulares = Object.keys(failsByStudent)
+        .map(sid => {
+          const stu = activeStudents.find(s => s.id === sid);
+          if (!stu) return null;
+          const nombre = ((stu.apellido1 || '') + ' ' + (stu.apellido2 || '') + ' ' + (stu.nombres || '')).trim();
+          const matIds = failsBySubjectByStudent[sid] || [];
+          // Materias reprobadas en orden SEP (no alfabético) para consistencia
+          // con el resto del Excel.
+          const sepOrderNorm = (SEP_ORDER[cfg.grado] || []).map(_normSubj);
+          const matNombres = matIds
+            .map(mid => subjectMap[mid] || mid)
+            .sort((a, b) => {
+              const na = _normSubj(a), nb = _normSubj(b);
+              const ia = sepOrderNorm.findIndex(o => o === na || o.includes(na) || na.includes(o));
+              const ib = sepOrderNorm.findIndex(o => o === nb || o.includes(nb) || nb.includes(o));
+              const aa = ia === -1 ? 9999 : ia;
+              const bb = ib === -1 ? 9999 : ib;
+              return aa !== bb ? aa - bb : a.localeCompare(b);
+            });
+          return {
+            nombre,
+            grupo: groupMap[stu.groupId] || '',
+            count: failsByStudent[sid],
+            materias: matNombres.join(', ')
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.count - a.count || a.nombre.localeCompare(b.nombre));
+
+      if (irregulares.length === 0) {
+        ws4.mergeCells('A3:E3');
+        ws4.getCell('A3').value = '✓ Ningún alumno irregular en este parcial — ¡felicidades!';
+        ws4.getCell('A3').font = { italic: true, color: { argb: 'FF16A34A' }, bold: true, size: 12 };
+        ws4.getCell('A3').alignment = center;
+        ws4.getCell('A3').border = thinBorder;
+      } else {
+        irregulares.forEach((alu, i) => {
+          const r = 3 + i;
+          ws4.getCell(r, 1).value = i + 1;
+          ws4.getCell(r, 2).value = alu.nombre;
+          ws4.getCell(r, 3).value = alu.grupo;
+          ws4.getCell(r, 4).value = alu.count;
+          ws4.getCell(r, 5).value = alu.materias;
+
+          ws4.getCell(r, 1).alignment = center;
+          ws4.getCell(r, 2).alignment = left;
+          ws4.getCell(r, 3).alignment = center;
+          ws4.getCell(r, 4).alignment = center;
+          ws4.getCell(r, 5).alignment = left;
+
+          for (let c = 1; c <= 5; c++) ws4.getCell(r, c).border = thinBorder;
+
+          // Severidad por número de reprobadas
+          if (alu.count >= 4) {
+            ws4.getCell(r, 4).font = { bold: true, color: { argb: 'FFB91C1C' }, size: 13 };
+            ws4.getCell(r, 4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+          } else if (alu.count >= 2) {
+            ws4.getCell(r, 4).font = { bold: true, color: { argb: 'FFC2410C' } };
+            ws4.getCell(r, 4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEDD5' } };
+          } else {
+            ws4.getCell(r, 4).font = { bold: true, color: { argb: 'FFCA8A04' } };
+            ws4.getCell(r, 4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+          }
+        });
+      }
+
+      // ─── Descargar ───
       const buffer = await wb.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Academia_${cfg.nombre.replace(/\s+/g, '_')}_${_filters.parcial}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const safeName = `${cfg.grado}o_${cfg.turno}_${cfg.rol || 'academia'}`.replace(/[^\w-]/g, '');
+      a.download = `Academia_${safeName}_${_filters.parcial}_${new Date().toISOString().slice(0, 10)}.xlsx`;
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
@@ -438,7 +911,6 @@ const PresidenteAcademiaModule = (() => {
     }
   }
 
-  // ─── Punto de entrada vía Router ─────────────────────────────
   async function render() {
     const container = document.getElementById('moduleContainer');
     if (container) return renderDashboard(container);

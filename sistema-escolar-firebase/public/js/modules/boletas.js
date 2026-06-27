@@ -48,7 +48,7 @@ const BoletasModule = (() => {
             <div class="form-group">
               <label for="bol-parcial">Parcial</label>
               <select id="bol-parcial">
-                <option value="todos">Todos los parciales</option>
+                <option value="todos">Acumulado</option>
                 ${parcialOptions}
               </select>
             </div>
@@ -104,18 +104,27 @@ const BoletasModule = (() => {
 
   async function loadData() {
     try {
+      // FORCE refresh: garantiza datos frescos del servidor (no cache local).
+      // Previene bugs de "no se puede generar" causados por cache corrupto
+      // que tiene un alumno o assignment desactualizado para algun grupo.
       const [g, s, sub, asgn, oriGroups] = await Promise.all([
-        Store.getGroups(), Store.getStudents(), Store.getSubjects(), Store.getAssignments(),
+        Store.getGroups(true), Store.getStudents(true), Store.getSubjects(true), Store.getAssignments(true),
         Store.getOrientadorGroups()
       ]);
       orientadorGroupIds = oriGroups; // null for admin, array for orientador
       groups = oriGroups ? g.filter(gr => oriGroups.includes(gr.id)) : g;
-      students = s.filter(st => st.estatus === 'ACTIVO');
+      // Activos = estatus 'ACTIVO' OR vacio (legacy). Antes solo === 'ACTIVO'
+      // excluia alumnos cuyo doc tenia estatus vacio (en bajas pendientes/migracion).
+      students = s.filter(st => {
+        const e = (st.estatus || '').toString().toUpperCase().trim();
+        return e === '' || e === 'ACTIVO';
+      });
       subjects = sub;
       assignments = asgn;
+      console.log('[BOLETAS] loadData OK: students=' + students.length + ' groups=' + groups.length + ' subjects=' + subjects.length + ' assignments=' + assignments.length);
     } catch (e) {
       console.error('Error cargando datos para boletas:', e);
-      Toast.show('Error al cargar datos', 'error');
+      Toast.show('Error al cargar datos: ' + e.message, 'error');
     }
   }
 
@@ -179,6 +188,11 @@ const BoletasModule = (() => {
       .filter(s => s.groupId === groupId || s.grupo === groupId)
       .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
 
+    // ── DIAG TEMPORAL (v7.75) ──
+    console.log('[BOLETAS] onGrupoChange groupId=' + groupId + ' filtered=' + filtered.length);
+    const badStudents = filtered.filter(s => !s.id || !s.nombreCompleto);
+    if (badStudents.length > 0) console.warn('[BOLETAS] Alumnos sin id/nombre:', badStudents);
+
     alumnoSel.innerHTML = '<option value="todos">Todo el grupo</option>' + filtered.map(s => `<option value="${s.id}">${Utils.sanitize(s.nombreCompleto)}</option>`).join('');
     alumnoSel.disabled = false;
   }
@@ -194,6 +208,10 @@ const BoletasModule = (() => {
     const parcialMode = document.getElementById('bol-parcial').value;
     const alumnoId = document.getElementById('bol-alumno').value;
     const resultsDiv = document.getElementById('bol-results');
+
+    // ── DIAG TEMPORAL (v7.75) — quitar despues de encontrar el bug 1-2 TM ──
+    console.log('[BOLETAS] generate() turno=' + turno + ' grado=' + grado + ' groupId=' + groupId + ' parcial=' + parcialMode + ' alumno=' + alumnoId);
+    console.log('[BOLETAS] students cargados=' + students.length + ' groups=' + groups.length + ' subjects=' + subjects.length + ' assignments=' + assignments.length);
 
     if (!turno || !grado || !groupId) {
       Toast.show('Selecciona turno, grado y grupo', 'warning');
@@ -217,12 +235,32 @@ const BoletasModule = (() => {
         return;
       }
 
-      // Get students
+      // Get students del grupo completo (activos), siempre ordenado alfabético.
+      // Este orden es la fuente de verdad para el "Numero de Lista" (NL) dinamico.
+      const fullGroupActive = students
+        .filter(s => (s.groupId === groupId || s.grupo === groupId))
+        .filter(s => {
+          const e = (s.estatus || '').toString().toUpperCase().trim();
+          return e === '' || e === 'ACTIVO';
+        })
+        .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+      const nlByStudentId = {};
+      fullGroupActive.forEach((s, i) => {
+        if (s && s.id) nlByStudentId[s.id] = i + 1;
+      });
+      console.log('[BOLETAS] fullGroupActive=' + fullGroupActive.length + ' para groupId=' + groupId);
+
+      if (fullGroupActive.length === 0) {
+        resultsDiv.innerHTML = UI.emptyState('person_off',
+          'No se encontraron alumnos activos para el grupo ' + groupId + '. ' +
+          'Posibles causas: cache desactualizado o todos los alumnos fueron dados de baja. ' +
+          'Intenta refrescar la página con Cmd+Shift+R.');
+        return;
+      }
+
       let targetStudents;
       if (alumnoId === 'todos') {
-        targetStudents = students
-          .filter(s => s.groupId === groupId || s.grupo === groupId)
-          .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+        targetStudents = fullGroupActive;
       } else {
         const found = students.find(s => s.id === alumnoId);
         targetStudents = found ? [found] : [];
@@ -233,14 +271,23 @@ const BoletasModule = (() => {
         return;
       }
 
-      // Fetch grades for this group via Store cache
-      const groupGrades = await Store.getGradesByGroup(groupId);
+      // Fetch grades for this group — FORCE refresh para garantizar datos frescos
+      // (previene cache corrupto que causa "no se puede generar")
+      console.log('[BOLETAS] Cargando grades para groupId=' + groupId);
+      const groupGrades = await Store.getGradesByGroup(groupId, true);
+      console.log('[BOLETAS] grades cargados: ' + (groupGrades?.length || 0));
       const gradesMap = {};
-      for (const g of groupGrades) {
+      for (const g of (groupGrades || [])) {
+        if (!g || !g.studentId || !g.subjectId || !g.partial) continue; // defensivo
         if (!gradesMap[g.studentId]) gradesMap[g.studentId] = {};
         if (!gradesMap[g.studentId][g.subjectId]) gradesMap[g.studentId][g.subjectId] = {};
-        gradesMap[g.studentId][g.subjectId][g.partial] = g;
+        if (!gradesMap[g.studentId][g.subjectId][g.partial]) gradesMap[g.studentId][g.subjectId][g.partial] = g;
       }
+
+      // Cargar teacherHours del grupo (para calcular % faltas > 20% = EXTRA_FALTAS)
+      // Cada subject tiene 3 docs: {groupId}_{subjectId}_{P1|P2|P3}.
+      // Una sola query por groupId trae todo lo del grupo (~33 docs para 11 materias).
+      const hoursMap = await _loadHoursMap(groupId);
 
       // Group info
       const groupInfo = groups.find(g => g.id === groupId);
@@ -248,6 +295,7 @@ const BoletasModule = (() => {
       const schoolConfig = App.schoolConfig || {};
       const cicloEscolar = schoolConfig.cicloEscolar || '2025-2026';
       const orientador = K.getOrientador(turno, groupName);
+
 
       // Fecha seleccionada
       const fechaInput = document.getElementById('bol-fecha')?.value;
@@ -257,7 +305,7 @@ const BoletasModule = (() => {
 
       const sinDesglose = document.getElementById('bol-sin-desglose')?.checked || false;
       const meta = {
-        cicloEscolar, groupName, turno, grado, parcialMode, orientador, fechaTexto, sinDesglose
+        cicloEscolar, groupName, turno, grado, parcialMode, orientador, fechaTexto, sinDesglose,
       };
 
       // Filtro por estatus academico (reprobados/aprobados)
@@ -303,13 +351,46 @@ const BoletasModule = (() => {
       let html = `<div class="alert alert-info no-print" style="margin-bottom:12px;">Mostrando <strong>${targetStudents.length}</strong> de ${totalBeforeFilter} alumnos${filterLabel}</div>`;
 
       targetStudents.forEach((student, idx) => {
-        html += _buildBoleta(student, groupSubjects, gradesMap[student.id] || {}, meta, idx === targetStudents.length - 1);
+        const nlNumero = nlByStudentId[student.id] || (idx + 1);
+        html += _buildBoleta(student, groupSubjects, gradesMap[student.id] || {}, meta, idx === targetStudents.length - 1, nlNumero, hoursMap);
       });
 
       resultsDiv.innerHTML = html;
+      console.log('[BOLETAS] OK render completado. Targets=' + targetStudents.length + ' subjects=' + groupSubjects.length);
     } catch (e) {
-      console.error('Error generando boletas:', e);
-      resultsDiv.innerHTML = UI.errorState('Error al generar boletas: ' + e.message);
+      console.error('[BOLETAS] Error generando boletas:', e);
+      console.error('[BOLETAS] Stack:', e.stack);
+      Toast.show('Error: ' + (e.message || e), 'error');
+      resultsDiv.innerHTML = UI.errorState('Error al generar boletas: ' + (e.message || String(e)) + '<br><br><pre style="text-align:left;font-size:11px;background:#f5f5f5;padding:8px;overflow:auto;">' + (e.stack || '').replace(/</g, '&lt;') + '</pre>');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Cargar teacherHours del grupo en un mapa { subjectId: { P1, P2, P3 } }
+  // Una query única `where('groupId','==',groupId)` trae todo. Si falla,
+  // retorna {} y el cálculo de %faltas seguirá funcionando (solo no marcará
+  // EXTRA_FALTAS porque horasTotal=0 → pctInasistencia=0).
+  // ─────────────────────────────────────────────────────────────
+  async function _loadHoursMap(groupId) {
+    try {
+      const snap = await firebase.firestore()
+        .collection('teacherHours')
+        .where('groupId', '==', groupId)
+        .get();
+      const map = {};
+      snap.forEach(doc => {
+        const data = doc.data() || {};
+        const sid = data.subjectId;
+        const pid = data.partial;
+        if (!sid || !pid) return;
+        if (!map[sid]) map[sid] = {};
+        map[sid][pid] = data;
+      });
+      console.log('[BOLETAS] teacherHours cargados: ' + snap.size + ' docs (' + Object.keys(map).length + ' materias)');
+      return map;
+    } catch (e) {
+      console.warn('[BOLETAS] No se pudo cargar teacherHours:', e.message);
+      return {};
     }
   }
 
@@ -317,18 +398,50 @@ const BoletasModule = (() => {
   // Build single boleta — formato oficial
   // ─────────────────────────────────────────────────────────────
 
-  function _buildBoleta(student, subjectsList, studentGrades, meta, isLast) {
+  function _buildBoleta(student, subjectsList, studentGrades, meta, isLast, nlNumero, hoursMap) {
+    hoursMap = hoursMap || {};
+    // ─── PRE-CÁLCULO: estatus de extraordinario por materia ───
+    // Usa App.calcStatusExtraordinario (regla EPO 67: >20% faltas o reprobado).
+    // El estatus por materia se inyecta en la columna "Observaciones" del formato
+    // Acumulado para que cada materia muestre formalmente "Extraordinario por
+    // faltas / por calificación / por ambas" cuando aplique.
+    const _isTraslado = !!student.bajaPendiente;
+    const subjectStatusMap = {};
+    if (!_isTraslado && typeof App?.calcStatusExtraordinario === 'function') {
+      subjectsList.forEach(subj => {
+        const sg = studentGrades[subj.id] || {};
+        const grades3 = [sg.P1 || null, sg.P2 || null, sg.P3 || null];
+        const hoursByPart = (hoursMap && hoursMap[subj.id]) || {};
+        try {
+          subjectStatusMap[subj.id] = App.calcStatusExtraordinario({ grades3, hoursByPart });
+        } catch (e) { /* ignorar errores de cálculo individual */ }
+      });
+    }
+    return _buildBoletaInner(student, subjectsList, studentGrades, meta, isLast, nlNumero, { subjectStatusMap });
+  }
+
+  // Renderizador real — recibe el subjectStatusMap pre-computado arriba.
+  function _buildBoletaInner(student, subjectsList, studentGrades, meta, isLast, nlNumero, statusInfo) {
     const parcialMode = meta.parcialMode;
     const isTodos = parcialMode === 'todos';
     const rubros = K.getRubros(meta.turno);
     const isTraslado = !!student.bajaPendiente;
-    const blankFill = isTraslado ? '' : 0;
+    // Celdas sin datos = VACÍAS (no "0"). El "0" daba la impresión de que el
+    // alumno tenía cero faltas o cero calificación cuando en realidad ese
+    // parcial aún no se había capturado. Modo "todos los parciales" suele
+    // mostrar P3 vacío mientras P3 todavía no se completa — debe verse así,
+    // no como un cero engañoso.
+    const blankFill = '';
     const gradoNombre = K.GRADO_NOMBRE[meta.grado] || meta.grado;
-    const semestre = { 1: 'PRIMERO', 2: 'TERCERO', 3: 'QUINTO' }[meta.grado] || '';
+    // Semestre corriente según la fecha actual. Helper en App.getCurrentSemester
+    // detecta si estamos en 1er o 2do semestre del ciclo (ago-ene vs feb-jul)
+    // y devuelve el correcto. Antes estaba hardcoded a los IMPARES (PRIMERO/
+    // TERCERO/QUINTO) lo cual estaba mal para impresiones de feb-jul.
+    const semestre = App.getCurrentSemester(meta.grado).texto;
     const headerLines = K.BOLETA_HEADER.map(line =>
       `<div style="font-size:10px;font-weight:600;letter-spacing:0.3px;line-height:1.3;">${Utils.sanitize(line)}</div>`
     ).join('');
-    const parcialLabel = isTodos ? 'TODOS LOS PARCIALES' :
+    const parcialLabel = isTodos ? 'ACUMULADO' :
       (K.PARCIALES.find(p => p.id === parcialMode)?.nombre || parcialMode).toUpperCase();
 
     // ─── Decide format: new (all parcials with faltas+cal+obs) or legacy (single parcial rubros) ───
@@ -336,7 +449,7 @@ const BoletasModule = (() => {
     let grandTotal = 0, grandCount = 0;
     let parcialReprobadas = 0, parcialFaltasTotal = 0;
     let promedio = '-';
-    let nivelRiesgo = { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
+    let nivelRiesgo = { text: 'SIN RIESGO', color: '#555', bg: '#f0f0f0', border: '#666' };
 
     if (isTodos && meta.sinDesglose) {
       // ═══ TODOS + SIN DESGLOSE: solo 3 calificaciones + faltas total + promedio ═══
@@ -377,12 +490,11 @@ const BoletasModule = (() => {
           <td style="text-align:center;font-weight:700;font-size:11px;${promFail ? 'background:#ddd;' : ''}">${promMat}</td>
         </tr>`;
       }).join('');
-      const promedioGral = promediosCol.cnt > 0 ? (promediosCol.sum / promediosCol.cnt).toFixed(2) : blankFill;
-      const promedioFail = promediosCol.cnt > 0 && parseFloat(promedioGral) < K.THRESHOLDS.PASS_GRADE;
-      promedioRow = `<tr style="border-top:2px solid #333;">
-        <td colspan="6" style="text-align:right;font-weight:700;font-size:11px;padding:6px 8px;">PROMEDIO GENERAL:</td>
-        <td style="text-align:center;font-weight:700;font-size:12px;${promedioFail ? 'background:#ddd;' : ''}">${promedioGral}</td>
-      </tr>`;
+      // Sin fila resumen de promedio general: cada materia ya muestra su
+      // promedio individual en la columna "PROMEDIO" del renglón. Decisión
+      // Olivia (mayo 2026): no mostrar promedio acumulado para evitar
+      // confusión con el del concentrado.
+      promedioRow = '';
       // Resumen de riesgo
       subjectsList.forEach(subj => {
         const sg = studentGrades[subj.id] || {};
@@ -395,9 +507,9 @@ const BoletasModule = (() => {
         }
         if (mateReprobada) parcialReprobadas++;
       });
-      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#c62828', bg: '#ffebee', border: '#c62828' }
-        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#e65100', bg: '#fff3e0', border: '#e65100' }
-        : { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
+      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#000', bg: '#d6d6d6', border: '#000' }
+        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#222', bg: '#e8e8e8', border: '#333' }
+        : { text: 'SIN RIESGO', color: '#555', bg: '#f0f0f0', border: '#666' };
 
     } else if (isTodos) {
       // ═══ NEW FORMAT: Faltas 1a,2a,3a | Cal 1a,2a,3a | Observaciones ═══
@@ -423,7 +535,19 @@ const BoletasModule = (() => {
         const sg = isTraslado ? {} : (studentGrades[subj.id] || {});
         const faltasCells = K.PARCIALES.map(p => {
           const gd = sg[p.id];
-          const f = gd && gd.faltas !== undefined ? gd.faltas : blankFill;
+          // Regla SEP: si NO hay calificación capturada para el parcial, la celda
+          // queda vacía (el parcial todavía no existe). Si SÍ hay calificación
+          // pero el maestro no llenó faltas, se interpreta como 0 faltas
+          // (porque el parcial está cerrado y el dato faltante = ausencia capturada).
+          const tieneCal = gd && (gd.cal !== undefined || gd.value !== undefined);
+          let f;
+          if (!tieneCal) {
+            f = '';  // parcial no capturado → vacío
+          } else if (gd.faltas !== undefined && gd.faltas !== null) {
+            f = gd.faltas;  // faltas registradas
+          } else {
+            f = 0;  // parcial capturado sin faltas explícitas → 0
+          }
           return `<td style="text-align:center;font-size:9px;">${f}</td>`;
         }).join('');
         const calCells = K.PARCIALES.map(p => {
@@ -442,16 +566,59 @@ const BoletasModule = (() => {
           const gd = sg[p.id];
           return gd ? (gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null)) : null;
         });
+        // \u2500\u2500\u2500 OBSERVACI\u00d3N OFICIAL POR MATERIA \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        // Regla EPO 67 (Gaceta SEP): >20% de inasistencias del total de horas
+        // impartidas \u2192 pierde derecho a calificaci\u00f3n ordinaria. Para la pre-boleta
+        // marcamos EXTRA POR FALTAS apenas se cruza el 20%, AUN si falta P3 por
+        // capturar \u2014 porque con P1+P2 ya superando 20%, pr\u00e1cticamente no hay
+        // vuelta atr\u00e1s. (calcStatusExtraordinario espera los 3 parciales para
+        // marcar definitivo; eso aplica a indicadores globales, no a la
+        // preboleta que se entrega al padre durante el ciclo.)
+        const _st = (statusInfo && statusInfo.subjectStatusMap) ? statusInfo.subjectStatusMap[subj.id] : null;
+        const pct = _st && typeof _st.pctInasistencia === 'number' ? _st.pctInasistencia : 0;
+        const faltasTot = _st && typeof _st.faltasTotal === 'number' ? _st.faltasTotal : 0;
+        const horasTot  = _st && typeof _st.horasTotal === 'number' ? _st.horasTotal : 0;
         const failCount = calValues.filter(v => v !== null && v < K.THRESHOLDS.PASS_GRADE).length;
+        const validCals = calValues.filter(v => v !== null);
+        const promedioRow = validCals.length ? (validCals.reduce((s,c)=>s+c,0) / validCals.length) : null;
+        const tiene3 = validCals.length === 3;
+        const PASS = K.THRESHOLDS.PASS_GRADE;
+
+        // v8.58: 3 REGLAS SEP INDEPENDIENTES (Gaceta EPO 67).
+        // Las 3 se eval\u00faan por separado. UNA sola que se cumpla manda a extraordinario.
+        // No se redondean cals < 6 (5.99 sigue siendo reprobatorio).
+        const reglaPromBajo = (tiene3 && promedioRow !== null && promedioRow < PASS);
+        const reglaDosReprob = (failCount >= 2);
+        const reglaInasist = (horasTot > 0 && pct > 20);
+        const extraPorCal = reglaPromBajo || reglaDosReprob;
+        const extraPorFaltas = reglaInasist;
+
         let observation = '';
-        if (failCount >= 2) observation = 'Extraordinario por calificaci\u00f3n';
-        else if (failCount === 1) observation = 'Riesgo de extraordinario';
+        const obsColor = '#333';
+        const obsWeight = 'normal';
+        const pctStr = pct.toFixed(1) + '%';
+
+        // Lista TODAS las reglas que se activaron (puede ser una, dos o las tres)
+        if (extraPorCal || extraPorFaltas) {
+          const reglas = [];
+          if (reglaPromBajo) {
+            const promTrunc = Math.floor(promedioRow * 100) / 100;
+            reglas.push(`promedio ${promTrunc.toFixed(2)}<${PASS}`);
+          }
+          if (reglaDosReprob) reglas.push(`${failCount} parciales reprob.`);
+          if (reglaInasist) reglas.push(`${pctStr} inasist.`);
+          observation = 'Extraordinario: ' + reglas.join(' + ');
+        } else if (failCount === 1) {
+          observation = 'Riesgo de extraordinario';
+        } else if (horasTot > 0 && pct > 15) {
+          observation = `Atenci\u00f3n: inasistencias en el l\u00edmite (${pctStr})`;
+        }
         const hasFail = calValues.some(v => v !== null && v < K.THRESHOLDS.PASS_GRADE);
         const bg = hasFail ? 'background:#D9D9D9;-webkit-print-color-adjust:exact;print-color-adjust:exact;' : (idx % 2 === 1 ? 'background:#f9f9f9;' : '');
         return `<tr style="${bg}">
           <td style="font-size:9px;padding:2px 4px;">${Utils.sanitize(K.getUACNombre(subj.nombre || subj.id))}</td>
           ${faltasCells}${calCells}
-          <td style="font-size:9px;color:#555;padding:2px 4px;">${observation}</td>
+          <td style="font-size:9px;color:${obsColor};font-weight:${obsWeight};padding:2px 4px;">${observation}</td>
         </tr>`;
       }).join('');
 
@@ -460,7 +627,12 @@ const BoletasModule = (() => {
         const avg = s.cnt > 0 ? (s.sum / s.cnt).toFixed(1) : blankFill;
         return `<td style="text-align:center;font-weight:700;">${avg}</td>`;
       }).join('');
-      promedioRow = `<tr style="border-top:2px solid #333;background:#eee;">
+      // ─── PROMEDIO POR PARCIAL (única fila resumen) ───
+      // Antes había un "PROMEDIO ACUMULADO" o "PROMEDIO (P2) AL FECHA" debajo,
+      // pero generaba confusión con el concentrado del parcial. Decisión Olivia
+      // (mayo 2026): mostrar SOLO la fila por parcial. El que necesite el
+      // promedio del último parcial lo lee directamente de la columna correspondiente.
+      promedioRow = `<tr style="border-top:1px solid #999;background:#f5f5f5;">
         <td colspan="4" style="text-align:right;font-weight:700;padding:4px 8px;">PROMEDIO</td>
         ${promedioCells}<td></td>
       </tr>`;
@@ -476,7 +648,11 @@ const BoletasModule = (() => {
       tableRows = subjectsList.map((subj, idx) => {
         const sg = isTraslado ? {} : (studentGrades[subj.id] || {});
         const gradeDoc = sg[parcialMode] || {};
-        const faltas = gradeDoc.faltas !== undefined ? gradeDoc.faltas : blankFill;
+        // Mismo criterio: si hay calificación capturada y no hay faltas, asumir 0
+        // (parcial capturado pero sin faltas registradas = 0 faltas). Si NO hay
+        // calificación, dejar vacío (parcial sin capturar).
+        const tieneCal = gradeDoc.cal !== undefined || gradeDoc.value !== undefined;
+        const faltas = !tieneCal ? blankFill : (gradeDoc.faltas !== undefined && gradeDoc.faltas !== null ? gradeDoc.faltas : 0);
         const cal = gradeDoc.cal !== undefined ? gradeDoc.cal : (gradeDoc.value !== undefined ? gradeDoc.value : '');
         if (cal !== '' && cal !== null) { grandTotal += Number(cal); grandCount++; }
         const isFail = cal !== '' && cal !== null && Number(cal) < K.THRESHOLDS.PASS_GRADE;
@@ -488,7 +664,7 @@ const BoletasModule = (() => {
           <td style="text-align:center;font-weight:700;font-size:12px;${isFail ? 'background:#ddd;' : ''}">${cal === '' ? blankFill : cal}</td>
         </tr>`;
       }).join('');
-      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(2) : blankFill;
+      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(1) : blankFill;
       const promedioFail = promedio !== '-' && parseFloat(promedio) < K.THRESHOLDS.PASS_GRADE;
       promedioRow = `<tr style="border-top:2px solid #333;">
         <td colspan="3" style="text-align:right;font-weight:700;font-size:11px;padding:6px 8px;">PROMEDIO GENERAL:</td>
@@ -503,9 +679,9 @@ const BoletasModule = (() => {
         if (cal !== null && cal < K.THRESHOLDS.PASS_GRADE) parcialReprobadas++;
         if (gd.faltas !== undefined && !isNaN(gd.faltas)) parcialFaltasTotal += Number(gd.faltas);
       });
-      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#c62828', bg: '#ffebee', border: '#c62828' }
-        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#e65100', bg: '#fff3e0', border: '#e65100' }
-        : { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
+      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#000', bg: '#d6d6d6', border: '#000' }
+        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#222', bg: '#e8e8e8', border: '#333' }
+        : { text: 'SIN RIESGO', color: '#555', bg: '#f0f0f0', border: '#666' };
 
     } else {
       // ═══ LEGACY FORMAT: Single parcial with rubros ═══
@@ -542,7 +718,7 @@ const BoletasModule = (() => {
           <td style="text-align:center;font-weight:700;${isFail ? 'background:#ddd;' : ''}">${cal === '' ? blankFill : cal}</td>
         </tr>`;
       }).join('');
-      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(2) : blankFill;
+      promedio = grandCount > 0 ? (grandTotal / grandCount).toFixed(1) : blankFill;
       const promedioFail = promedio !== '-' && parseFloat(promedio) < K.THRESHOLDS.PASS_GRADE;
       const colSpan = rubros.length + 4;
       promedioRow = `<tr style="border-top:2px solid #333;">
@@ -559,9 +735,9 @@ const BoletasModule = (() => {
         if (gd.faltas !== undefined && !isNaN(gd.faltas)) parcialFaltasTotal += Number(gd.faltas);
       });
 
-      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#c62828', bg: '#ffebee', border: '#c62828' }
-        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#e65100', bg: '#fff3e0', border: '#e65100' }
-        : { text: 'SIN RIESGO', color: '#2e7d32', bg: '#e8f5e9', border: '#2e7d32' };
+      nivelRiesgo = parcialReprobadas >= 3 ? { text: 'ALTO RIESGO', color: '#000', bg: '#d6d6d6', border: '#000' }
+        : parcialReprobadas >= 1 ? { text: 'EN RIESGO', color: '#222', bg: '#e8e8e8', border: '#333' }
+        : { text: 'SIN RIESGO', color: '#555', bg: '#f0f0f0', border: '#666' };
     }
 
     // ─── Observaciones META ───
@@ -645,7 +821,7 @@ const BoletasModule = (() => {
           </tr>
           <tr>
             <td colspan="3"><strong>NOMBRE DEL ALUMNO(A):</strong> &nbsp; ${Utils.sanitize(student.nombreCompleto || '')}</td>
-            <td><strong>N.L.</strong> ${Utils.sanitize(String(student.np || ''))}</td>
+            <td><strong>N.L.</strong> ${Utils.sanitize(String(nlNumero || ''))}</td>
           </tr>` : `
           <tr>
             <td style="width:60%;"><strong>ALUMNO(A):</strong> ${Utils.sanitize(student.nombreCompleto || '')}</td>
@@ -667,8 +843,8 @@ const BoletasModule = (() => {
             <div style="font-size:22px;font-weight:800;color:#333;">${promedio}</div>
             <div style="font-size:9px;color:#666;">Promedio</div>
           </div>
-          <div style="text-align:center;padding:8px 18px;border:2px solid ${parcialReprobadas > 0 ? '#c62828' : '#333'};border-radius:8px;">
-            <div style="font-size:22px;font-weight:800;color:${parcialReprobadas > 0 ? '#c62828' : '#2e7d32'};">${parcialReprobadas}</div>
+          <div style="text-align:center;padding:8px 18px;border:2px solid #333;border-radius:8px;">
+            <div style="font-size:22px;font-weight:800;color:#000;">${parcialReprobadas}</div>
             <div style="font-size:9px;color:#666;">Reprobadas</div>
           </div>
           <div style="text-align:center;padding:8px 18px;border:2px solid #333;border-radius:8px;">
@@ -715,6 +891,10 @@ const BoletasModule = (() => {
     }
 
     const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      Toast.show('El navegador BLOQUEÓ la ventana de impresión. Haz clic en el ícono de "pop-up bloqueado" en la barra de direcciones y permite pop-ups para este sitio, luego intenta de nuevo.', 'error');
+      return;
+    }
     const _printGroupInfo = groups.find(g => g.id === document.getElementById('bol-grupo')?.value);
     const _printOrient = _printGroupInfo ? K.getOrientador(_printGroupInfo.turno, _printGroupInfo.nombre) : '';
     const _printTitle = Utils.fileName({
@@ -778,7 +958,7 @@ const BoletasModule = (() => {
       targetStudents = found ? [found] : [];
     }
 
-    Store.getGradesByGroup(groupId).then(groupGrades => {
+    Store.getGradesByGroup(groupId, true).then(groupGrades => {
       const gMap = {};
       for (const g of groupGrades) {
         if (!gMap[g.studentId]) gMap[g.studentId] = {};
@@ -868,20 +1048,29 @@ const BoletasModule = (() => {
     const parcialMode = document.getElementById('bol-parcial')?.value || 'todos';
     const estatusFiltro = document.getElementById('bol-estatus')?.value || 'todos';
 
-    if (!turno) { Toast.show('Selecciona un turno', 'warning'); return; }
+    if (!turno) { Toast.show('Selecciona un turno', 'warning'); _massDownloading = false; return; }
 
     const fechaInput = document.getElementById('bol-fecha')?.value;
     const fechaObj = fechaInput ? new Date(fechaInput + 'T12:00:00') : new Date();
     const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
     const fechaTexto = `Cuautitl\u00e1n Izcalli, M\u00e9x. A ${fechaObj.getDate()} de ${meses[fechaObj.getMonth()]} de ${fechaObj.getFullYear()}.`;
 
-    // Get groups
+    // Get groups \u2014 la Descarga Masiva genera TODOS los grupos a cargo del usuario:
+    //   - Orientador: `groups` YA viene filtrado a SUS grupos (loadData l\u00ednea 115),
+    //     as\u00ed que genera todos sus grupos del turno (NO filtra por grado/grupo,
+    //     para incluir todos los grupos a su cargo).
+    //   - Admin: genera todos los grupos del turno + grado seleccionado.
+    const esOrientador = Array.isArray(orientadorGroupIds);
     let turnoGroups = groups.filter(g => g.turno === turno);
-    if (grado) turnoGroups = turnoGroups.filter(g => String(g.grado) === String(grado));
+    if (!esOrientador && grado) {
+      turnoGroups = turnoGroups.filter(g => String(g.grado) === String(grado));
+    }
     turnoGroups.sort((a, b) => (a.grado || 0) - (b.grado || 0) || (a.nombre || '').localeCompare(b.nombre || ''));
+    console.log('[BOLETAS] massDownload: esOrientador=' + esOrientador + ' \u2192 generar\u00e1 ' + turnoGroups.length + ' grupo(s): ' + turnoGroups.map(g => g.nombre).join(', '));
 
     if (turnoGroups.length === 0) {
       Toast.show('No hay grupos para este turno', 'warning');
+      _massDownloading = false;
       return;
     }
 
@@ -891,111 +1080,184 @@ const BoletasModule = (() => {
     const parcialMap = { P1: '1erParcial', P2: '2doParcial', P3: '3erParcial', todos: 'TodosParciales' };
     const parcialTag = parcialMap[parcialMode] || parcialMode;
     const estatusTag = isReprob ? '_REPROBADOS' : isAprob ? '_APROBADOS' : '';
-    const gradoTag = grado ? `_${grado}Grado` : '';
+    // Si es un solo grupo, el tag lleva el nombre del grupo (ej "_1-2"); si son
+    // varios, lleva el grado (ej "_1Grado"). Asi el PDF se identifica claro.
+    const gradoTag = turnoGroups.length === 1
+      ? `_${turnoGroups[0].nombre}`
+      : (grado ? `_${grado}Grado` : '');
 
-    Toast.show(`Generando ${turnoGroups.length} archivos: ${turno}${gradoTag} ${parcialTag}${estatusTag}...`, 'info');
+    // ── FIX (v7.77): abrir UNA SOLA ventana con TODOS los grupos ──
+    // Antes se abria window.open() por cada grupo dentro del loop. Los
+    // navegadores BLOQUEAN pop-ups despues del primero, asi que solo se
+    // generaba el PRIMER grupo (1-1) y los demas (1-2, 1-3) eran bloqueados
+    // silenciosamente — de ahi el reporte "me genera siempre las de 1-1".
+    // Ahora acumulamos el HTML de todos los grupos (cada grupo arranca en
+    // pagina nueva) y abrimos UNA ventana. El usuario guarda 1 PDF con todo
+    // o imprime el rango de paginas que necesite.
+    //
+    // CLAVE: abrir la ventana ANTES del await (mientras el gesto de click del
+    // usuario sigue "vivo") para que el navegador no la trate como pop-up.
+    Toast.show(`Generando preboletas de ${turnoGroups.length} grupo(s): ${turno}${gradoTag} ${parcialTag}${estatusTag}...`, 'info');
 
-    for (const groupInfo of turnoGroups) {
-      const groupId = groupInfo.id;
-      const groupName = groupInfo.nombre || groupId;
+    const massWindow = window.open('', '_blank');
+    if (!massWindow) {
+      Toast.show('El navegador BLOQUEÓ la ventana. Haz clic en el ícono de "pop-up bloqueado" en la barra de direcciones, permite pop-ups para este sitio e intenta de nuevo.', 'error');
+      _massDownloading = false;
+      return;
+    }
+    massWindow.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Generando preboletas…</title></head><body style="font-family:Arial,sans-serif;padding:40px;text-align:center;color:#333;"><h2>Generando preboletas…</h2><p>Por favor espera, no cierres esta ventana.</p></body></html>');
 
-      try {
-        // Get students
-        const groupStudents = students.filter(s => s.groupId === groupId && s.estatus === 'ACTIVO')
-          .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+    let allBoletasHtml = '';
+    let gruposGenerados = 0;
+    const resumenGrupos = []; // { nombre, count } para la portada/índice
 
-        if (groupStudents.length === 0) continue;
+    try {
+      for (const groupInfo of turnoGroups) {
+        const groupId = groupInfo.id;
+        const groupName = groupInfo.nombre || groupId;
 
-        // Get subjects
-        const groupAssignments = assignments.filter(a => a.groupId === groupId);
-        const subjectIds = [...new Set(groupAssignments.map(a => a.subjectId))];
-        const groupSubjects = K.sortSubjectsByGrado(subjects.filter(s => subjectIds.includes(s.id)), groupInfo.grado || grado);
+        try {
+          // Students del grupo (activos)
+          const groupStudents = students.filter(s => {
+            const e = (s.estatus || '').toString().toUpperCase().trim();
+            return (s.groupId === groupId || s.grupo === groupId) && (e === '' || e === 'ACTIVO');
+          }).sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
 
-        // Get grades
-        const groupGrades = await Store.getGradesByGroup(groupId);
-        const gradesMap = {};
-        for (const g of groupGrades) {
-          if (!gradesMap[g.studentId]) gradesMap[g.studentId] = {};
-          if (!gradesMap[g.studentId][g.subjectId]) gradesMap[g.studentId][g.subjectId] = {};
-          gradesMap[g.studentId][g.subjectId][g.partial] = g;
-        }
+          if (groupStudents.length === 0) continue;
 
-        const schoolConfig = App.schoolConfig || {};
-        const cicloEscolar = schoolConfig.cicloEscolar || '2025-2026';
-        const orientador = K.getOrientador(turno, groupName);
+          // Subjects del grupo
+          const groupAssignments = assignments.filter(a => a.groupId === groupId);
+          const subjectIds = [...new Set(groupAssignments.map(a => a.subjectId))];
+          const groupSubjects = K.sortSubjectsByGrado(subjects.filter(s => subjectIds.includes(s.id)), groupInfo.grado || grado);
 
-        const groupGrado = groupInfo.grado || grado;
-        const meta = { cicloEscolar, groupName, turno, grado: groupGrado, parcialMode, orientador, fechaTexto };
+          // Grades (force fresh)
+          const groupGrades = await Store.getGradesByGroup(groupId, true);
+          const gradesMap = {};
+          for (const g of (groupGrades || [])) {
+            if (!g || !g.studentId || !g.subjectId || !g.partial) continue;
+            if (!gradesMap[g.studentId]) gradesMap[g.studentId] = {};
+            if (!gradesMap[g.studentId][g.subjectId]) gradesMap[g.studentId][g.subjectId] = {};
+            if (!gradesMap[g.studentId][g.subjectId][g.partial]) gradesMap[g.studentId][g.subjectId][g.partial] = g;
+          }
 
-        // Filter by estatus if needed
-        let targetStudents = [...groupStudents];
-        if (estatusFiltro !== 'todos') {
-          const passGrade = K.THRESHOLDS?.PASS_GRADE || 6;
-          targetStudents = targetStudents.filter(student => {
-            const sg = gradesMap[student.id] || {};
-            let hasReprobada = false;
-            for (const subId of subjectIds) {
-              if (parcialMode === 'todos') {
-                for (const p of K.PARCIALES) {
-                  const gd = sg[subId]?.[p.id];
+          // teacherHours del grupo para el banner de EXTRA por faltas (>20% inasistencia)
+          const hoursMap = await _loadHoursMap(groupId);
+
+          const schoolConfig = App.schoolConfig || {};
+          const cicloEscolar = schoolConfig.cicloEscolar || '2025-2026';
+          const orientador = K.getOrientador(turno, groupName);
+          const groupGrado = groupInfo.grado || grado;
+          const meta = { cicloEscolar, groupName, turno, grado: groupGrado, parcialMode, orientador, fechaTexto };
+
+          // Filtro por estatus academico
+          let targetStudents = [...groupStudents];
+          if (estatusFiltro !== 'todos') {
+            const passGrade = K.THRESHOLDS?.PASS_GRADE || 6;
+            targetStudents = targetStudents.filter(student => {
+              const sg = gradesMap[student.id] || {};
+              let hasReprobada = false;
+              for (const subId of subjectIds) {
+                if (parcialMode === 'todos') {
+                  for (const p of K.PARCIALES) {
+                    const gd = sg[subId]?.[p.id];
+                    const cal = gd ? (gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null)) : null;
+                    if (cal !== null && cal < passGrade) { hasReprobada = true; break; }
+                  }
+                } else {
+                  const gd = sg[subId]?.[parcialMode];
                   const cal = gd ? (gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null)) : null;
                   if (cal !== null && cal < passGrade) { hasReprobada = true; break; }
                 }
-              } else {
-                const gd = sg[subId]?.[parcialMode];
-                const cal = gd ? (gd.cal !== undefined ? Number(gd.cal) : (gd.value !== undefined ? Number(gd.value) : null)) : null;
-                if (cal !== null && cal < passGrade) { hasReprobada = true; break; }
+                if (hasReprobada) break;
               }
-              if (hasReprobada) break;
-            }
-            return estatusFiltro === 'reprobados' ? hasReprobada : !hasReprobada;
+              return estatusFiltro === 'reprobados' ? hasReprobada : !hasReprobada;
+            });
+          }
+
+          if (targetStudents.length === 0) continue;
+
+          // NL: posicion alfabetica en el grupo completo de activos
+          const nlByStudentId = {};
+          groupStudents.forEach((s, i) => { if (s && s.id) nlByStudentId[s.id] = i + 1; });
+
+          // Acumular boletas de este grupo (todas con salto de pagina entre ellas;
+          // la ultima del grupo TAMBIEN con salto para separar del siguiente grupo)
+          targetStudents.forEach((student, idx) => {
+            const nlNumero = nlByStudentId[student.id] || (idx + 1);
+            const esUltimaDelTurno = false; // siempre salto: cada boleta en su pagina
+            allBoletasHtml += _buildBoleta(student, groupSubjects, gradesMap[student.id] || {}, meta, esUltimaDelTurno, nlNumero, hoursMap);
           });
+          gruposGenerados++;
+          resumenGrupos.push({ nombre: groupName, count: targetStudents.length });
+          console.log('[BOLETAS] massDownload grupo ' + groupName + ': ' + targetStudents.length + ' boletas');
+
+        } catch (e) {
+          console.error('[BOLETAS] Error en grupo ' + groupName + ':', e);
         }
-
-        if (targetStudents.length === 0) continue;
-
-        // Build boletas HTML
-        let boletasHtml = '';
-        targetStudents.forEach((student, idx) => {
-          boletasHtml += _buildBoleta(student, groupSubjects, gradesMap[student.id] || {}, meta, idx === targetStudents.length - 1);
-        });
-
-        // Open print window for this group
-        const printHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-          <title>PreBoletas_${turno}_${groupName}_${parcialTag}${estatusTag}</title>
-          <style>
-            @page { size: letter portrait; margin: 10mm 12mm 8mm 12mm; }
-            * { margin:0; padding:0; box-sizing:border-box; }
-            body { font-family: Arial, sans-serif; color: #000; font-size: 10px; }
-            .boleta-card { padding: 10px 0; }
-            table { border-collapse: collapse; }
-            th, td { padding: 3px 5px; border: 1px solid #333; }
-            thead { background: #e0e0e0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-            @media print { .boleta-card[style*="page-break-after"] { page-break-after: always; } }
-          </style>
-        </head><body>
-          ${boletasHtml}
-          <script>
-            document.title = 'PreBoletas_${turno}_${groupName}_${parcialTag}${estatusTag}';
-            setTimeout(() => window.print(), 500);
-          <\/script>
-        </body></html>`;
-
-        const w = window.open('', '_blank');
-        w.document.write(printHtml);
-        w.document.close();
-
-        // Small delay between groups to not overwhelm the browser
-        await new Promise(r => setTimeout(r, 800));
-
-      } catch (e) {
-        console.error('Error generating PDF for group ' + groupName + ':', e);
       }
-    }
 
-    Toast.show(`${turnoGroups.length} archivos generados. Guarda cada uno como PDF desde el dialogo de impresion.`, 'success');
-    _massDownloading = false;
+      if (gruposGenerados === 0 || !allBoletasHtml) {
+        massWindow.document.body.innerHTML = '<div style="font-family:Arial;padding:40px;text-align:center;"><h2>Sin datos</h2><p>No se encontraron alumnos para los filtros seleccionados.</p></div>';
+        Toast.show('No se generaron preboletas (sin alumnos para esos filtros)', 'warning');
+        _massDownloading = false;
+        return;
+      }
+
+      const fullTitle = `PreBoletas_${turno}${gradoTag}_${parcialTag}${estatusTag}`;
+
+      // Portada/índice (solo si hay >1 grupo) — para que el usuario confirme
+      // de un vistazo que el documento contiene TODOS sus grupos.
+      const totalBoletas = resumenGrupos.reduce((sum, r) => sum + r.count, 0);
+      const portadaHtml = resumenGrupos.length > 1 ? `
+        <div class="boleta-card" style="page-break-after:always;padding:40px 20px;">
+          <div style="text-align:center;border:2px solid #333;border-radius:10px;padding:30px;">
+            <h1 style="font-size:18px;margin-bottom:6px;">PRE BOLETAS — TURNO ${Utils.sanitize(turno)}</h1>
+            <div style="font-size:11px;color:#555;margin-bottom:20px;">${parcialTag.replace(/([A-Z])/g, ' $1').trim()}${estatusTag ? ' · ' + estatusTag.replace('_', '') : ''} · ${Utils.sanitize(fechaTexto)}</div>
+            <div style="font-size:13px;font-weight:700;margin-bottom:10px;">Este documento contiene ${resumenGrupos.length} grupos (${totalBoletas} preboletas):</div>
+            <table style="margin:0 auto;border-collapse:collapse;font-size:13px;">
+              <thead><tr style="background:#e0e0e0;"><th style="border:1px solid #333;padding:6px 16px;">GRUPO</th><th style="border:1px solid #333;padding:6px 16px;">ALUMNOS</th></tr></thead>
+              <tbody>
+                ${resumenGrupos.map(r => `<tr><td style="border:1px solid #333;padding:5px 16px;font-weight:600;">${Utils.sanitize(r.nombre)}</td><td style="border:1px solid #333;padding:5px 16px;text-align:center;">${r.count}</td></tr>`).join('')}
+              </tbody>
+            </table>
+            <div style="font-size:10px;color:#888;margin-top:18px;">Cada grupo inicia en página nueva. Usa el rango de páginas del diálogo de impresión si solo necesitas uno.</div>
+          </div>
+        </div>` : '';
+
+      const finalHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+        <title>${fullTitle}</title>
+        <style>
+          @page { size: letter portrait; margin: 10mm 12mm 8mm 12mm; }
+          * { margin:0; padding:0; box-sizing:border-box; }
+          body { font-family: Arial, sans-serif; color: #000; font-size: 10px; }
+          .boleta-card { padding: 10px 0; }
+          table { border-collapse: collapse; }
+          th, td { padding: 3px 5px; border: 1px solid #333; }
+          thead { background: #e0e0e0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          @media print { .boleta-card[style*="page-break-after"] { page-break-after: always; } }
+        </style>
+      </head><body>
+        ${portadaHtml}
+        ${allBoletasHtml}
+        <script>
+          document.title = '${fullTitle}';
+          setTimeout(() => window.print(), 600);
+        <\/script>
+      </body></html>`;
+
+      massWindow.document.open();
+      massWindow.document.write(finalHtml);
+      massWindow.document.close();
+
+      Toast.show(`${gruposGenerados} grupo(s) generados en una sola ventana. Guarda como PDF o imprime el rango de páginas que necesites.`, 'success');
+    } catch (e) {
+      console.error('[BOLETAS] massDownloadPDF error global:', e);
+      Toast.show('Error generando preboletas: ' + (e.message || e), 'error');
+      try { massWindow.close(); } catch (_) {}
+    } finally {
+      _massDownloading = false;
+    }
   }
 
   return { render };

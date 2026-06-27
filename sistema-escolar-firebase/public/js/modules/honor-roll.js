@@ -125,16 +125,23 @@ const HonorRollModule = (() => {
 
     await loadData();
     bindEvents(container);
+    Utils.restrictTurnoGradoOptions(groups, 'hr-turno', 'hr-grado');
   }
 
   async function loadData() {
     try {
-      const [groupsSnap, studentsSnap] = await Promise.all([
+      const [groupsSnap, studentsSnap, oriGroups] = await Promise.all([
         Store.getGroups(),
-        Store.getStudents()
+        Store.getStudents(),
+        Store.getOrientadorGroups()
       ]);
-      groups = groupsSnap;
-      students = studentsSnap.filter(s => s.estatus === 'ACTIVO');
+      // Filtrado por orientador: solo sus grupos
+      const filteredGroups = oriGroups ? groupsSnap.filter(g => oriGroups.includes(g.id)) : groupsSnap;
+      const allowedIds = new Set(filteredGroups.map(g => g.id));
+      groups = filteredGroups;
+      students = studentsSnap.filter(s =>
+        s.estatus === 'ACTIVO' && (oriGroups === null || allowedIds.has(s.groupId))
+      );
     } catch (e) {
       console.error('Error cargando datos para cuadros de honor:', e);
       Toast.show('Error al cargar datos', 'error');
@@ -351,9 +358,15 @@ const HonorRollModule = (() => {
     const turnoLabel = turno || 'AMBOS TURNOS';
     const gradoLabel = grado ? `${grado}\u00ba GRADO` : 'TODOS LOS GRADOS';
 
+    const _docTitle = Utils.fileName({
+      tipo: 'HONOR',
+      turno: turno,
+      grado: grado,
+      parcial: partial
+    });
     const printWindow = window.open('', '_blank');
     printWindow.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-      <title>Cuadro de Honor EPO 67</title>
+      <title>${Utils.sanitize(_docTitle)}</title>
       <style>
         @page { size: letter portrait; margin: 14mm 16mm; }
         * { margin:0; padding:0; box-sizing:border-box; }
@@ -611,8 +624,16 @@ const HonorRollModule = (() => {
           </section>`;
       });
 
+      const _grpInfo = grupoId ? groups.find(g => g.id === grupoId) : null;
+      const _docTitle2 = Utils.fileName({
+        tipo: 'HONOR_INSIGNIAS',
+        turno: effectiveTurno,
+        grupo: _grpInfo?.nombre,
+        grado: _grpInfo?.grado || (document.getElementById('hr-grado')?.value || ''),
+        parcial: document.getElementById('hr-partial')?.value
+      });
       const fullHtml = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-        <title>Cuadros de Honor ${effectiveTurno || ''}${grupoId ? ' ' + (groups.find(g => g.id === grupoId)?.nombre || '') : ''}</title>
+        <title>${Utils.sanitize(_docTitle2)}</title>
         <style>
           @page { size: letter portrait; margin: 14mm 16mm; }
           * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
@@ -620,7 +641,7 @@ const HonorRollModule = (() => {
 
           .page { page-break-after: always; page-break-inside: avoid; padding-top: 8mm; }
           .page:last-child { page-break-after: auto; }
-          /* Paginas de grupo: centradas verticalmente en la hoja */
+          /* Páginas de grupo: centradas verticalmente en la hoja */
           .group-page { padding-top: 0; min-height: 240mm; display: flex; flex-direction: column; justify-content: center; }
           .group-card, .t5-table { page-break-inside: avoid; }
           table, tr { page-break-inside: avoid; }

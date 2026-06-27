@@ -64,6 +64,18 @@ MAESTRO pide  →  (papel firmado por la Directora)  →  DIRECCIÓN aplica  →
    dos, o ninguno. Nunca queda el estado raro de "cal cambiada pero solicitud pendiente".
 6. **Reintento idempotente** — si algo se interrumpe, volver a darle "Aplicar" no daña nada: si la
    cal ya está en el valor correcto, solo termina de marcar la solicitud como aplicada.
+7. **Propagación a TODOS los reportes (sin caché viejo)** — el cambio se escribe en el doc
+   determinístico `grades/{studentId}_{subjectId}_{partial}` (verificado: una sola fuente, sin
+   duplicados). El problema histórico (jun‑2026, corrección P2 de la maestra Dania) NO era el dato
+   sino el **caché de sesión**: los reportes leían `grades_group_{grupo}` de un caché (TTL 5 min,
+   que sobrevive a F5 vía sessionStorage). Quien APLICA invalida su propio caché, pero OTRA sesión
+   (p. ej. quien imprime la boleta) seguía viendo la cal vieja hasta 5 min. **Fix:** los reportes
+   que muestran cal por alumno ahora leen SIEMPRE fresco del servidor (`force=true`): Concentrado/
+   F1, Boletas, Preboletas, Boleta Oficial, Indicadores, Cuadro de Honor, Reportes Comparativos,
+   Riesgo, Extraordinarios, Consulta por Alumno, Consulta de Calif., Mis Listas, Mi Academia. Así,
+   en cuanto se aplica una corrección, aparece igual en toda la papelería para cualquier usuario.
+   (El Dashboard mantiene caché por ser vista de conteos que se carga en cada login; se
+   autoactualiza en ≤5 min.)
 
 ## 4. Si algo sale mal (guía rápida para Dirección)
 

@@ -260,7 +260,7 @@ const ExtraordinariosModule = (() => {
 
       const [students, gradesAll, hoursAll, extrasAll] = await Promise.all([
         Store.getStudentsByGroups(groupIds).catch(() => []),
-        Store.getGradesByGroups(groupIds).catch(() => []),
+        Store.getGradesByGroups(groupIds, true).catch(() => []),
         _loadHoursForGroups(groupIds).catch(() => []),
         _loadExtrasForGroups(groupIds).catch(() => []),
       ]);

@@ -16,6 +16,32 @@ const StudentProfileModule = (() => {
   function _el(id) { return document.getElementById(id); }
   function _container() { return document.getElementById('moduleContainer'); }
 
+  // Resolución de nombre de materia. Cubre dos formas de "doc id crudo
+  // filtrándose a la UI": (a) asignación/calificación huérfana cuyo
+  // subjectId ya no existe en _subjects, y (b) materia presente pero con
+  // `nombre` que quedó capturado como el doc id (ej. "G2_ciencias_sociales_iv").
+  // En ambos casos derivamos un nombre legible quitando el prefijo G\d+_
+  // y sustituyendo guiones bajos por espacios.
+  function _subjectDisplayInfo(sid) {
+    const sub = _subjects.find(x => x.id === sid);
+    const nombre = sub?.nombre || '';
+    const looksLikeRawId = (s) => /^G\d+_/i.test(s) || (/_/.test(s) && !/\s/.test(s));
+    const source = (nombre && !looksLikeRawId(nombre))
+      ? nombre
+      : String(sid).replace(/^G\d+_/i, '').replace(/_/g, ' ').trim();
+    return { name: K.getUACNombre(source), exists: !!sub };
+  }
+
+  // Una materia huérfana solo merece aparecer si tiene al menos un
+  // parcial con calificación numérica capturada. Stubs vacíos o
+  // asignaciones que apuntan a materias inexistentes se filtran.
+  function _subjectHasRealGrade(sid, gradeMatrix) {
+    const entries = gradeMatrix[sid] || {};
+    return Object.values(entries).some(g =>
+      g && g.cal !== undefined && g.cal !== null && g.cal !== '' && !isNaN(parseFloat(g.cal))
+    );
+  }
+
   // ─── MAIN RENDER ───────────────────────────────────────────
   async function render() {
     const role = App.currentUser?.role;
@@ -34,9 +60,11 @@ const StudentProfileModule = (() => {
     // Para maestro/orientador_docente: solo SU data (no TODOS los alumnos).
     try {
       if (role === 'maestro') {
-        // Maestro estricto: solo sus assignments y alumnos de SUS grupos.
+        // v8.09: Maestro estricto — usar getOwnAssignments() para que un
+        // maestro con role aditivo (auditor/presidente_academia) NO vea
+        // 800 alumnos sino solo los de SUS 4 grupos.
         const [groups, subjects, myAsg] = await Promise.all([
-          Store.getGroups(), Store.getSubjects(), Store.getMyAssignments()
+          Store.getGroups(), Store.getSubjects(), Store.getOwnAssignments()
         ]);
         _assignments = myAsg;
         const teacherGroupIds = new Set(myAsg.map(a => a.groupId).filter(Boolean));
@@ -203,11 +231,24 @@ const StudentProfileModule = (() => {
 
     // Calculate stats
     let totalCal = 0, countCal = 0, reprobadas = 0, totalFaltas = 0;
-    const subjectArray = [...subjectIds].map(sid => {
-      const sub = _subjects.find(x => x.id === sid);
-      const name = sub ? K.getUACNombre(sub.nombre || sid) : sid;
-      return { id: sid, name };
-    }).sort((a, b) => a.name.localeCompare(b.name));
+    // Ordenar materias por orden SEP del grado del alumno (consistente con
+    // boletas y concentrados). Si no se puede inferir el grado, fallback a
+    // alfabético.
+    const _studentGrupo = _groups.find(g => g.id === _filters.grupo);
+    const _studentGrado = _studentGrupo ? Number(_studentGrupo.grado) : null;
+    // FIX v8.06: filtrar materias SOLO del grado actual (drop G2_ leftovers para
+    // alumnos en 3°, etc.) — evita aparición duplicada como "Temas Selectos IV+VI".
+    const _gradoPrefix = _studentGrado ? `G${_studentGrado}_` : null;
+    const _subjectIdsFiltered = _gradoPrefix
+      ? [...subjectIds].filter(sid => String(sid).startsWith(_gradoPrefix))
+      : [...subjectIds];
+    const subjectArrayRaw = _subjectIdsFiltered.map(sid => {
+      const info = _subjectDisplayInfo(sid);
+      return { id: sid, name: info.name, nombre: info.name, exists: info.exists };
+    }).filter(s => s.exists || _subjectHasRealGrade(s.id, gradeMatrix));
+    const subjectArray = _studentGrado != null
+      ? K.sortSubjectsByGrado(subjectArrayRaw, _studentGrado)
+      : subjectArrayRaw.sort((a, b) => a.name.localeCompare(b.name));
 
     subjectArray.forEach(sub => {
       K.PARCIALES.forEach(p => {
@@ -226,7 +267,7 @@ const StudentProfileModule = (() => {
       });
     });
 
-    const promedio = countCal > 0 ? (totalCal / countCal).toFixed(2) : '-';
+    const promedio = countCal > 0 ? (totalCal / countCal).toFixed(1) : '-';
     const riskLevel = reprobadas >= 5 ? 'ALTO' : reprobadas >= 3 ? 'MEDIO' : reprobadas > 0 ? 'BAJO' : 'SIN RIESGO';
     const riskColor = reprobadas >= 5 ? '#dc2626' : reprobadas >= 3 ? '#f59e0b' : reprobadas > 0 ? '#3b82f6' : '#16a34a';
     const riskIcon = reprobadas >= 5 ? 'error' : reprobadas >= 3 ? 'warning' : reprobadas > 0 ? 'info' : 'check_circle';
@@ -248,8 +289,9 @@ const StudentProfileModule = (() => {
             ${Utils.sanitize(turno)} · ${Utils.sanitize(grupo?.nombre || '')} · Grado ${s.grado || ''}°
             ${s.curp ? ' · CURP: ' + Utils.sanitize(s.curp) : ''}
           </div>
-          <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+          <div style="margin-top:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
             ${UI.badge(s.estatus || 'ACTIVO', s.estatus === 'ACTIVO' ? 'success' : 'danger')}
+            ${s.bajaPendiente ? `<span style="display:inline-flex; align-items:center; padding:3px 10px; border-radius:20px; background:#f97316; color:#fff; font-weight:600; font-size:0.8rem;">TRASLADO PENDIENTE</span>` : ''}
             <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:20px;
                          background:${riskColor}15; color:${riskColor}; font-weight:600; font-size:0.8rem; border:1px solid ${riskColor}40;">
               <span class="material-icons-round" style="font-size:16px;">${riskIcon}</span>
@@ -307,6 +349,7 @@ const StudentProfileModule = (() => {
     }
 
     const rubros = K.getRubros(turno);
+    const isTraslado = !!_selectedStudent?.bajaPendiente;
 
     let html = `<div class="card" style="padding:0; overflow-x:auto;">
     <table class="data-table" style="width:100%; font-size:0.85rem;">
@@ -330,23 +373,25 @@ const StudentProfileModule = (() => {
       let subTotal = 0, subCount = 0;
 
       K.PARCIALES.forEach(p => {
-        const g = (gradeMatrix[sub.id] || {})[p.id] || {};
+        const g = isTraslado ? {} : ((gradeMatrix[sub.id] || {})[p.id] || {});
         rubros.forEach(r => {
           const val = g[r.key];
-          html += `<td style="text-align:center; padding:4px;">${val !== undefined && val !== null && val !== '' ? val : ''}</td>`;
+          const hasVal = val !== undefined && val !== null && val !== '';
+          html += `<td style="text-align:center; padding:4px;">${hasVal ? val : (isTraslado ? '' : 0)}</td>`;
         });
         const suma = g.suma !== undefined && g.suma !== null ? g.suma : '';
         const faltas = g.faltas !== undefined && g.faltas !== null ? Math.round(g.faltas) : '';
         const cal = g.cal !== undefined && g.cal !== null ? g.cal : (g.value !== undefined ? Math.min(Number(g.value), 10) : '');
+        const blankFill = isTraslado ? '' : 0;
 
-        html += `<td style="text-align:center; padding:4px; font-size:0.8rem;">${suma}</td>`;
-        html += `<td style="text-align:center; padding:4px; font-size:0.8rem;">${faltas}</td>`;
+        html += `<td style="text-align:center; padding:4px; font-size:0.8rem;">${suma === '' ? blankFill : suma}</td>`;
+        html += `<td style="text-align:center; padding:4px; font-size:0.8rem;">${faltas === '' ? blankFill : faltas}</td>`;
 
         const calNum = parseFloat(cal);
         const calStyle = !isNaN(calNum) && calNum < 6
           ? 'color:#fff; background:var(--danger); font-weight:700; border-radius:4px;'
           : 'font-weight:700;';
-        html += `<td style="text-align:center; padding:4px 8px; ${calStyle}">${cal}</td>`;
+        html += `<td style="text-align:center; padding:4px 8px; ${calStyle}">${cal === '' ? blankFill : cal}</td>`;
 
         if (cal !== '' && !isNaN(calNum)) { subTotal += calNum; subCount++; }
       });
@@ -567,6 +612,7 @@ const StudentProfileModule = (() => {
     if (!_selectedStudent) return;
 
     const s = _selectedStudent;
+    const isTraslado = !!s.bajaPendiente;
     const grupo = _groups.find(g => g.id === _filters.grupo);
     const turno = _filters.turno;
     const fullName = `${s.apellido1 || ''} ${s.apellido2 || ''} ${s.nombres || ''}`.trim();
@@ -582,10 +628,24 @@ const StudentProfileModule = (() => {
     });
     _assignments.filter(a => a.groupId === _filters.grupo).forEach(a => subjectIds.add(a.subjectId));
 
-    const subjectArray = [...subjectIds].map(sid => {
-      const sub = _subjects.find(x => x.id === sid);
-      return { id: sid, name: sub ? K.getUACNombre(sub.nombre || sid) : sid };
-    }).sort((a, b) => a.name.localeCompare(b.name));
+    // FIX v8.06: filtrar materias al GRADO ACTUAL del alumno.
+    // Antes el set incluía subjectIds de grados anteriores (ej. Erik en 3° con
+    // grades viejos de 2°). Resultado: aparecían DOS "Temas Selectos de Igualdad"
+    // (IV de 2° + VI de 3°). Ahora solo el del grado actual.
+    const _printGrado = grupo ? Number(grupo.grado) : (Number(s.grado) || null);
+    const gradoPrefix = _printGrado ? `G${_printGrado}_` : null;
+    const subjectIdsFiltered = gradoPrefix
+      ? [...subjectIds].filter(sid => String(sid).startsWith(gradoPrefix))
+      : [...subjectIds];
+
+    // Orden SEP por grado del alumno (consistente con boletas/concentrados/tira en pantalla)
+    const subjectArrayRaw = subjectIdsFiltered.map(sid => {
+      const info = _subjectDisplayInfo(sid);
+      return { id: sid, name: info.name, nombre: info.name, exists: info.exists };
+    }).filter(s => s.exists || _subjectHasRealGrade(s.id, gradeMatrix));
+    const subjectArray = _printGrado != null
+      ? K.sortSubjectsByGrado(subjectArrayRaw, _printGrado)
+      : subjectArrayRaw.sort((a, b) => a.name.localeCompare(b.name));
 
     // Stats
     let totalCal = 0, countCal = 0, reprobadas = 0, totalFaltas = 0;
@@ -599,7 +659,7 @@ const StudentProfileModule = (() => {
         if (g && g.faltas) totalFaltas += parseInt(g.faltas) || 0;
       });
     });
-    const promedio = countCal > 0 ? (totalCal / countCal).toFixed(2) : '-';
+    const promedio = countCal > 0 ? (totalCal / countCal).toFixed(1) : '-';
     const riskLevel = reprobadas >= 5 ? 'ALTO' : reprobadas >= 3 ? 'MEDIO' : reprobadas > 0 ? 'BAJO' : 'SIN RIESGO';
     const riskColor = reprobadas >= 5 ? '#dc2626' : reprobadas >= 3 ? '#f59e0b' : reprobadas > 0 ? '#3b82f6' : '#16a34a';
 
@@ -612,7 +672,7 @@ const StudentProfileModule = (() => {
 
       let subTotal = 0, subCount = 0;
       K.PARCIALES.forEach(p => {
-        const g = (gradeMatrix[sub.id] || {})[p.id] || {};
+        const g = isTraslado ? {} : ((gradeMatrix[sub.id] || {})[p.id] || {});
         const cal = g.cal !== undefined && g.cal !== null ? g.cal : '';
         const calNum = parseFloat(cal);
         const isReprobado = !isNaN(calNum) && calNum < 6;
@@ -620,8 +680,9 @@ const StudentProfileModule = (() => {
           ? 'background:#e5e5e5; font-weight:bold; -webkit-print-color-adjust:exact; print-color-adjust:exact;'
           : 'font-weight:600;';
         const faltas = g.faltas !== undefined && g.faltas !== null ? Math.round(g.faltas) : '';
-        rows += `<td style="border:0.5pt solid #999; text-align:center; padding:2px 4px; font-size:8.5pt; ${style}">${cal}</td>`;
-        rows += `<td style="border:0.5pt solid #999; text-align:center; padding:2px 4px; font-size:7.5pt; color:#555;">${faltas}</td>`;
+        const blankFill = isTraslado ? '' : 0;
+        rows += `<td style="border:0.5pt solid #999; text-align:center; padding:2px 4px; font-size:8.5pt; ${style}">${cal === '' ? blankFill : cal}</td>`;
+        rows += `<td style="border:0.5pt solid #999; text-align:center; padding:2px 4px; font-size:7.5pt; color:#555;">${faltas === '' ? blankFill : faltas}</td>`;
         if (cal !== '' && !isNaN(calNum)) { subTotal += calNum; subCount++; }
       });
 
@@ -770,6 +831,7 @@ const StudentProfileModule = (() => {
     if (!_selectedStudent) return;
 
     const s = _selectedStudent;
+    const isTraslado = !!s.bajaPendiente;
     const grupo = _groups.find(g => g.id === _filters.grupo);
     const turno = _filters.turno;
     const fullName = `${s.apellido1 || ''} ${s.apellido2 || ''} ${s.nombres || ''}`.trim();
@@ -785,10 +847,24 @@ const StudentProfileModule = (() => {
     });
     _assignments.filter(a => a.groupId === _filters.grupo).forEach(a => subjectIds.add(a.subjectId));
 
-    const subjectArray = [...subjectIds].map(sid => {
-      const sub = _subjects.find(x => x.id === sid);
-      return { id: sid, name: sub ? K.getUACNombre(sub.nombre || sid) : sid };
-    }).sort((a, b) => a.name.localeCompare(b.name));
+    // FIX v8.06: filtrar materias al GRADO ACTUAL del alumno.
+    // Antes el set incluía subjectIds de grados anteriores (ej. Erik en 3° con
+    // grades viejos de 2°). Resultado: aparecían DOS "Temas Selectos de Igualdad"
+    // (IV de 2° + VI de 3°). Ahora solo el del grado actual.
+    const _printGrado = grupo ? Number(grupo.grado) : (Number(s.grado) || null);
+    const gradoPrefix = _printGrado ? `G${_printGrado}_` : null;
+    const subjectIdsFiltered = gradoPrefix
+      ? [...subjectIds].filter(sid => String(sid).startsWith(gradoPrefix))
+      : [...subjectIds];
+
+    // Orden SEP por grado del alumno (consistente con boletas/concentrados/tira en pantalla)
+    const subjectArrayRaw = subjectIdsFiltered.map(sid => {
+      const info = _subjectDisplayInfo(sid);
+      return { id: sid, name: info.name, nombre: info.name, exists: info.exists };
+    }).filter(s => s.exists || _subjectHasRealGrade(s.id, gradeMatrix));
+    const subjectArray = _printGrado != null
+      ? K.sortSubjectsByGrado(subjectArrayRaw, _printGrado)
+      : subjectArrayRaw.sort((a, b) => a.name.localeCompare(b.name));
 
     // Stats
     let totalCal = 0, countCal = 0, reprobadas = 0, totalFaltas = 0;
@@ -802,7 +878,7 @@ const StudentProfileModule = (() => {
         if (g && g.faltas) totalFaltas += parseInt(g.faltas) || 0;
       });
     });
-    const promedio = countCal > 0 ? (totalCal / countCal).toFixed(2) : '-';
+    const promedio = countCal > 0 ? (totalCal / countCal).toFixed(1) : '-';
 
     const logoHeader = typeof LOGO_HEADER_SRC !== 'undefined' ? LOGO_HEADER_SRC : '';
 
@@ -814,20 +890,22 @@ const StudentProfileModule = (() => {
 
       let subTotal = 0, subCount = 0;
       K.PARCIALES.forEach(p => {
-        const g = (gradeMatrix[sub.id] || {})[p.id] || {};
+        const g = isTraslado ? {} : ((gradeMatrix[sub.id] || {})[p.id] || {});
         rubros.forEach(r => {
           const val = g[r.key];
-          rows += `<td style="border:0.5pt solid #888; text-align:center; padding:1px; font-size:6.5pt;">${val !== undefined && val !== null && val !== '' ? val : ''}</td>`;
+          const hasVal = val !== undefined && val !== null && val !== '';
+          rows += `<td style="border:0.5pt solid #888; text-align:center; padding:1px; font-size:6.5pt;">${hasVal ? val : (isTraslado ? '' : 0)}</td>`;
         });
         const suma = g.suma !== undefined && g.suma !== null ? g.suma : '';
         const faltas = g.faltas !== undefined && g.faltas !== null ? Math.round(g.faltas) : '';
         const cal = g.cal !== undefined && g.cal !== null ? g.cal : '';
         const calNum = parseFloat(cal);
         const calBg = !isNaN(calNum) && calNum < 6 ? ' background:#D9D9D9; font-weight:bold;' : ' font-weight:bold;';
+        const blankFill = isTraslado ? '' : 0;
 
-        rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:6.5pt;">${suma}</td>`;
-        rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:6.5pt;">${faltas}</td>`;
-        rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:7pt;${calBg}">${cal}</td>`;
+        rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:6.5pt;">${suma === '' ? blankFill : suma}</td>`;
+        rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:6.5pt;">${faltas === '' ? blankFill : faltas}</td>`;
+        rows += `<td style="border:0.5pt solid #888; text-align:center; font-size:7pt;${calBg}">${cal === '' ? blankFill : cal}</td>`;
 
         if (cal !== '' && !isNaN(calNum)) { subTotal += calNum; subCount++; }
       });

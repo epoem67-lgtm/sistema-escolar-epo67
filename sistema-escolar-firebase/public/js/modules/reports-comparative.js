@@ -64,6 +64,27 @@ const ReportsComparativeModule = (() => {
     `;
 
     bindEvents(container);
+
+    // Restringir Turno/Grado al alcance del orientador.
+    // FIX: el orientador ve TODO su turno (no solo los grupos donde es orientador),
+    // porque necesita reportes comparativos de su turno completo para gestion.
+    (async () => {
+      try {
+        const [grps, oriGroups] = await Promise.all([Store.getGroups(), Store.getOrientadorGroups()]);
+        let allowed;
+        if (oriGroups === null) {
+          allowed = grps; // admin: todo
+        } else if (oriGroups.length === 0) {
+          allowed = []; // sin grupos
+        } else {
+          // Detectar turno(s) y mostrar TODOS los grupos de esos turnos
+          const oriSet = new Set(oriGroups);
+          const turnos = new Set(grps.filter(g => oriSet.has(g.id)).map(g => g.turno).filter(Boolean));
+          allowed = grps.filter(g => turnos.has(g.turno));
+        }
+        Utils.restrictTurnoGradoOptions(allowed, 'rc-turno', 'rc-grado');
+      } catch (e) { /* no-op */ }
+    })();
   }
 
   let currentTab = 'groups';
@@ -84,23 +105,28 @@ const ReportsComparativeModule = (() => {
         Store.getSubjects(),
         Store.getOrientadorGroups()
       ]);
-      // Load grades per-group instead of entire collection
-      const relevantGroupIds = (oriGroups || allGroups.map(g => g.id));
-      const allGrades = await Store.getGradesByGroups(relevantGroupIds, true);
+      // Para orientador: identificar TURNO(S) donde es orientador y permitir
+      // reportes de TODO el turno (no solo grupos especificos).
+      let allowedGroupIds;
+      if (oriGroups === null) {
+        allowedGroupIds = allGroups.map(g => g.id);
+      } else if (oriGroups.length === 0) {
+        allowedGroupIds = [];
+      } else {
+        const oriSet = new Set(oriGroups);
+        const turnos = new Set(allGroups.filter(g => oriSet.has(g.id)).map(g => g.turno).filter(Boolean));
+        allowedGroupIds = allGroups.filter(g => turnos.has(g.turno)).map(g => g.id);
+      }
+
+      const allGrades = await Store.getGradesByGroups(allowedGroupIds, true);
 
       // Apply filters
       let students = allStudents.filter(s => s.estatus === 'ACTIVO');
 
-      // Orientador filtering: only show data from assigned groups
-      if (oriGroups) {
-        const oriGroupSet = new Set(oriGroups);
-        const oriGroupNames = new Set(
-          allGroups.filter(g => oriGroupSet.has(g.id)).map(g => g.nombre || g.grupo).filter(Boolean)
-        );
-        students = students.filter(s =>
-          oriGroupSet.has(s.groupId) || oriGroupNames.has(s.groupId) ||
-          oriGroupSet.has(s.grupo) || oriGroupNames.has(s.grupo)
-        );
+      // Filtrar alumnos a los grupos permitidos
+      if (oriGroups !== null) {
+        const allowedSet = new Set(allowedGroupIds);
+        students = students.filter(s => allowedSet.has(s.groupId));
       }
 
       if (turno) students = students.filter(s => s.turno === turno);

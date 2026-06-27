@@ -33,17 +33,62 @@ const IndicadoresModule = (() => {
     const gradoOpts = K.GRADOS.map(g => `<option value="${g}">${g}\u00ba</option>`).join('');
     const parcialOpts = K.PARCIALES.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('');
 
-    // Detección de Presidente/Secretario de Academia (acceso filtrado a grado+turno)
+    // Detección de Presidente/Secretario de Academia (acceso filtrado a grado+turno).
+    // IMPORTANTE: Si el usuario también es AUDITOR (admin/subdirector/directivo o
+    // flag auditorScope), la vista global tiene PRIORIDAD. Caso real: Jessica es
+    // secretaria de academia 2° vespertino + auditora — debe ver TODO el sistema,
+    // no solo su academia. Para ver SU academia entra por "Mi Academia".
     const _user = App.currentUser || {};
-    const _acaGrado = Number(_user.academiaGrado) || null;
-    const _acaTurno = _user.academiaTurno || null;
-    const _acaRol = _user.academiaRol || null;
+    const _isAuditorGlobal = App.canActAs('auditor');
+    const _acaGrado = (!_isAuditorGlobal && Number(_user.academiaGrado)) || null;
+    const _acaTurno = (!_isAuditorGlobal && _user.academiaTurno) || null;
+    const _acaRol = (!_isAuditorGlobal && _user.academiaRol) || null;
     const _isAcademia = !!(_acaGrado && _acaTurno);
+
+    // ═══ Detectar turnos donde el usuario tiene scope ═══
+    // Caso clave: Laurita es academia 1° matutino Y orientadora vespertino —
+    // necesita ver las dos cards (matutino para su academia, vespertino para
+    // sus grupos de orientación). Esto requiere conocer oriGroups antes del
+    // render, por eso lo cargamos aquí (await rápido — usa cache si existe).
+    let _oriGroups = [];
+    try { _oriGroups = await Store.getOrientadorGroups(); } catch (_) { _oriGroups = []; }
+    const _turnosVisibles = new Set();
+    if (_oriGroups === null) {
+      // admin: ve todo
+      _turnosVisibles.add('MATUTINO'); _turnosVisibles.add('VESPERTINO');
+    } else {
+      if (_oriGroups.length > 0) {
+        try {
+          const _allG = await Store.getGroups();
+          const _oriSet = new Set(_oriGroups);
+          _allG.filter(g => _oriSet.has(g.id)).forEach(g => g.turno && _turnosVisibles.add(g.turno));
+        } catch (_) {}
+      }
+      if (_isAcademia) _turnosVisibles.add(_acaTurno);
+      // Roles que ven todo (subdirector, directivo, secretario_*, consulta…):
+      // si quedó vacío pero pueden actuar como directivo, mostrar ambos.
+      if (_turnosVisibles.size === 0 && (
+        App.canActAs('admin') || App.canActAs('subdirector') ||
+        App.canActAs('directivo') || App.canActAs('consulta')
+      )) {
+        _turnosVisibles.add('MATUTINO'); _turnosVisibles.add('VESPERTINO');
+      }
+    }
+    const _showMatutino = _turnosVisibles.has('MATUTINO');
+    const _showVespertino = _turnosVisibles.has('VESPERTINO');
+
     const _acaTitulo = _isAcademia
       ? 'Indicadores · ' + _acaGrado + '° ' + _acaTurno
       : 'Indicadores Institucionales';
-    const _acaSubtitulo = _isAcademia
-      ? 'Vista de la Academia de ' + _acaGrado + '° grado del turno ' + _acaTurno.toLowerCase() + '.' + (_acaRol ? ' Eres ' + _acaRol + '.' : '')
+    // Subtítulo refleja el alcance REAL del usuario (academia + orientación si aplica)
+    const _scopeBits = [];
+    if (_isAcademia) _scopeBits.push(`Academia ${_acaGrado}° ${_acaTurno.toLowerCase()}` + (_acaRol ? ` (${_acaRol})` : ''));
+    if (_oriGroups && _oriGroups.length > 0 && (!_isAcademia || _turnosVisibles.size > 1)) {
+      const turnosOri = [..._turnosVisibles].filter(t => !_isAcademia || t !== _acaTurno);
+      if (turnosOri.length > 0) _scopeBits.push(`Orientación ${turnosOri.join(' y ').toLowerCase()}`);
+    }
+    const _acaSubtitulo = _scopeBits.length > 0
+      ? 'Tu alcance: ' + _scopeBits.join(' · ') + '.'
       : 'Elige el turno y la acción que necesitas. Eso es todo.';
 
     container.innerHTML = `
@@ -56,7 +101,7 @@ const IndicadoresModule = (() => {
         </div>
         ${_isAcademia ? `
         <div class="alert alert-info" style="margin-bottom:14px;border-left:4px solid #0891b2;background:#ecfeff;color:#155e75;padding:12px 16px;">
-          <strong>🎓 Vista de Academia:</strong> Estás viendo los indicadores SOLO de los grupos de ${_acaGrado}° grado del turno ${_acaTurno.toLowerCase()}.
+          <strong>🎓 Vista combinada:</strong> Como ${_acaRol || 'presidente'} de Academia ves los grupos de ${_acaGrado}° ${_acaTurno.toLowerCase()}${_oriGroups && _oriGroups.length > 0 && _turnosVisibles.size > 1 ? `. Además, como orientador(a) tienes acceso a tu turno asignado` : ''}. Cada turno tiene su propia tarjeta abajo.
         </div>` : ''}
 
         <!-- SELECTOR DE PARCIAL (chico, default P2) -->
@@ -64,7 +109,7 @@ const IndicadoresModule = (() => {
           <div class="chip-filter-row" style="margin-bottom:0;">
             <span class="chip-filter-label">¿Qué parcial?</span>
             <div class="chip-group">
-              ${K.PARCIALES.map(p => `<button class="chip chip-parcial ${p.id === 'P2' ? 'active' : ''}" data-filter="parcial" data-value="${p.id}">${p.nombre}</button>`).join('')}
+              ${(function(){ const def = App.getDefaultPartial(); return K.PARCIALES.map(p => `<button class="chip chip-parcial ${p.id === def ? 'active' : ''}" data-filter="parcial" data-value="${p.id}">${p.nombre}</button>`).join(''); })()}
               <button class="chip chip-parcial" data-filter="parcial" data-value="ACUM" title="Promedio acumulado de los 3 parciales">📊 Acumulado</button>
             </div>
           </div>
@@ -79,8 +124,9 @@ const IndicadoresModule = (() => {
         <!-- 2 TARJETAS POR TURNO con 2 acciones ÚTILES cada una -->
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:18px;margin-bottom:18px;">
 
-          <!-- TARJETA MATUTINO (oculta si presidente_academia de otro turno) -->
-          <div style="background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(220,38,38,0.25);${_isAcademia && _acaTurno !== 'MATUTINO' ? 'display:none;' : ''}">
+          <!-- TARJETA MATUTINO (visible si el usuario tiene scope matutino:
+               academia matutino O orientación matutino O rol global) -->
+          <div style="background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(220,38,38,0.25);${!_showMatutino ? 'display:none;' : ''}">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
               <span style="font-size:42px;">☀</span>
               <div>
@@ -120,8 +166,9 @@ const IndicadoresModule = (() => {
             </div>
           </div>
 
-          <!-- TARJETA VESPERTINO (oculta si presidente_academia de otro turno) -->
-          <div style="background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(124,58,237,0.25);${_isAcademia && _acaTurno !== 'VESPERTINO' ? 'display:none;' : ''}">
+          <!-- TARJETA VESPERTINO (visible si el usuario tiene scope vespertino:
+               academia vespertino O orientación vespertino O rol global) -->
+          <div style="background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 100%);border-radius:16px;padding:22px;color:#fff;box-shadow:0 8px 20px rgba(124,58,237,0.25);${!_showVespertino ? 'display:none;' : ''}">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
               <span style="font-size:42px;">🌙</span>
               <div>
@@ -235,46 +282,68 @@ const IndicadoresModule = (() => {
   // SOLO cuando el usuario presiona "Generar Excel" o "Análisis".
   async function loadData() {
     try {
-      const [studentsBase, subjects, groups, oriGroups] = await Promise.all([
-        Store.getStudents(),
-        Store.getSubjects(),
-        Store.getGroups(),
-        Store.getOrientadorGroups()
-      ]);
-
-      // ═══ FILTRADO POR ROL ═══
-      // Admin / Subdirector / Directivo: ven TODO (oriGroups === null)
-      // Orientador / Orientador-docente: ven TODO el TURNO donde son orientadores
-      // Presidente de Academia (campos academiaGrado/Turno seteados): ven
-      //   SOLO los grupos de su grado + turno (filtro más estricto que orientador)
-      let filteredGroups;
       const user = App.currentUser || {};
       const acaGrado = Number(user.academiaGrado) || null;
       const acaTurno = user.academiaTurno || null;
       const isAcademia = !!(acaGrado && acaTurno);
 
+      // Cargar primero groups/subjects/oriGroups — la query global de students
+      // no la podemos hacer aún porque las firestore.rules la rechazan para
+      // maestros (incluidos los 12 presidentes/secretarios de academia). El
+      // scope de grupos se calcula PRIMERO y luego se piden los students del
+      // scope si el rol no puede leer global.
+      const [subjects, groups, oriGroups] = await Promise.all([
+        Store.getSubjects(),
+        Store.getGroups(),
+        Store.getOrientadorGroups()
+      ]);
+
+      // ═══ FILTRADO POR ROL (UNIÓN, no intersección) ═══
+      // Cada usuario puede tener varios roles que se SUMAN:
+      // - Admin / Subdirector / Directivo: oriGroups === null → ven todo
+      // - Orientador / Orientador-docente: ven TODOS los grupos de los turnos
+      //   donde son orientadores
+      // - Presidente/Secretario de Academia (academiaGrado/Turno): ven TODOS
+      //   los grupos de su grado+turno (aunque NO sean orientadores ahí)
+      // - Ej. Laurita: orientadora vespertino + presidenta academia 1° matutino
+      //   → debe ver TODO el vespertino + TODO 1° matutino
+      let filteredGroups;
       if (oriGroups === null) {
         filteredGroups = groups; // admin
       } else if (oriGroups.length === 0 && !isAcademia) {
         filteredGroups = []; // ni orientadora ni presidenta de academia
       } else {
-        // Determinar turnos visibles (de su rol de orientadora si aplica + de academia si aplica)
-        const turnosVisibles = new Set();
+        const visibleGroupIds = new Set();
+        // Scope de orientadora: TODOS los grupos de los turnos donde es orient.
         if (oriGroups.length > 0) {
           const oriGroupSet = new Set(oriGroups);
+          const turnosOri = new Set();
           groups.filter(g => oriGroupSet.has(g.id))
-            .forEach(g => g.turno && turnosVisibles.add(g.turno));
+            .forEach(g => g.turno && turnosOri.add(g.turno));
+          groups.filter(g => turnosOri.has(g.turno))
+            .forEach(g => visibleGroupIds.add(g.id));
         }
-        if (isAcademia) turnosVisibles.add(acaTurno);
-        // Filtrar grupos de esos turnos
-        filteredGroups = groups.filter(g => turnosVisibles.has(g.turno));
+        // Scope de academia: grupos de su grado+turno (independiente del rol orient.)
+        if (isAcademia) {
+          groups.filter(g => Number(g.grado) === acaGrado && g.turno === acaTurno)
+            .forEach(g => visibleGroupIds.add(g.id));
+        }
+        filteredGroups = groups.filter(g => visibleGroupIds.has(g.id));
       }
 
-      // Filtro ADICIONAL para presidente de academia: limitar al grado específico
-      if (isAcademia) {
-        filteredGroups = filteredGroups.filter(g =>
-          Number(g.grado) === acaGrado && g.turno === acaTurno
-        );
+      // Cargar students según permisos:
+      //   - admin u orientador (incluye orientador_docente): rule permite global
+      //   - maestro+academia: rule isAcademiaScopeOf permite lectura por grupo
+      //   - otros sin scope: vacío
+      const canReadAllStudents = oriGroups === null || App.canActAs('orientador');
+      let studentsBase;
+      if (canReadAllStudents) {
+        studentsBase = await Store.getStudents();
+      } else if (filteredGroups.length === 0) {
+        studentsBase = [];
+      } else {
+        const groupIds = filteredGroups.map(g => g.id);
+        studentsBase = await Store.getStudentsByGroups(groupIds);
       }
 
       const allowedIds = new Set(filteredGroups.map(g => g.id));
@@ -300,7 +369,7 @@ const IndicadoresModule = (() => {
     if (allGroups.length === 0) return;
     Toast.show('Cargando calificaciones…', 'info', 1500);
     const groupIds = allGroups.map(g => g.id);
-    allGrades = await Store.getGradesByGroups(groupIds);
+    allGrades = await Store.getGradesByGroups(groupIds, true);
     _gradesLoaded = true;
   }
 
@@ -913,7 +982,7 @@ const IndicadoresModule = (() => {
   // 5 hojas: PRIMERO, SEGUNDO, TERCERO, CONCENTRADO GENERAL, CASOS ESPECIALES
   // ═══════════════════════════════════════════════════════════════
   async function generateIndicadoresByTurnoExcel(turno, btn) {
-    const partial = _chipValue("parcial") || 'P2';
+    const partial = _chipValue("parcial") || App.getDefaultPartial();
     const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
 
     if (!confirm(
@@ -1856,25 +1925,49 @@ Cuando esté lista, dame la presentación en el formato que pueda descargar dire
       @media print{.pdf-btn{display:none !important;}}
 
       @media print{
-        /* Cada slide imprime como 1 página de 1920×1080 (16:9 nativo) */
-        @page{size:1920px 1080px;margin:0;}
-        html,body{overflow:visible;background:#fff;width:1920px;height:auto;margin:0;padding:0;}
-        .deck{position:static !important;width:1920px !important;height:auto !important;}
+        /* A4 landscape (297x210mm = 1123x794 px @96dpi) — formato europeo
+         * estandar que TODOS los browsers respetan en print. Mas universal en
+         * Mexico que letter. El slide 1920x1080 (16:9) se reduce con zoom
+         * que afecta TANTO render visual COMO flujo (a diferencia de transform
+         * scale, que solo afecta render y deja flujo 1920px → desbordamiento
+         * lateral y corte). Con zoom 0.55 el slide ocupa 1056x594 px reales
+         * en el flujo, cabe en A4 landscape sin cortes. */
+        @page{size:A4 landscape;margin:0;}
+        html,body{
+          overflow:visible !important;
+          background:#fff !important;
+          margin:0 !important;padding:0 !important;
+          width:auto !important;height:auto !important;
+        }
+        .deck{
+          position:static !important;
+          width:auto !important;height:auto !important;
+          overflow:visible !important;
+          display:block !important;
+        }
         .slide{
           display:flex !important;
           position:relative !important;
-          top:auto !important;left:auto !important;
-          /* En print: NO translate (no centering en viewport), pero SÍ --fit
-             para que si el contenido excede, se reduce automáticamente */
-          transform:scale(var(--fit,1)) !important;
-          transform-origin:top left !important;
+          top:0 !important;left:0 !important;
           width:1920px !important;height:1080px !important;
+          /* zoom afecta tanto el RENDER como el FLUJO del elemento. Despues
+           * del zoom, el slide ocupa 1056x594 px reales (Chrome/Safari/Edge).
+           * Firefox 126+ tambien lo soporta. Si algun dia se rompe en Firefox,
+           * cambiar a transform: scale + envolver en wrapper div con tamano
+           * 1056x594 explicito. */
+          zoom:0.55 !important;
+          transform:none !important;
+          margin:0 !important;
           page-break-after:always !important;
           page-break-inside:avoid !important;
+          break-inside:avoid !important;
           animation:none !important;
           overflow:hidden !important;
         }
-        .nav-bar,.progress,.hint{display:none !important;}
+        .slide:last-of-type{
+          page-break-after:auto !important;
+        }
+        .nav-bar,.progress,.hint,.pdf-btn{display:none !important;}
       }
     `;
 
@@ -1973,7 +2066,7 @@ Cuando esté lista, dame la presentación en el formato que pueda descargar dire
 
   async function generateAnalisisDetalladoByTurno(turno, btn, formato) {
     formato = formato || 'pdf';  // 'pdf' | 'json' | 'present' | 'md'
-    const partial = _chipValue('parcial') || 'P2';
+    const partial = _chipValue('parcial') || App.getDefaultPartial();
 
     // IMPORTANTE: abrir la ventana AQUÍ, SÍNCRONO, durante el gesto del click.
     // Si se abre después de un await, Chrome bloquea la ventana emergente.

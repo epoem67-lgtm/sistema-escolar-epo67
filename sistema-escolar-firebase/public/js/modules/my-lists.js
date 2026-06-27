@@ -14,6 +14,7 @@ const MyListsModule = (() => {
     assignments: [],
     selected: null, // { groupId, groupName, subjectName, turno, grado, teacherName }
     students: [],
+    statusByStudent: {}, // {studentId → result de App.calcStatusExtraordinario en la materia del asg}
   };
 
   const S = (v) => Utils.sanitize(String(v ?? ''));
@@ -30,7 +31,26 @@ const MyListsModule = (() => {
       <p>Cargando tus grupos...</p></div></div>`;
 
     try {
-      state.assignments = (await Store.getMyAssignments()) || [];
+      // v8.09: SIEMPRE STRICT — "Mis Listas" debe ser SOLO las propias del usuario.
+      // Si Jessica (auditor) entrara con getMyAssignments, vería las 216 listas
+      // de toda la escuela en lugar de sus 4.
+      state.assignments = (await Store.getOwnAssignments()) || [];
+      // Ordenar el dropdown por turno → grado → grupo → orden SEP de materias.
+      const _norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+      const _sepIdx = (name, grado) => {
+        const order = (K.SUBJECT_ORDER || {})[Number(grado)] || [];
+        if (order.length === 0) return 999;
+        const n = _norm(name);
+        const i = order.findIndex(o => _norm(o) === n || n.includes(_norm(o)) || _norm(o).includes(n));
+        return i === -1 ? 999 : i;
+      };
+      state.assignments.sort((a, b) =>
+        (a.turno || '').localeCompare(b.turno || '') ||
+        String(a.grado || '').localeCompare(String(b.grado || '')) ||
+        (a.groupName || '').localeCompare(b.groupName || '') ||
+        (_sepIdx(a.subjectName, a.grado) - _sepIdx(b.subjectName, b.grado)) ||
+        (a.subjectName || '').localeCompare(b.subjectName || '')
+      );
     } catch (e) {
       container.innerHTML = `<div class="module-container"><div class="error-state">
         <span class="material-icons-round">error</span><p>${S(e.message)}</p></div></div>`;
@@ -99,9 +119,54 @@ const MyListsModule = (() => {
         })
         .sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
       _renderDetail();
+      // Cargar estatus extra/riesgo en background (no bloquea el render).
+      // Cuando termine, refresca solo la columna de estatus.
+      _loadStatusForAssignment(asg).catch(() => {});
     } catch (e) {
       root.innerHTML = `<div class="card"><div class="error-state">
         <span class="material-icons-round">error</span><p>${S(e.message)}</p></div></div>`;
+    }
+  }
+
+  /**
+   * Calcula el estatus de extra/riesgo de cada alumno EN LA MATERIA del asg
+   * seleccionado, y refresca solo las celdas de la columna estatus.
+   * No bloquea el render principal — corre asíncrono.
+   */
+  async function _loadStatusForAssignment(asg) {
+    state.statusByStudent = {};
+    if (!asg || !state.students.length) return;
+    try {
+      // Cargar grades de la materia × grupo (los 3 parciales) + hours
+      const groupGrades = await Store.getGradesByGroup(asg.groupId, true);
+      const filtered = (groupGrades || []).filter(g => g.subjectId === asg.subjectId);
+      // Index por studentId × parcial
+      const gIdx = {};
+      filtered.forEach(g => {
+        if (!gIdx[g.studentId]) gIdx[g.studentId] = {};
+        gIdx[g.studentId][g.partial] = g;
+      });
+      // Hours
+      const hoursByPart = {};
+      if (window.db) {
+        const docs = await Promise.all(['P1', 'P2', 'P3'].map(p => {
+          const docId = `${asg.groupId}_${asg.subjectId}_${p}`;
+          return window.db.collection('teacherHours').doc(docId).get()
+            .then(d => d.exists ? d.data() : null)
+            .catch(() => null);
+        }));
+        ['P1', 'P2', 'P3'].forEach((p, i) => { hoursByPart[p] = docs[i]; });
+      }
+      // Calcular status por alumno
+      for (const stu of state.students) {
+        const sg = gIdx[stu.docId || stu.id] || {};
+        const grades3 = [sg.P1 || null, sg.P2 || null, sg.P3 || null];
+        state.statusByStudent[stu.docId || stu.id] = App.calcStatusExtraordinario({ grades3, hoursByPart });
+      }
+      // Refrescar solo el área de la lista (mantener seleccionador y botones intactos)
+      _renderDetail();
+    } catch (e) {
+      console.warn('No se pudo cargar estatus en Mis Listas:', e);
     }
   }
 
@@ -111,14 +176,51 @@ const MyListsModule = (() => {
     const asg = state.selected;
     const counts = _countSex();
 
-    const rows = state.students.map((s, i) => `
-      <tr>
+    // Conteos para chip header (si ya cargó el estatus)
+    let cntExtra = 0, cntRiesgo = 0;
+    Object.values(state.statusByStudent || {}).forEach(st => {
+      if (!st) return;
+      if (st.isExtra) cntExtra++;
+      else if (st.isRiesgo) cntRiesgo++;
+    });
+
+    const rows = state.students.map((s, i) => {
+      const sid = s.docId || s.id;
+      const st = state.statusByStudent[sid];
+      let rowBg = '';
+      let statusCell = '<td style="text-align:center;width:130px;color:#cbd5e0;font-size:11px;">—</td>';
+      if (st) {
+        if (st.isExtra) {
+          rowBg = 'background:#fef2f2;border-left:4px solid #dc2626;';
+          const lbl = st.estatus === 'EXTRA_AMBAS' ? 'EXTRA · ambas'
+                   : st.estatus === 'EXTRA_CAL'   ? 'EXTRA · calif'
+                   : 'EXTRA · faltas';
+          statusCell = `<td style="text-align:center;width:130px;">
+            <span title="${S(st.causa)}" style="background:#dc2626;color:#fff;padding:3px 10px;border-radius:8px;font-size:10px;font-weight:700;letter-spacing:.3px;">${lbl}</span>
+          </td>`;
+        } else if (st.isRiesgo) {
+          rowBg = 'background:#fffbeb;border-left:4px solid #d97706;';
+          const lbl = st.estatus === 'EN_RIESGO_AMBAS' ? 'Riesgo · ambas'
+                   : st.estatus === 'EN_RIESGO_CAL'   ? 'Riesgo · calif'
+                   : 'Riesgo · faltas';
+          statusCell = `<td style="text-align:center;width:130px;">
+            <span title="${S(st.causa)}" style="background:#d97706;color:#fff;padding:3px 10px;border-radius:8px;font-size:10px;font-weight:700;letter-spacing:.3px;">${lbl}</span>
+          </td>`;
+        } else if (st.estatus === 'APROBADO' || st.estatus === 'APROBADO_REGLA') {
+          statusCell = `<td style="text-align:center;width:130px;">
+            <span style="color:#16a34a;font-size:11px;font-weight:600;">✓ aprobado</span>
+          </td>`;
+        }
+      }
+      return `<tr style="${rowBg}">
         <td style="text-align:center;color:#888;width:40px;">${i + 1}</td>
         <td style="font-weight:600;">${S(Utils.displayName ? Utils.displayName(s.nombreCompleto) : s.nombreCompleto)}</td>
         <td style="text-align:center;width:80px;">${S(s.expediente || '—')}</td>
         <td style="text-align:center;width:90px;">${S(s.folio || '—')}</td>
         <td style="text-align:center;width:50px;">${S(s.sexo || '')}</td>
-      </tr>`).join('');
+        ${statusCell}
+      </tr>`;
+    }).join('');
 
     root.innerHTML = `
       <!-- BOTONES DE IMPRIMIR ARRIBA, GRANDES -->
@@ -169,7 +271,14 @@ const MyListsModule = (() => {
 
       <!-- TABLA EN PANTALLA -->
       <div class="card">
-        <h3 class="section-title" style="margin:0 0 8px 0;">Vista previa de los estudiantes</h3>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+          <h3 class="section-title" style="margin:0;">Vista previa de los estudiantes</h3>
+          ${(cntExtra + cntRiesgo) > 0 ? `
+          <div style="display:flex;gap:6px;font-size:11px;font-weight:700;">
+            ${cntExtra > 0 ? `<span style="background:#dc2626;color:#fff;padding:3px 10px;border-radius:10px;">${cntExtra} en EXTRA</span>` : ''}
+            ${cntRiesgo > 0 ? `<span style="background:#d97706;color:#fff;padding:3px 10px;border-radius:10px;">${cntRiesgo} en RIESGO</span>` : ''}
+          </div>` : ''}
+        </div>
         <div class="table-container" style="max-height:400px;overflow-y:auto;">
           <table class="table-light" style="font-size:13px;">
             <thead style="position:sticky;top:0;background:#fff;">
@@ -179,6 +288,7 @@ const MyListsModule = (() => {
                 <th style="text-align:center;">Expediente</th>
                 <th style="text-align:center;">Folio</th>
                 <th style="text-align:center;">Sexo</th>
+                <th style="text-align:center;">Estatus</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -197,7 +307,12 @@ const MyListsModule = (() => {
   // PDFs OFICIALES — TODO en una hoja carta, ocupando TODO el ancho/largo
   // ═══════════════════════════════════════════════════════════════
   function _gradoText(g) { return ({ 1: 'PRIMER GRADO', 2: 'SEGUNDO GRADO', 3: 'TERCER GRADO' })[Number(g)] || ''; }
-  function _semestreText(g) { return ({ 1: 'SEGUNDO SEMESTRE', 2: 'CUARTO SEMESTRE', 3: 'SEXTO SEMESTRE' })[Number(g)] || ''; }
+  function _semestreText(g) {
+    // Usa App.getCurrentSemester para detectar automáticamente el semestre
+    // según la fecha actual (1er sem ago-ene / 2do sem feb-jul).
+    try { return App.getCurrentSemester(g).texto + ' SEMESTRE'; }
+    catch (_) { return ''; }
+  }
   function _grupoNumText(name) {
     const num = (name || '').split('-')[1] || '';
     return ({ '1': 'UNO', '2': 'DOS', '3': 'TRES' })[num] || num;
@@ -364,7 +479,7 @@ const MyListsModule = (() => {
     const asg = state.selected;
     const isVesp = String(asg.turno || '').toUpperCase() === 'VESPERTINO';
     const rubrosCols = isVesp
-      ? [{ label: 'EVALUACIÓN<br>CONTINUA', max: 5 }, { label: 'EXAMEN<br>PARCIAL', max: 3 }, { label: 'TRANSVERSAL', max: 2 }, { label: 'PUNTO<br>EXTRA', max: null }]
+      ? [{ label: 'EVALUACIÓN<br>CONTINUA', max: 5 }, { label: 'TRANSVERSAL', max: 2 }, { label: 'EXAMEN<br>PARCIAL', max: 3 }, { label: 'PUNTO<br>EXTRA', max: null }]
       : [{ label: 'EVALUACIÓN<br>CONTINUA', max: 8 }, { label: 'TRANSVERSAL', max: 2 }, { label: 'PUNTO<br>EXTRA', max: null }];
 
     const totalCols = 3 /*#,Folio,Nombre*/ + rubrosCols.length + 3 /*Faltas,Suma,Cal*/;
@@ -483,7 +598,7 @@ const MyListsModule = (() => {
     const isAnot = formatType === 'anotaciones';
     const blankCount = isAnot ? 15 : 0;
     const rubrosCols = isVesp
-      ? [{ label: 'EVALUACIÓN CONTINUA', max: 5 }, { label: 'EXAMEN PARCIAL', max: 3 }, { label: 'TRANSVERSAL', max: 2 }, { label: 'PUNTO EXTRA', max: null }]
+      ? [{ label: 'EVALUACIÓN CONTINUA', max: 5 }, { label: 'TRANSVERSAL', max: 2 }, { label: 'EXAMEN PARCIAL', max: 3 }, { label: 'PUNTO EXTRA', max: null }]
       : [{ label: 'EVALUACIÓN CONTINUA', max: 8 }, { label: 'TRANSVERSAL', max: 2 }, { label: 'PUNTO EXTRA', max: null }];
     const rubroCount = isAnot ? 0 : rubrosCols.length + 3; // + FALTAS, SUMA, CAL
 

@@ -140,7 +140,7 @@ const BoletaOficialModule = (function () {
     results.innerHTML = UI.loadingState('Calculando promedios...');
 
     try {
-      const allGrades = await Store.getGradesByGroup(groupId);
+      const allGrades = await Store.getGradesByGroup(groupId, true);
       const grupo = _groups.find(g => g.id === groupId);
       const groupName = grupo?.nombre || groupId;
 
