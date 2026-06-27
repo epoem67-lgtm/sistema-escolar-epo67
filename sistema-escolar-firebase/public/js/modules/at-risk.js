@@ -581,7 +581,7 @@ const AtRiskModule = (() => {
         Store.getGradesByGroups(groupIds, true),
         Store.getTeacherHoursForGroups(groupIds)
       ]);
-      const students = studentsRaw.filter(s => s.estatus !== 'BAJA' && s.estatus !== 'baja');
+      const students = studentsRaw.filter(s => s.estatus !== 'BAJA' && s.estatus !== 'baja' && s.estatus !== 'EGRESADO');
 
       const horaMap = {};
       hoursMap.forEach((doc, docId) => {

@@ -347,6 +347,14 @@ service cloud.firestore {
       allow write: if isAdminOrSubdirector();
     }
 
+    // ─── PROMOCIONES DE FIN DE CICLO ───────
+    // Respaldo + bitácora de cada promoción masiva de alumnos (módulo
+    // promocion.js). SOLO admin: contiene el snapshot para deshacer.
+    // El cambio real va sobre /students (canManageEnrollment ya lo permite).
+    match /promotions/{promoId} {
+      allow read, write: if isAdmin();
+    }
+
     // ─── EXAMEN EXTRAORDINARIO ─────────────
     // Captura del extra que reemplaza la cal final de una materia.
     // docId determinístico: `${studentId}_${subjectId}` (uno por alumno × materia).

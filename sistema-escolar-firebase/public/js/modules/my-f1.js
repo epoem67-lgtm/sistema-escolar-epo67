@@ -224,7 +224,7 @@ const MyF1Module = (() => {
         seenIds.add(s.id);
         return true;
       });
-      students = dedup.filter(s => s.estatus !== 'BAJA' && s.estatus !== 'baja');
+      students = dedup.filter(s => s.estatus !== 'BAJA' && s.estatus !== 'baja' && s.estatus !== 'EGRESADO');
       // Log auditable: si el total post-filtro NO es la suma esperada,
       // queda registro para diagnosticar el mismatch en consola del maestro.
       if (studentsData.length !== students.length + (studentsData.length - dedup.length)) {

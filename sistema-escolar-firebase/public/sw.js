@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v8.81-correccion-propaga-reportes";
+const SW_VERSION = "v8.82-promocion-fin-de-ciclo";
 // PERFORMANCE: el cache YA NO depende de SW_VERSION. Antes cada bump de versión
 // borraba los 46 JS (~1.9 MB) y forzaba a redescargarlos. Ahora el cache es
 // estable y persistente — los archivos viejos se reemplazan naturalmente cuando

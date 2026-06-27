@@ -171,7 +171,7 @@ const StudentProfileModule = (() => {
       return;
     }
     const filtered = _students
-      .filter(s => s.groupId === _filters.grupo && s.estatus !== 'BAJA')
+      .filter(s => s.groupId === _filters.grupo && s.estatus !== 'BAJA' && s.estatus !== 'EGRESADO')
       .sort((a, b) => {
         const c = (a.apellido1 || '').localeCompare(b.apellido1 || '');
         if (c) return c;

@@ -2141,6 +2141,7 @@ const Router = {
     'import-grades': ['admin'],
     'import-students': ['admin', 'subdirector', 'secretario_escolar'],
     'users-mgmt': ['admin'],     // gestión de usuarios SOLO admin
+    'promocion': ['admin'],      // promoción de fin de ciclo SOLO admin (mueve a todos los alumnos)
     'bitacora': ['admin', 'directivo', 'subdirector'],
     'audit-data': ['admin', 'subdirector'],
     // ─── Direccion ───
