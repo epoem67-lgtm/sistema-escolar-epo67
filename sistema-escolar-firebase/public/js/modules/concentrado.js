@@ -255,7 +255,7 @@ const ConcentradoModule = (() => {
       // Esto blinda el concentrado contra ediciones posteriores a la firma.
       if (groupIds.length > 0) {
         const sealedArrays = await Promise.all(
-          groupIds.map(gid => Store.getGradesByGroup(gid, true).catch(() => []))
+          groupIds.map(gid => Store.getSealedGradesByGroup(gid, { force: true }).catch(() => []))
         );
         allGrades = sealedArrays.flat();
         const fromSnap = allGrades.filter(function(g){return g.__fromSnapshot;}).length;

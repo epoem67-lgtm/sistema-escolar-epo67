@@ -275,7 +275,7 @@ const BoletasModule = (() => {
       // Esto garantiza que la boleta refleja la lista impresa firmada por el maestro,
       // no la edición posterior (bug TR=0, etc.).
       console.log('[BOLETAS] Cargando grades SELLADAS para groupId=' + groupId);
-      const groupGrades = await Store.getGradesByGroup(groupId, true);
+      const groupGrades = await Store.getSealedGradesByGroup(groupId, { force: true });
       const fromSnap = (groupGrades || []).filter(function(g){return g.__fromSnapshot;}).length;
       console.log('[BOLETAS] grades cargados: ' + (groupGrades?.length || 0) + ' (' + fromSnap + ' del snapshot)');
       const gradesMap = {};
@@ -961,7 +961,7 @@ const BoletasModule = (() => {
     }
 
     // v8.26: usa snapshot certificado si existe (sellado al imprimir lista oficial)
-    Store.getGradesByGroup(groupId, true).then(groupGrades => {
+    Store.getSealedGradesByGroup(groupId, { force: true }).then(groupGrades => {
       const gMap = {};
       for (const g of groupGrades) {
         if (!gMap[g.studentId]) gMap[g.studentId] = {};
@@ -1134,7 +1134,7 @@ const BoletasModule = (() => {
           const groupSubjects = K.sortSubjectsByGrado(subjects.filter(s => subjectIds.includes(s.id)), groupInfo.grado || grado);
 
           // v8.26: grades SELLADAS (prefiere snapshot certificado vs grades vivos)
-          const groupGrades = await Store.getGradesByGroup(groupId, true);
+          const groupGrades = await Store.getSealedGradesByGroup(groupId, { force: true });
           const gradesMap = {};
           for (const g of (groupGrades || [])) {
             if (!g || !g.studentId || !g.subjectId || !g.partial) continue;

@@ -212,7 +212,7 @@ const MyF1Module = (() => {
       const [studentsData, gradesData, groupsData, teachersData] = await Promise.all([
         Store.getStudentsByGroups(groupIds, /*force*/ true),
         Promise.all(groupIds.map(gid =>
-          Store.getGradesByGroup(gid, true).catch(() => [])
+          Store.getSealedGradesByGroup(gid, { force: true }).catch(() => [])
         )).then(arrs => arrs.flat()),
         Store.getGroups(),
         needsTeachers ? Store.getTeachers() : Promise.resolve([])

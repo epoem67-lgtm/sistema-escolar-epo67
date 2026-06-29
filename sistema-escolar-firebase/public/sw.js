@@ -17,7 +17,7 @@
 // reemplazar el contenido por:  self.registration.unregister();
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = "v8.84-quitar-sello-reportes-leen-vivo";
+const SW_VERSION = "v8.85-sello-v2-inmutable-al-imprimir";
 // PERFORMANCE: el cache YA NO depende de SW_VERSION. Antes cada bump de versión
 // borraba los 46 JS (~1.9 MB) y forzaba a redescargarlos. Ahora el cache es
 // estable y persistente — los archivos viejos se reemplazan naturalmente cuando

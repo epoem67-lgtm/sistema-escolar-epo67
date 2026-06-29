@@ -772,7 +772,14 @@ const Store = (() => {
         teacherId: params.teacherId || '',
         teacherName: params.teacherName || '',
         source: 'auto-print',  // generado automaticamente al imprimir
-        note: 'Snapshot automatico generado al imprimir lista oficial'
+        note: 'Snapshot automatico generado al imprimir lista oficial',
+        // v8.85 BLINDAJE: marca de sello COMPLETO (faltas + cal + rubros por alumno).
+        // Solo los sellos con complete===true (o sealVersion>=2) mandan en los
+        // reportes. Los sellos viejos (certificación manual sin faltas) se ignoran
+        // para no descuadrar nada. Cada impresión crea un sello nuevo (docId con
+        // timestamp) e INMUTABLE (firestore.rules: update/delete = false).
+        complete: true,
+        sealVersion: 2
       };
 
       await db.collection('certifiedSnapshots').doc(snapshotId).set(data);
@@ -907,11 +914,18 @@ const Store = (() => {
     async getSealedGradesByGroup(groupId, opts) {
       const force = opts && opts.force;
       // Cargar grades actuales y snapshots en paralelo
-      const [rawGrades, snapshots] = await Promise.all([
+      const [rawGrades, allSnaps] = await Promise.all([
         this.getGradesByGroup(groupId, force),
         this._getAllSnapshotsByGroup(groupId, force)
       ]);
-      if (!snapshots || snapshots.length === 0) return rawGrades || [];
+      // v8.85 BLINDAJE: SOLO mandan los sellos COMPLETOS (v2, generados al
+      // imprimir, con faltas+cal+rubros). Los sellos viejos (certificación manual
+      // sin faltas) se IGNORAN — leer de ellos descuadraba los reportes. Si no hay
+      // sello v2 para el grupo, se lee lo VIVO (failsafe: nunca peor que hoy).
+      const snapshots = (allSnaps || []).filter(function(s){
+        return s && (s.complete === true || Number(s.sealVersion) >= 2);
+      });
+      if (snapshots.length === 0) return rawGrades || [];
 
       // Indexar snapshots por subjectId+partial → snapshot más reciente
       const snapMap = {};
