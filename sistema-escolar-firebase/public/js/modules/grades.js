@@ -4726,8 +4726,26 @@ const GradesModule = (function () {
       rubros.forEach(r => {
         const input = row.querySelector(`input[data-field="${r.key}"]`);
         if (input) {
-          // Vacío = 0 (no capturado cuenta como cero)
           const raw = input.value.trim();
+
+          // ═══ BUG FIX v8.25 (junio 2026, reportado por Olivia) ═══
+          // PROBLEMA RAIZ: 671 cals con tr=0 sospechoso por bug del editor.
+          // Cuando el profesor edita CUALQUIER celda (faltas, EC, etc.) y otro
+          // rubro como TR aparece vacío en pantalla (render incompleto, scroll,
+          // foco, lo que sea), al guardar el codigo trataba "vacio = 0" y
+          // sobrescribia el tr=2 ya guardado por tr=0. Tres turnos de promedio
+          // perdidos en boletas firmadas.
+          //
+          // FIX: si el input esta VACIO Y el stored tiene un valor positivo
+          // previo, PRESERVAR el valor previo (no sobrescribir).
+          // Para borrar un rubro existente, el profesor debe escribir 0
+          // EXPLICITAMENTE en la celda (intencion clara).
+          if (raw === '' && stored[r.key] !== undefined && Number(stored[r.key]) > 0) {
+            // Preservar — no agregar al payload, no marcar cambio
+            return;
+          }
+
+          // Vacío = 0 SOLO si no había valor previo (captura nueva genuina)
           const v = raw === '' ? 0 : Math.max(0, Math.min(parseFloat(raw) || 0, r.max));
           data[r.key] = v;
           // Mark as having data if the user typed anything (including 0)
