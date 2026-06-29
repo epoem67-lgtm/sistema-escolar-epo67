@@ -140,7 +140,8 @@ const BoletaOficialModule = (function () {
     results.innerHTML = UI.loadingState('Calculando promedios...');
 
     try {
-      const allGrades = await Store.getGradesByGroup(groupId, true);
+      // v8.26: grades SELLADAS — prefiere snapshot certificado al imprimir lista oficial
+      const allGrades = await Store.getSealedGradesByGroup(groupId, { force: true });
       const grupo = _groups.find(g => g.id === groupId);
       const groupName = grupo?.nombre || groupId;
 

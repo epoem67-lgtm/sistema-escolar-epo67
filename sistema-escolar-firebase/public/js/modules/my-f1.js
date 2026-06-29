@@ -206,9 +206,14 @@ const MyF1Module = (() => {
       // son oficiales y NO PUEDEN salir incompletas por caché stale.
       // El costo extra de lecturas Firestore es aceptable: el F1 se abre
       // pocas veces al día y la integridad del documento es prioritaria.
+      // v8.26: grades SELLADAS — F1 oficial debe leer snapshots certificados
+      // (prevalecen sobre grades vivos para garantizar consistencia con la
+      // lista impresa firmada por el maestro).
       const [studentsData, gradesData, groupsData, teachersData] = await Promise.all([
         Store.getStudentsByGroups(groupIds, /*force*/ true),
-        Store.getGradesByGroups(groupIds, /*force*/ true),
+        Promise.all(groupIds.map(gid =>
+          Store.getSealedGradesByGroup(gid, { force: true }).catch(() => [])
+        )).then(arrs => arrs.flat()),
         Store.getGroups(),
         needsTeachers ? Store.getTeachers() : Promise.resolve([])
       ]);

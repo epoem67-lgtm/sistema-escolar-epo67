@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Fix emergencia Firestore EPO 67</title>
+  <style>
+    body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:32px;line-height:1.45;color:#172033}
+    label{display:block;margin:10px 0 4px;font-weight:700}
+    input{width:340px;max-width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px}
+    button{margin-top:16px;padding:11px 16px;border:0;border-radius:6px;background:#0f766e;color:white;font-weight:800;cursor:pointer}
+    pre{margin-top:20px;background:#0f172a;color:#d1fae5;padding:16px;border-radius:8px;white-space:pre-wrap;min-height:220px}
+  </style>
+</head>
+<body>
+  <h1>Fix emergencia Firestore</h1>
+  <p>Esto no borra calificaciones. Cierra P1/P2, caduca permisos temporales y consolida horas como captura semestral.</p>
+  <label>Correo admin</label>
+  <input id="email" value="demo.admin@epo67.local">
+  <label>Contraseña</label>
+  <input id="password" type="password" placeholder="Contraseña admin">
+  <br>
+  <button id="run">Aplicar fix</button>
+  <pre id="log">Esperando...</pre>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDX4za0avN20Lplmf5LAR7pdfZlvNtvcJc",
+      authDomain: "epo67-sistema.firebaseapp.com",
+      projectId: "epo67-sistema",
+      storageBucket: "epo67-sistema.firebasestorage.app",
+      messagingSenderId: "425082037377",
+      appId: "1:425082037377:web:4bd72a502c874acfa25980"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const months = ['febrero','marzo','abril','mayo','junio','julio'];
+    const out = document.getElementById('log');
+    function log(msg){ out.textContent += '\\n' + msg; out.scrollTop = out.scrollHeight; }
+    function countHours(data){
+      return months.filter(m => data && data[m] !== undefined && data[m] !== null && data[m] !== '' && !isNaN(Number(data[m]))).length;
+    }
+    async function commitInChunks(writes, label) {
+      let done = 0;
+      for (let i = 0; i < writes.length; i += 420) {
+        const batch = db.batch();
+        writes.slice(i, i + 420).forEach(fn => fn(batch));
+        await batch.commit();
+        done += Math.min(420, writes.length - i);
+        log(`${label}: ${done}/${writes.length}`);
+      }
+    }
+    document.getElementById('run').addEventListener('click', async () => {
+      out.textContent = 'Iniciando...';
+      try {
+        const email = document.getElementById('email').value.trim();
+        const password = document.getElementById('password').value;
+        const cred = await auth.signInWithEmailAndPassword(email, password);
+        log(`Sesion iniciada: ${cred.user.email}`);
+
+        const expiredAt = firebase.firestore.Timestamp.fromDate(new Date('2026-06-08T00:00:00-06:00'));
+        const [teachersSnap, assignmentsSnap] = await Promise.all([
+          db.collection('teachers').get(),
+          db.collection('assignments').get()
+        ]);
+        log(`Docentes: ${teachersSnap.size}`);
+        log(`Asignaciones: ${assignmentsSnap.size}`);
+
+        const expireOverrideWrites = [];
+        teachersSnap.forEach(doc => {
+          const t = doc.data() || {};
+          const teacherId = doc.id;
+          ['P1','P2'].forEach(partial => {
+            const ref = db.collection('partialOverrides').doc(`${partial}_${teacherId}`);
+            expireOverrideWrites.push(batch => batch.set(ref, {
+              partialId: partial,
+              teacherId,
+              teacherName: t.nombreCompleto || t.nombre || t.name || '',
+              reason: 'Caducado: P1/P2 no deben abrirse; horas son semestrales y no requieren override',
+              expiresAt: expiredAt,
+              disabledAt: firebase.firestore.FieldValue.serverTimestamp(),
+              grantedBy: cred.user.uid,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true }));
+          });
+        });
+        await commitInChunks(expireOverrideWrites, 'Overrides P1/P2 caducados');
+
+        const partialWrites = [
+          batch => batch.set(db.collection('partials').doc('P1'), {
+            locked: true,
+            lockedByGrade: { '1': true, '2': true, '3': true },
+            lockedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            lockedBy: cred.user.uid,
+            emergencyNote: 'Cerrado: P1 no se abre bajo ninguna circunstancia'
+          }, { merge: true }),
+          batch => batch.set(db.collection('partials').doc('P2'), {
+            locked: true,
+            lockedByGrade: { '1': true, '2': true, '3': true },
+            lockedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            lockedBy: cred.user.uid,
+            emergencyNote: 'Cerrado: P2 no se abre bajo ninguna circunstancia'
+          }, { merge: true }),
+          batch => batch.set(db.collection('partials').doc('P3'), {
+            locked: true,
+            lockedByGrade: { '1': true, '2': true, '3': false },
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedBy: cred.user.uid,
+            emergencyNote: 'Solo tercer grado puede editar P3'
+          }, { merge: true })
+        ];
+        await commitInChunks(partialWrites, 'Estado de parciales');
+
+        const hourWrites = [];
+        let checked = 0, copied = 0;
+        for (const doc of assignmentsSnap.docs) {
+          const a = doc.data() || {};
+          if (!a.groupId || !a.subjectId) continue;
+          const ids = ['SEMESTRE','P3','P2','P1'].map(p => `${a.groupId}_${a.subjectId}_${p}`);
+          const snaps = await Promise.all(ids.map(id => db.collection('teacherHours').doc(id).get()));
+          const dataByPartial = {};
+          ['SEMESTRE','P3','P2','P1'].forEach((p, i) => { dataByPartial[p] = snaps[i].exists ? snaps[i].data() : {}; });
+          let bestPartial = 'SEMESTRE';
+          let best = dataByPartial.SEMESTRE || {};
+          let bestCount = countHours(best);
+          ['P3','P2','P1'].forEach(p => {
+            const c = countHours(dataByPartial[p]);
+            if (c > bestCount) { bestPartial = p; best = dataByPartial[p]; bestCount = c; }
+          });
+          checked++;
+          if (bestCount > 0) {
+            copied++;
+            ['SEMESTRE','P1','P2','P3'].forEach(partial => {
+              const target = db.collection('teacherHours').doc(`${a.groupId}_${a.subjectId}_${partial}`);
+              hourWrites.push(batch => batch.set(target, {
+                ...best,
+                groupId: a.groupId,
+                subjectId: a.subjectId,
+                partial,
+                semesterHours: true,
+                copiedFromPartial: bestPartial,
+                emergencyCopiedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                updatedBy: cred.user.uid,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              }, { merge: true }));
+            });
+          }
+          if (checked % 25 === 0) log(`Horas revisadas: ${checked}/${assignmentsSnap.size}`);
+        }
+        await commitInChunks(hourWrites, 'Horas semestrales normalizadas');
+        log(`Listo. Revisadas ${checked} asignaciones; normalizadas horas semestrales en ${copied}.`);
+        log('P1/P2 cerrados y sin overrides activos. Solo P3 de tercer grado queda editable.');
+      } catch (e) {
+        console.error(e);
+        log('ERROR: ' + (e && e.message ? e.message : e));
+      }
+    });
+  </script>
+</body>
+</html>

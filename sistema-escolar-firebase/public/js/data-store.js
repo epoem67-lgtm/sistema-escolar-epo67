@@ -436,7 +436,9 @@ const Store = (() => {
      */
     async getStudentsForUser(force) {
       const role = App.currentUser?.role;
-      if (role === 'admin' || role === 'orientador' || role === 'directivo' || role === 'consulta') {
+      // Roles con visibilidad global: admin, subdirector, orientador, directivo, consulta.
+      // Auditor (flag aditivo App.canActAs('auditor')) también ve todo en lectura.
+      if (role === 'admin' || role === 'subdirector' || role === 'orientador' || role === 'directivo' || role === 'consulta' || App.canActAs('auditor')) {
         return this.getStudents(force);
       }
       // maestro / orientador_docente: solo alumnos de sus grupos
@@ -485,12 +487,37 @@ const Store = (() => {
      */
     async getMyAssignments(force) {
       const role = App.currentUser?.role;
-      if (role === 'admin' || role === 'orientador' || role === 'directivo') {
+      // Roles que ven TODAS las asignaciones (admin, subdirector, orientador, directivo, auditor)
+      if (role === 'admin' || role === 'subdirector' || role === 'orientador' || role === 'directivo' || App.canActAs('auditor')) {
         return this.getAssignments(force);
       }
       const teacherDocId = await this.getTeacherDocId();
       if (!teacherDocId) return [];
       const cacheKey = 'assignments_my_' + teacherDocId;
+      return get(cacheKey, async () => {
+        const snap = await db.collection('assignments')
+          .where('teacherId', '==', teacherDocId)
+          .get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
+    /**
+     * v8.09: getOwnAssignments() — STRICT.
+     * Devuelve SIEMPRE solo las asignaciones donde teacherId == este usuario,
+     * sin importar auditorScope, presidente_academia, ni ningún otro rol.
+     * Para módulos de ESCRITURA (captura de calificaciones, extraordinarios,
+     * solicitudes de corrección). Usa esta versión, NO getMyAssignments(),
+     * para evitar que auditores con scope global vean (y editen) listas que
+     * no les corresponden.
+     *
+     * Admin/subdirector vacío array si no son docentes (no tienen teacherId).
+     * Si necesitas edición global usa Store.getAssignments() y filtra a mano.
+     */
+    async getOwnAssignments(force) {
+      const teacherDocId = await this.getTeacherDocId();
+      if (!teacherDocId) return [];
+      const cacheKey = 'assignments_own_' + teacherDocId;
       return get(cacheKey, async () => {
         const snap = await db.collection('assignments')
           .where('teacherId', '==', teacherDocId)
@@ -509,7 +536,12 @@ const Store = (() => {
      */
     async getOrientadorGroups() {
       const role = App.currentUser?.role;
-      if (role === 'admin') return null; // admin sees everything
+      // admin + subdirector + directivo + auditor ven TODOS los grupos (sin filtro).
+      // directivo (Lupita Secretaria Administrativa) tiene "lectura completa" por
+      // política institucional (CLAUDE.md: Personal directivo). Auditor (Jessica
+      // con auditorScope=true) tiene visibilidad global EN LECTURA.
+      // El módulo que use esto interpreta `null` como "no filtres, muestra todo".
+      if (role === 'admin' || role === 'subdirector' || role === 'directivo' || App.canActAs('auditor')) return null;
 
       if (!App.canActAs('orientador')) return []; // other roles get empty
 
@@ -559,7 +591,8 @@ const Store = (() => {
      */
     async getStudentsForOrientador(force) {
       const role = App.currentUser?.role;
-      if (role === 'admin') return this.getStudents(force);
+      // admin + subdirector + auditor ven TODOS los alumnos.
+      if (role === 'admin' || role === 'subdirector' || App.canActAs('auditor')) return this.getStudents(force);
       if (!App.canActAs('orientador')) return [];
 
       const teacherDocId = await Store.getTeacherDocId();
@@ -665,6 +698,308 @@ const Store = (() => {
      */
     isCached(key) {
       return _cache[key] !== undefined && !isExpired(key);
+    },
+
+    // ═════════════════════════════════════════════════════════════════
+    // SNAPSHOTS CERTIFICADOS (v8.26)
+    // Blinda calificaciones contra bugs y ediciones posteriores.
+    // Se crea snapshot AUTOMÁTICO al imprimir lista oficial.
+    // Boletas/concentrados leen del snapshot más reciente, NO de grades.
+    // Así garantizamos: papel firmado = lo que muestra el sistema.
+    // ═════════════════════════════════════════════════════════════════
+
+    /**
+     * Genera un hash corto (8 chars) determinístico de un objeto.
+     * Usado como código de versión visible en PDFs impresos.
+     */
+    async _hashItems(items) {
+      try {
+        const str = JSON.stringify(items.map(function(i){
+          return { s: i.studentId, e: i.ec, t: i.tr, p: i.pe, x: i.ex, c: i.cal, f: i.faltas };
+        }));
+        const buf = new TextEncoder().encode(str);
+        const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+        const arr = Array.from(new Uint8Array(hashBuf));
+        return arr.slice(0, 4).map(function(b){return b.toString(16).padStart(2,'0');}).join('').toUpperCase();
+      } catch (e) {
+        return 'NOHASH00';
+      }
+    },
+
+    /**
+     * Crea snapshot certificado para (groupId, subjectId, partial).
+     * Llamar automáticamente al imprimir lista oficial.
+     *
+     * @param {Object} params
+     * @param {string} params.groupId
+     * @param {string} params.subjectId
+     * @param {string} params.partial
+     * @param {Array} params.items - array de {studentId, ec, tr, pe, ex, suma, cal, faltas, studentName}
+     * @param {string} params.teacherId
+     * @param {string} params.teacherName
+     * @returns {Promise<{snapshotId, hash}>}
+     */
+    async createSnapshot(params) {
+      const groupId = params.groupId;
+      const subjectId = params.subjectId;
+      const partial = params.partial;
+      const items = (params.items || []).filter(function(i){return i && i.studentId;});
+
+      if (!groupId || !subjectId || !partial) {
+        throw new Error('createSnapshot: faltan groupId/subjectId/partial');
+      }
+
+      const hash = await this._hashItems(items);
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0,10).replace(/-/g, '');
+      const timeStr = now.toISOString().slice(11,19).replace(/:/g, '');
+      // DocId con timestamp para mantener TODOS los snapshots (no sobreescribir)
+      const snapshotId = groupId + '_' + subjectId + '_' + partial + '_' + dateStr + 'T' + timeStr + '_' + hash;
+
+      const currentUser = (typeof App !== 'undefined' && App.currentUser) || {};
+      const data = {
+        groupId: groupId,
+        subjectId: subjectId,
+        partial: partial,
+        items: items,
+        itemCount: items.length,
+        hash: hash,
+        certifiedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        certifiedAtIso: now.toISOString(),
+        certifiedByUid: (typeof auth !== 'undefined' && auth.currentUser) ? auth.currentUser.uid : 'unknown',
+        certifiedByName: currentUser.displayName || currentUser.email || 'unknown',
+        certifiedByRole: currentUser.role || '',
+        teacherId: params.teacherId || '',
+        teacherName: params.teacherName || '',
+        source: 'auto-print',  // generado automaticamente al imprimir
+        note: 'Snapshot automatico generado al imprimir lista oficial'
+      };
+
+      await db.collection('certifiedSnapshots').doc(snapshotId).set(data);
+      console.log('[snapshot] CREADO:', snapshotId, 'hash=' + hash + ' items=' + items.length);
+
+      // Invalidar cache de snapshots para que la próxima lectura traiga este nuevo
+      const cacheKey = 'snapshot_' + groupId + '_' + subjectId + '_' + partial;
+      delete _cache[cacheKey];
+      delete _timestamps[cacheKey];
+
+      return { snapshotId: snapshotId, hash: hash, certifiedAtIso: now.toISOString() };
+    },
+
+    /**
+     * Obtiene el snapshot MÁS RECIENTE para (groupId, subjectId, partial).
+     * Cache de 5 minutos (igual que grades).
+     *
+     * @returns {Promise<Object|null>} {hash, certifiedAtIso, items, ...} o null si no hay snapshot
+     */
+    async getLatestSnapshot(groupId, subjectId, partial, opts) {
+      const force = opts && opts.force;
+      const cacheKey = 'snapshot_' + groupId + '_' + subjectId + '_' + partial;
+      if (!force && _cache[cacheKey] !== undefined && !isExpired(cacheKey)) {
+        return _cache[cacheKey];
+      }
+
+      try {
+        // Query por groupId+subjectId+partial, ordenado por certifiedAt DESC, limit 1
+        const snap = await db.collection('certifiedSnapshots')
+          .where('groupId', '==', groupId)
+          .where('subjectId', '==', subjectId)
+          .where('partial', '==', partial)
+          .orderBy('certifiedAt', 'desc')
+          .limit(1)
+          .get();
+        const result = snap.empty ? null : snap.docs[0].data();
+        _cache[cacheKey] = result;
+        _timestamps[cacheKey] = Date.now();
+        return result;
+      } catch (e) {
+        // Fallback sin orderBy si Firestore necesita índice compuesto
+        console.warn('[snapshot] getLatestSnapshot con orderBy falló:', e.message, '— intentando fallback');
+        try {
+          const snap = await db.collection('certifiedSnapshots')
+            .where('groupId', '==', groupId)
+            .where('subjectId', '==', subjectId)
+            .where('partial', '==', partial)
+            .get();
+          if (snap.empty) {
+            _cache[cacheKey] = null;
+            _timestamps[cacheKey] = Date.now();
+            return null;
+          }
+          // Ordenar en cliente por certifiedAtIso DESC
+          const docs = snap.docs.map(function(d){return d.data();}).sort(function(a,b){
+            return (b.certifiedAtIso || '').localeCompare(a.certifiedAtIso || '');
+          });
+          const result = docs[0];
+          _cache[cacheKey] = result;
+          _timestamps[cacheKey] = Date.now();
+          return result;
+        } catch (e2) {
+          console.error('[snapshot] getLatestSnapshot fallback también falló:', e2);
+          return null;
+        }
+      }
+    },
+
+    /**
+     * Obtiene snapshots de TODAS las materias de un grupo+parcial.
+     * Usado en concentrados/boletas que leen todas las materias.
+     * @returns {Promise<Array>} array de snapshots, uno por subjectId (el más reciente)
+     */
+    async getLatestSnapshotsByGroup(groupId, partial) {
+      try {
+        const snap = await db.collection('certifiedSnapshots')
+          .where('groupId', '==', groupId)
+          .where('partial', '==', partial)
+          .get();
+        if (snap.empty) return [];
+        // Agrupar por subjectId y quedarse con el más reciente
+        const bySubject = {};
+        snap.docs.forEach(function(doc){
+          const data = doc.data();
+          const prev = bySubject[data.subjectId];
+          if (!prev || (data.certifiedAtIso || '') > (prev.certifiedAtIso || '')) {
+            bySubject[data.subjectId] = data;
+          }
+        });
+        return Object.values(bySubject);
+      } catch (e) {
+        console.warn('[snapshot] getLatestSnapshotsByGroup falló:', e.message);
+        return [];
+      }
+    },
+
+    /**
+     * "Aplana" un snapshot para que se vea igual que un array de docs de grades.
+     * Permite reusar el código existente que espera grades-like docs.
+     */
+    snapshotToGrades(snapshot) {
+      if (!snapshot || !snapshot.items) return [];
+      return snapshot.items.map(function(item){
+        return {
+          studentId: item.studentId,
+          subjectId: snapshot.subjectId,
+          groupId: snapshot.groupId,
+          partial: snapshot.partial,
+          ec: item.ec,
+          tr: item.tr,
+          pe: item.pe,
+          ex: item.ex,
+          suma: item.suma,
+          cal: item.cal,
+          value: item.value !== undefined ? item.value : item.cal,
+          faltas: item.faltas,
+          // Marca para debugging — si aparece en UI, sabemos que vino del snapshot
+          __fromSnapshot: true,
+          __snapshotHash: snapshot.hash,
+          __snapshotDate: snapshot.certifiedAtIso
+        };
+      });
+    },
+
+    /**
+     * Versión "sellada" de getGradesByGroup que prefiere snapshots si existen.
+     * Para cada (subjectId, partial) del grupo, devuelve el snapshot más reciente
+     * si existe; si no, los grades actuales.
+     *
+     * Esto blinda boletas/concentrados contra bugs de edición posterior.
+     */
+    async getSealedGradesByGroup(groupId, opts) {
+      const force = opts && opts.force;
+      // Cargar grades actuales y snapshots en paralelo
+      const [rawGrades, snapshots] = await Promise.all([
+        this.getGradesByGroup(groupId, force),
+        this._getAllSnapshotsByGroup(groupId, force)
+      ]);
+      if (!snapshots || snapshots.length === 0) return rawGrades || [];
+
+      // Indexar snapshots por subjectId+partial → snapshot más reciente
+      const snapMap = {};
+      snapshots.forEach(function(s){
+        const k = s.subjectId + '_' + s.partial;
+        const prev = snapMap[k];
+        if (!prev || (s.certifiedAtIso || '') > (prev.certifiedAtIso || '')) {
+          snapMap[k] = s;
+        }
+      });
+
+      // Para cada grade raw: si hay snapshot que lo cubre, USAR el del snapshot
+      const replaced = new Set();
+      const result = [];
+      (rawGrades || []).forEach(function(g){
+        const k = g.subjectId + '_' + g.partial;
+        if (snapMap[k]) {
+          // Buscar el item del snapshot para este alumno
+          const item = (snapMap[k].items || []).find(function(it){return it.studentId === g.studentId;});
+          if (item) {
+            result.push({
+              studentId: item.studentId,
+              subjectId: snapMap[k].subjectId,
+              groupId: snapMap[k].groupId,
+              partial: snapMap[k].partial,
+              ec: item.ec, tr: item.tr, pe: item.pe, ex: item.ex,
+              suma: item.suma, cal: item.cal,
+              value: item.value !== undefined ? item.value : item.cal,
+              faltas: item.faltas,
+              __fromSnapshot: true,
+              __snapshotHash: snapMap[k].hash
+            });
+            replaced.add(g.studentId + '_' + g.subjectId + '_' + g.partial);
+            return;
+          }
+        }
+        // No hay snapshot que cubra este grade — usar raw
+        result.push(g);
+      });
+
+      // Agregar items del snapshot que no estaban en grades (caso raro)
+      Object.values(snapMap).forEach(function(s){
+        (s.items || []).forEach(function(item){
+          const k = item.studentId + '_' + s.subjectId + '_' + s.partial;
+          if (!replaced.has(k)) {
+            // Verificar que tampoco esté en rawGrades
+            const exists = (rawGrades || []).some(function(g){
+              return g.studentId === item.studentId && g.subjectId === s.subjectId && g.partial === s.partial;
+            });
+            if (!exists) {
+              result.push({
+                studentId: item.studentId,
+                subjectId: s.subjectId, groupId: s.groupId, partial: s.partial,
+                ec: item.ec, tr: item.tr, pe: item.pe, ex: item.ex,
+                suma: item.suma, cal: item.cal,
+                value: item.value !== undefined ? item.value : item.cal,
+                faltas: item.faltas,
+                __fromSnapshot: true, __snapshotHash: s.hash
+              });
+            }
+          }
+        });
+      });
+
+      return result;
+    },
+
+    /**
+     * Helper interno: TODOS los snapshots del grupo (sin filtrar por parcial).
+     * Cache de 5 min.
+     */
+    async _getAllSnapshotsByGroup(groupId, force) {
+      const cacheKey = 'all_snapshots_group_' + groupId;
+      if (!force && _cache[cacheKey] !== undefined && !isExpired(cacheKey)) {
+        return _cache[cacheKey];
+      }
+      try {
+        const snap = await db.collection('certifiedSnapshots')
+          .where('groupId', '==', groupId)
+          .get();
+        const result = snap.empty ? [] : snap.docs.map(function(d){return d.data();});
+        _cache[cacheKey] = result;
+        _timestamps[cacheKey] = Date.now();
+        return result;
+      } catch (e) {
+        console.warn('[snapshot] _getAllSnapshotsByGroup falló:', e.message);
+        return [];
+      }
     }
   };
 })();

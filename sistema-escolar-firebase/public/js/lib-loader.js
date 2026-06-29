@@ -36,6 +36,11 @@ const Lib = (() => {
       if (typeof window.XLSX !== 'undefined') return Promise.resolve();
       return loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
     },
+    // ExcelJS — para xlsx con estilos completos (colores, bordes, fuentes)
+    exceljs() {
+      if (typeof window.ExcelJS !== 'undefined') return Promise.resolve();
+      return loadScript('https://cdn.jsdelivr.net/npm/exceljs@4.3.0/dist/exceljs.min.js');
+    },
     jszip() {
       if (typeof window.JSZip !== 'undefined') return Promise.resolve();
       return loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');

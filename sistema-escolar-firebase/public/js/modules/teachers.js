@@ -742,11 +742,11 @@ const TeachersModule = (() => {
   // ── Tab: Materias ─────────────────────────────────────────────
 
   const renderMateriasTab = () => {
+    // Orden oficial SEP del grado (no alfabético)
     const subjectsByGrado = {};
     K.GRADOS.forEach(g => {
-      subjectsByGrado[g] = state.subjects
-        .filter(s => s.grado === g)
-        .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+      const filtered = state.subjects.filter(s => s.grado === g);
+      subjectsByGrado[g] = K.sortSubjectsByGrado(filtered, g);
     });
 
     // Build map: subjectId -> { turno -> [{teacherName, groupName, id, isDuplicate}] }
@@ -1433,8 +1433,11 @@ const TeachersModule = (() => {
         if (!gid) { document.getElementById('asg_view_result').innerHTML = ''; return; }
         const group = state.groups.find(g => g.id === gid);
         if (!group) return;
-        const subjs = state.subjects.filter(s => String(s.grado) === String(group.grado))
-          .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+        // Orden oficial SEP del grado del grupo
+        const subjs = K.sortSubjectsByGrado(
+          state.subjects.filter(s => String(s.grado) === String(group.grado)),
+          Number(group.grado)
+        );
         document.getElementById('asg_view_result').innerHTML = `
           <table class="table-light" style="width:100%;font-size:13px;">
             <thead><tr><th style="text-align:left;">Materia</th><th style="text-align:left;">Maestro</th></tr></thead>
@@ -1497,11 +1500,13 @@ const TeachersModule = (() => {
       return html;
     }
 
-    // Get groups and subjects for this turno+grado
+    // Get groups (alfabético OK para grupos: A, B, C...) y subjects (SEP orden)
     const groups = state.groups.filter(g => g.turno === turno && String(g.grado) === String(grado))
       .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
-    const subjects = state.subjects.filter(s => String(s.grado) === String(grado))
-      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    const subjects = K.sortSubjectsByGrado(
+      state.subjects.filter(s => String(s.grado) === String(grado)),
+      Number(grado)
+    );
 
     if (groups.length === 0 || subjects.length === 0) {
       html += `<div class="empty-state"><span class="material-icons-round empty-state-icon">info</span><p class="empty-state-text">No hay grupos o materias para ${S(turno)} ${grado}\u00ba</p></div>`;

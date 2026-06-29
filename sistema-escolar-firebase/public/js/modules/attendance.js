@@ -18,9 +18,10 @@ const AttendanceModule = (() => {
     const role = App.currentUser?.role;
 
     // orientador_docente: usa vista admin (acceso amplio); puede filtrar a sus grupos.
+    // Subdirector accede como admin (autoridad académica equivalente).
     if (role === 'maestro') {
       await renderTeacherView(container);
-    } else if (role === 'admin' || App.canActAs('orientador')) {
+    } else if (role === 'admin' || role === 'subdirector' || App.canActAs('orientador')) {
       await renderAdminView(container);
     } else {
       container.innerHTML = `<div class="module-container"><div class="error-state"><span class="material-icons-round">block</span><p>Acceso denegado</p></div></div>`;
@@ -35,8 +36,9 @@ const AttendanceModule = (() => {
       return;
     }
 
-    // getMyAssignments respeta firestore.rules para maestros
-    assignments = await Store.getMyAssignments();
+    // v8.09: getOwnAssignments() STRICT — Jessica (auditor + presidente_academia)
+    // SOLO debe registrar asistencia de SUS 4 grupos, no de toda la escuela.
+    assignments = await Store.getOwnAssignments();
     const groupIds = [...new Set(assignments.map(a => a.groupId))];
     groups = (await Store.getGroups()).filter(g => groupIds.includes(g.id));
 

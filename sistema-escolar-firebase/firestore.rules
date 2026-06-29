@@ -513,11 +513,23 @@ service cloud.firestore {
     // y entrega de boletas oficiales.
     //
     // Regla v8.06: NADIE puede modificar o borrar un snapshot una vez creado.
-    // Solo admin/subdirector pueden CREAR snapshots nuevos.
-    // Lectura abierta a todos los autenticados (transparencia).
+    // SNAPSHOTS CERTIFICADOS (v8.26):
+    // - Lectura abierta a TODOS (incluso sin login) para que la página
+    //   /verificar pueda validar códigos impresos sin requerir cuenta.
+    //   No expone PII más allá de calificaciones, que ya están bajo otras
+    //   reglas con read autenticado — el snapshot es un duplicado para
+    //   integridad documental.
+    // - CREATE: maestros pueden crear snapshots de SUS materias al imprimir
+    //   listas oficiales. Admin/subdirector también (para imprimir listas
+    //   en nombre de cualquier maestro).
+    // - INMUTABLES: una vez creado, NO se puede modificar ni borrar.
     match /certifiedSnapshots/{snapshotId} {
-      allow read: if isAuthenticated();
-      allow create: if isAdminOrSubdirector();
+      allow read: if true;  // ← lectura PÚBLICA para /verificar/{hash}
+      allow create: if isAuthenticated() && (
+        isAdminOrSubdirector() ||
+        canMaestro() ||
+        canOrientador()  // orientadores también imprimen listas concentradas
+      );
       allow update: if false;  // ← INMUTABLE
       allow delete: if false;  // ← INMUTABLE
     }

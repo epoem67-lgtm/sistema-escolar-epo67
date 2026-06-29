@@ -223,7 +223,8 @@ const ImportGradesModule = (() => {
     const materiaSelect = document.getElementById('ig-materia');
     if (!materiaSelect) return;
 
-    const subjects = filteredSubjects(grado);
+    // Orden oficial SEP del grado (en lugar del orden de inserción de Firestore)
+    const subjects = K.sortSubjectsByGrado(filteredSubjects(grado), Number(grado));
 
     if (grado && subjects.length > 0) {
       materiaSelect.disabled = false;
@@ -327,7 +328,7 @@ const ImportGradesModule = (() => {
             </select>
           </div>
           <div class="form-group">
-            <label for="ig-col-grade">Columna de calificacion</label>
+            <label for="ig-col-grade">Columna de calificación</label>
             <select id="ig-col-grade">
               <option value="-1">-- Seleccionar --</option>
               ${colOptions}
@@ -366,7 +367,7 @@ const ImportGradesModule = (() => {
     const gradeIdx = parseInt(document.getElementById('ig-col-grade')?.value ?? '-1', 10);
 
     if (nameIdx < 0 || gradeIdx < 0) {
-      Toast.show('Selecciona las columnas de nombre y calificacion', 'error');
+      Toast.show('Selecciona las columnas de nombre y calificación', 'error');
       return;
     }
 
@@ -457,7 +458,7 @@ const ImportGradesModule = (() => {
               <tr>
                 <th>Nombre en Excel</th>
                 <th>Alumno encontrado</th>
-                <th>Calificacion</th>
+                <th>Calificación</th>
                 <th>Estado</th>
               </tr>
             </thead>
@@ -482,7 +483,7 @@ const ImportGradesModule = (() => {
     const { grupo, materia, parcial } = getFilterValues();
 
     if (!grupo || !materia || !parcial) {
-      Toast.show('Faltan datos de configuracion (grupo, materia o parcial)', 'error');
+      Toast.show('Faltan datos de configuración (grupo, materia o parcial)', 'error');
       return;
     }
 
@@ -544,7 +545,7 @@ const ImportGradesModule = (() => {
       }
       Store.invalidateGradesForGroup(grupo);
 
-      DB.audit('importar', 'calificacion', '', {
+      DB.audit('importar', 'calificación', '', {
         description: `Importación masiva: ${rowsToImport.length} calificaciones importadas desde Excel`,
         extra: { count: rowsToImport.length }
       });

@@ -5293,6 +5293,13 @@ html, body { margin:0; padding:0; }
         </td>
     </tr>
 </table>
+${meta.snapshotInfo ? `
+<!-- ═══ SELLO DE CERTIFICACIÓN (auto-generado v8.26) ═══ -->
+<div style="margin-top:8px;padding:4px 8px;text-align:center;font-family:'Courier New',monospace;font-size:8px;color:#374151;border-top:1px dashed #94a3b8;">
+  🔐 CÓDIGO DE CERTIFICACIÓN: <strong style="letter-spacing:1.5px;">${Utils.sanitize(meta.snapshotInfo.hash)}</strong>
+  &nbsp;·&nbsp; Generado: ${new Date(meta.snapshotInfo.certifiedAtIso).toLocaleString('es-MX')}
+  &nbsp;·&nbsp; Verificar: epo67-sistema.web.app/verificar/${Utils.sanitize(meta.snapshotInfo.hash)}
+</div>` : ''}
 
 </div>
 
@@ -5368,9 +5375,40 @@ html, body { margin:0; padding:0; }
       gradeDataMap[s.docId] = g;
     });
 
+    // ═══ SNAPSHOT AUTOMÁTICO (v8.26) ═══
+    // Antes de imprimir, GUARDAR snapshot de la lista en certifiedSnapshots.
+    // Esto blinda la calificación contra ediciones posteriores: boletas/concentrados
+    // leerán de este snapshot, no de la tabla grades. Si el snapshot falla
+    // (red, permisos, etc.), igual permitimos imprimir — pero queda warning.
+    let snapshotInfo = null;
+    try {
+      const items = students.map(function(s){
+        const g = gradeDataMap[s.docId] || {};
+        return {
+          studentId: s.docId,
+          studentName: (s.nombreCompleto || s.nombres || '').toUpperCase(),
+          ec: g.ec, tr: g.tr, pe: g.pe, ex: g.ex,
+          suma: g.suma, cal: g.cal, value: g.cal,
+          faltas: g.faltas
+        };
+      });
+      snapshotInfo = await Store.createSnapshot({
+        groupId: selectedGroup,
+        subjectId: selectedSubject,
+        partial: currentPartial,
+        items: items,
+        teacherId: asg ? asg.teacherId : '',
+        teacherName: teacherName
+      });
+      console.log('[printGrades] snapshot OK:', snapshotInfo.hash);
+    } catch (snapErr) {
+      console.error('[printGrades] error al crear snapshot (NO bloquea impresion):', snapErr);
+    }
+
     const html = _buildOfficialPrintHTML(students, gradeDataMap, {
       teacherName, subjectName, groupName, groupNum, grado, turno: currentTurno,
-      parcialNum, parcialText, semText, orientador, horas: _getHorasData()
+      parcialNum, parcialText, semText, orientador, horas: _getHorasData(),
+      snapshotInfo: snapshotInfo
     });
 
     const printWindow = window.open('', '_blank');
@@ -5517,9 +5555,37 @@ html, body { margin:0; padding:0; }
       const gradeDataByDocId = {};
       grpStudents.forEach(s => { gradeDataByDocId[s.id] = gradeDataMap[s.id] || {}; });
 
+      // ═══ SNAPSHOT AUTOMÁTICO (v8.26) ═══
+      // Guardar snapshot de esta lista en certifiedSnapshots antes de imprimir.
+      // No bloquea impresión si falla.
+      let snapshotInfo = null;
+      try {
+        const items = studentsForPrint.map(function(s){
+          const g = gradeDataByDocId[s.docId] || {};
+          return {
+            studentId: s.docId,
+            studentName: (s.nombreCompleto || s.nombres || '').toUpperCase(),
+            ec: g.ec, tr: g.tr, pe: g.pe, ex: g.ex,
+            suma: g.suma, cal: g.cal, value: g.cal,
+            faltas: g.faltas
+          };
+        });
+        snapshotInfo = await Store.createSnapshot({
+          groupId: asg.groupId,
+          subjectId: asg.subjectId,
+          partial: partialId,
+          items: items,
+          teacherId: asg.teacherId || '',
+          teacherName: teacherName
+        });
+      } catch (snapErr) {
+        console.error('[printMultiple] snapshot err para ' + asg.groupId + '/' + asg.subjectId + ':', snapErr.message);
+      }
+
       const meta = {
         teacherName, subjectName, groupName, groupNum, grado, turno,
-        parcialNum, parcialText, semText, orientador, horas
+        parcialNum, parcialText, semText, orientador, horas,
+        snapshotInfo: snapshotInfo
       };
       const html = _buildOfficialPrintHTML(studentsForPrint, gradeDataByDocId, meta);
 
@@ -5543,7 +5609,7 @@ html, body { margin:0; padding:0; }
     Toast.show(`${targetAsgs.length} lista(s) generadas`, 'success');
   }
 
-  function printAdminGrades() {
+  async function printAdminGrades() {
     if (!_admin.grupo || !_admin.parcial) {
       Toast.show('Selecciona un grupo y parcial para imprimir', 'warning');
       return;
@@ -5599,9 +5665,36 @@ html, body { margin:0; padding:0; }
       gradeDataMap[g.studentId] = g;
     });
 
+    // ═══ SNAPSHOT AUTOMÁTICO (v8.26) ═══
+    let snapshotInfo = null;
+    try {
+      const groupStudentsForPrint = groupStudents.map(s => ({ docId: s.id, ...s }));
+      const items = groupStudentsForPrint.map(function(s){
+        const g = gradeDataMap[s.docId] || {};
+        return {
+          studentId: s.docId,
+          studentName: (s.nombreCompleto || s.nombres || '').toUpperCase(),
+          ec: g.ec, tr: g.tr, pe: g.pe, ex: g.ex,
+          suma: g.suma, cal: g.cal, value: g.cal,
+          faltas: g.faltas
+        };
+      });
+      snapshotInfo = await Store.createSnapshot({
+        groupId: _admin.grupo,
+        subjectId: _admin.materia,
+        partial: _admin.parcial,
+        items: items,
+        teacherId: asg ? asg.teacherId : '',
+        teacherName: teacherName
+      });
+    } catch (snapErr) {
+      console.error('[printAdmin] snapshot err:', snapErr.message);
+    }
+
     const html = _buildOfficialPrintHTML(groupStudents, gradeDataMap, {
       teacherName, subjectName, groupName, groupNum, grado, turno,
-      parcialNum, parcialText, semText, orientador
+      parcialNum, parcialText, semText, orientador,
+      snapshotInfo: snapshotInfo
     });
 
     const printWindow = window.open('', '_blank');

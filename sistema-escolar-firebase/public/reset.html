@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Actualizando Sistema Escolar EPO 67…</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #3182ce 0%, #1e40af 100%);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+    }
+    .card {
+      background: rgba(255,255,255,0.1);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 16px;
+      padding: 40px 30px;
+      max-width: 500px;
+      width: 100%;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+    }
+    h1 { font-size: 28px; margin: 0 0 8px; font-weight: 800; }
+    .sub { font-size: 14px; opacity: 0.9; margin-bottom: 28px; }
+    .step {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; margin: 8px 0;
+      background: rgba(255,255,255,0.08);
+      border-radius: 10px;
+      font-size: 15px; text-align: left;
+    }
+    .step.done { background: rgba(34,197,94,0.25); }
+    .step.fail { background: rgba(220,38,38,0.3); }
+    .step .icon { font-size: 22px; width: 28px; text-align: center; }
+    .spinner {
+      display: inline-block; width: 20px; height: 20px;
+      border: 3px solid rgba(255,255,255,0.25);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .footer {
+      margin-top: 28px;
+      font-size: 13px;
+      opacity: 0.85;
+    }
+    .footer a {
+      color: #fff;
+      text-decoration: underline;
+      font-weight: 600;
+    }
+    code {
+      background: rgba(0,0,0,0.3);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔄 Actualizando…</h1>
+    <p class="sub">Limpiando caché y descargando la última versión del Sistema Escolar EPO 67.</p>
+    <div id="steps">
+      <div class="step" id="s1"><span class="icon"><span class="spinner"></span></span><span>Eliminando Service Worker viejo</span></div>
+      <div class="step" id="s2"><span class="icon"><span class="spinner"></span></span><span>Limpiando caché de archivos</span></div>
+      <div class="step" id="s3"><span class="icon"><span class="spinner"></span></span><span>Limpiando IndexedDB de Firestore</span></div>
+      <div class="step" id="s4"><span class="icon"><span class="spinner"></span></span><span>Redirigiendo al sistema actualizado</span></div>
+    </div>
+    <div class="footer">
+      Versión objetivo: <code>v7.12+</code><br>
+      Si después de 30 segundos no avanza, recarga esta página (Cmd+R) o cierra el navegador y vuelve a abrirlo.
+    </div>
+  </div>
+
+  <script>
+    function setDone(id, text) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.add('done');
+      el.querySelector('.icon').textContent = '✓';
+      if (text) el.querySelector('span:last-child').textContent = text;
+    }
+    function setFail(id, text) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.add('fail');
+      el.querySelector('.icon').textContent = '⚠';
+      if (text) el.querySelector('span:last-child').textContent = text;
+    }
+
+    (async () => {
+      // 1. Unregister TODOS los Service Workers
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const reg of regs) {
+            try { await reg.unregister(); } catch (_) {}
+          }
+          setDone('s1', `Service Worker eliminado (${regs.length} registros)`);
+        } else {
+          setDone('s1', 'Service Worker no disponible (OK)');
+        }
+      } catch (e) {
+        setFail('s1', 'Error al limpiar SW: ' + e.message);
+      }
+
+      // 2. Borrar TODOS los caches
+      try {
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          for (const k of keys) {
+            try { await caches.delete(k); } catch (_) {}
+          }
+          setDone('s2', `Caché limpio (${keys.length} entradas eliminadas)`);
+        } else {
+          setDone('s2', 'Caché no disponible (OK)');
+        }
+      } catch (e) {
+        setFail('s2', 'Error al limpiar caché: ' + e.message);
+      }
+
+      // 3. Borrar IndexedDB del dominio (Firestore cache)
+      try {
+        if ('indexedDB' in window && indexedDB.databases) {
+          const dbs = await indexedDB.databases();
+          await Promise.all(dbs.map(d => new Promise(res => {
+            if (!d.name) { res(); return; }
+            const req = indexedDB.deleteDatabase(d.name);
+            req.onsuccess = req.onerror = req.onblocked = () => res();
+          })));
+          setDone('s3', `IndexedDB limpio (${dbs.length} bases eliminadas)`);
+        } else {
+          setDone('s3', 'IndexedDB no listable (OK)');
+        }
+      } catch (e) {
+        setFail('s3', 'Error al limpiar IndexedDB: ' + e.message);
+      }
+
+      // 4. Limpiar localStorage + sessionStorage (estado de impersonación, lastRoute, etc.)
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch (_) {}
+
+      // 5. Redirigir al sistema con cache-buster
+      setDone('s4', 'Redirigiendo en 2 segundos…');
+      setTimeout(() => {
+        window.location.replace('/?reset=' + Date.now());
+      }, 2000);
+    })();
+  </script>
+</body>
+</html>

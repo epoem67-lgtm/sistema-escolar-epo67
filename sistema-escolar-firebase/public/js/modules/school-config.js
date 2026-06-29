@@ -188,8 +188,8 @@ const SchoolConfig = (() => {
               <input id="sc-asistencia" type="number" step="1" value="${config.metas?.asistencia_minima || 80}">
             </div>
             <div class="form-group">
-              <label for="sc-reprobacion">Reprobaci\u00f3n M\u00e1xima (%)</label>
-              <input id="sc-reprobacion" type="number" step="1" value="${config.metas?.reprobacion_maxima || 14}">
+              <label for="sc-reprobación">Reprobaci\u00f3n M\u00e1xima (%)</label>
+              <input id="sc-reprobación" type="number" step="1" value="${config.metas?.reprobación_maxima || 14}">
             </div>
           </div>
         </div>
@@ -225,13 +225,13 @@ const SchoolConfig = (() => {
         metas: {
           promedio_minimo: parseFloat(document.getElementById('sc-promedio').value) || 8.3,
           asistencia_minima: parseInt(document.getElementById('sc-asistencia').value) || 80,
-          reprobacion_maxima: parseInt(document.getElementById('sc-reprobacion').value) || 14
+          reprobacion_maxima: parseInt(document.getElementById('sc-reprobación').value) || 14
         },
         updatedAt: DB.timestamp()
       };
 
       await DB.doc('config', 'school').set(updatedConfig, { merge: true });
-      DB.audit('editar', 'configuracion', 'school', {
+      DB.audit('editar', 'configuración', 'school', {
         description: 'Configuración de escuela actualizada',
         after: { nombre: updatedConfig.nombre, ciclo: updatedConfig.cicloEscolar, semestre: updatedConfig.semestre }
       });

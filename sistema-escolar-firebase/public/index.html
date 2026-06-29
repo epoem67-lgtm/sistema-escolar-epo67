@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Version pin: incrementar en cada deploy. El bootstrap de abajo compara
        contra localStorage; si difiere, fuerza purga total + reload. -->
-  <meta name="app-version" content="v8.25-fix-tr-cero-sobreescritura">
+  <meta name="app-version" content="v8.26-snapshots-certificados-blindaje">
   <title>Sistema Escolar</title>
 
   <!-- ════════════════════════════════════════════════════════════════
@@ -114,7 +114,7 @@
   <!-- Preload de assets criticos (anticipa descarga de los core scripts del body) -->
   <link rel="preload" href="/js/firebase-config.js?v=6.98" as="script">
   <link rel="preload" href="/js/constants.js?v=8.12" as="script">
-  <link rel="preload" href="/js/data-store.js?v=8.18" as="script">
+  <link rel="preload" href="/js/data-store.js?v=8.19" as="script">
   <link rel="preload" href="/js/app.js?v=7.56" as="script">
   <link rel="preload" href="/js/components.js?v=6.29" as="script">
 
@@ -522,7 +522,7 @@
   <!-- Core -->
   <script src="/js/firebase-config.js?v=6.98"></script>
   <script src="/js/constants.js?v=8.12"></script>
-  <script src="/js/data-store.js?v=8.18"></script>
+  <script src="/js/data-store.js?v=8.19"></script>
   <script src="/js/app.js?v=7.56"></script>
   <script src="/js/components.js?v=6.29"></script>
   <script src="/js/lib-loader.js?v=6.29"></script>
@@ -535,7 +535,7 @@
   <script src="/js/modules/school-config.js?v=6.29" defer></script>
   <script src="/js/modules/teachers.js?v=7.72" defer></script>
   <script src="/js/modules/students.js?v=7.37" defer></script>
-  <script src="/js/modules/grades.js?v=8.64" defer></script>
+  <script src="/js/modules/grades.js?v=8.65" defer></script>
   <script src="/js/modules/partial-close.js?v=8.16" defer></script>
   <script src="/js/modules/at-risk.js?v=8.82" defer></script>
   <script src="/js/modules/extraordinarios.js?v=8.81" defer></script>
@@ -543,7 +543,7 @@
   <script src="/js/modules/users-mgmt.js?v=7.53" defer></script>
   <script src="/js/modules/promocion.js?v=8.82" defer></script>
   <script src="/js/modules/my-lists.js?v=8.81" defer></script>
-  <script src="/js/modules/my-f1.js?v=8.82" defer></script>
+  <script src="/js/modules/my-f1.js?v=8.83" defer></script>
   <script src="/js/modules/enrollment.js?v=6.29" defer></script>
   <script src="/js/modules/honor-roll.js?v=8.81" defer></script>
   <script src="/js/modules/presidente-academia.js?v=8.81" defer></script>
@@ -551,9 +551,9 @@
   <!-- Nuevos módulos v3.1 -->
   <script src="/js/modules/import-grades.js?v=8.07" defer></script>
   <script src="/js/modules/import-students.js?v=7.37" defer></script>
-  <script src="/js/modules/boletas.js?v=8.81" defer></script>
+  <script src="/js/modules/boletas.js?v=8.82" defer></script>
   <script src="/js/modules/indicadores.js?v=8.81" defer></script>
-  <script src="/js/modules/concentrado.js?v=8.81" defer></script>
+  <script src="/js/modules/concentrado.js?v=8.82" defer></script>
   <script src="/js/modules/irregulares.js?v=8.59" defer></script>
   <script src="/js/modules/extras-report.js?v=8.58" defer></script>
   <script src="/js/modules/attendance.js?v=8.09" defer></script>
@@ -569,7 +569,7 @@
   <script src="/js/modules/correction-request.js?v=8.42" defer></script>
   <script src="/js/modules/replication-request.js?v=8.05" defer></script>
   <script src="/js/modules/grades-query.js?v=8.81" defer></script>
-  <script src="/js/modules/boleta-oficial.js?v=8.81" defer></script>
+  <script src="/js/modules/boleta-oficial.js?v=8.82" defer></script>
 
   <!-- ═══════ INDICADOR OFFLINE (aparece cuando se pierde la conexión) ═══════ -->
   <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#dc2626;color:#fff;text-align:center;padding:8px 16px;font-size:13px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.2);">

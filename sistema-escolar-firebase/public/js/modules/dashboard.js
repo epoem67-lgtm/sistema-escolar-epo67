@@ -1,616 +1,1193 @@
 /**
  * DASHBOARD MODULE — Sistema Escolar EPO 67
- * Pantalla principal con estadisticas institucionales, metas,
- * estado de grupos y graficas CSS.
- * Usa Store.*, K.*, Utils.*, UI.* del sistema modular.
+ *
+ * REDISEÑO v7.64 (mayo 2026):
+ *   Vista admin/orientador/auditor renovada — enfocada en lo CRÍTICO:
+ *     1. KPIs ejecutivos (4): Total · Promedio · % Aprobación · Docentes
+ *     2. FOCO CRÍTICO (3 cards grandes clickeables):
+ *          🚨 EN EXTRAORDINARIO · ⚠️ EN RIESGO · 📉 IRREGULARES
+ *     3. Radiografía 3×2: grado × turno
+ *     4. Top 5 grupos y materias con más problemas
+ *     5. Accesos directos a módulos
+ *
+ *   Usa `App.calcStatusExtraordinario` (app.js) — fuente única de verdad para
+ *   distinguir EN_EXTRA / EN_RIESGO / IRREGULAR / APROBADO. Antes el dashboard
+ *   tenía métricas inconsistentes (alumno-céntricas vs cal-céntricas).
+ *
+ *   Cada KPI tiene tooltip explicando su fórmula y es clickeable: abre un modal
+ *   con la lista de alumnos específicos detrás del número.
+ *
+ *   Vista MAESTRO/ORIENTADOR_DOCENTE (renderTeacherDashboard) se conserva
+ *   intacta de la versión anterior — es su pantalla personal.
+ *
+ *   Vista PRESIDENTE_ACADEMIA delegada a PresidenteAcademiaModule.
  */
 
 const DashboardModule = (() => {
-  // Estado: parcial seleccionado (default = el primero abierto, o 'all' = acumulado)
+  // Estado: parcial seleccionado y cache de datos del último render.
   let _selectedPartial = null;
-  let _cachedData = null; // {students, teachers, groups, partials, allGrades, assignments}
+  let _cachedData = null;
+  let _eventsBound = false;
 
-  // ─── RENDER PRINCIPAL ───────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════
+  // BANNER RECORDATORIO: imprimir Concentrado F1 al cerrar P3
+  // Se muestra a todos los roles en su dashboard. Click → Mi F1 (maestros)
+  // o sección concentrado (admin). Es el aviso principal del cierre del
+  // ciclo escolar: sin el F1 firmado entregado en Dirección, no se cierra
+  // formalmente el semestre.
+  // ═══════════════════════════════════════════════════════════════
+  function _renderF1Banner(role) {
+    const isMaestro = role === 'maestro' || role === 'orientador_docente';
+    const targetModule = isMaestro ? 'my-f1' : 'concentrado';
+    const targetLabel = isMaestro ? 'Ver mi Formato F1' : 'Ir a Concentrados';
+    // Vista del maestro usa onclick inline (no event delegation). Vista
+    // institucional usa data-action='goto-f1' que captura _bindEvents().
+    const handler = isMaestro
+      ? `onclick="Router.navigate('${targetModule}')"`
+      : `data-action="goto-f1" data-target="${targetModule}"`;
+    return `
+      <div class="card" ${handler}
+           style="background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);color:#fff;padding:22px 26px;margin-bottom:16px;border:none;cursor:pointer;box-shadow:0 8px 18px rgba(220,38,38,0.35);position:relative;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+          <div style="background:rgba(255,255,255,0.18);border-radius:50%;width:64px;height:64px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <span class="material-icons-round" style="font-size:38px;color:#fff;">print</span>
+          </div>
+          <div style="flex:1;min-width:240px;">
+            <div style="font-size:11px;font-weight:700;letter-spacing:2px;color:#fee2e2;text-transform:uppercase;margin-bottom:4px;">⚠ RECORDATORIO IMPORTANTE</div>
+            <h2 style="font-size:22px;font-weight:900;margin:0 0 6px;color:#fff;line-height:1.2;">
+              Imprime tu CONCENTRADO F1 al terminar de capturar el TERCER parcial
+            </h2>
+            <p style="margin:0;font-size:14px;line-height:1.5;color:#fee2e2;">
+              El F1 firmado y entregado en Dirección es <strong style="color:#fff;">obligatorio</strong> para el cierre oficial del ciclo escolar 2025-2026. No olvides revisar promedios, faltas y firmas antes de imprimir.
+            </p>
+          </div>
+          <div style="flex-shrink:0;">
+            <button class="btn" ${handler}
+                    style="background:#fff;color:#b91c1c;border:none;padding:12px 22px;font-weight:800;font-size:14px;border-radius:8px;cursor:pointer;box-shadow:0 4px 10px rgba(0,0,0,0.2);white-space:nowrap;">
+              <span class="material-icons-round" style="font-size:18px;vertical-align:middle;margin-right:4px;">arrow_forward</span>
+              ${targetLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ENTRY POINT
+  // ═══════════════════════════════════════════════════════════════
+
   async function render() {
     const container = document.getElementById('moduleContainer');
     if (!container) return;
-
     container.innerHTML = UI.loadingState('Cargando dashboard...');
 
     const role = App.currentUser?.role;
-    if (role === 'maestro' || role === 'orientador_docente') {
+
+    // Vista maestro: su panel personal con sus asignaciones (sin cambios)
+    if ((role === 'maestro' || role === 'orientador_docente') && !App.canActAs('auditor')) {
       return renderTeacherDashboard(container);
     }
 
-    // Presidente de academia: dashboard filtrado a las materias de su academia
-    if (role === 'presidente_academia') {
+    // Vista presidente de academia
+    if (role === 'presidente_academia' && !App.canActAs('auditor')) {
       const mod = (typeof PresidenteAcademiaModule !== 'undefined') ? PresidenteAcademiaModule : null;
       if (mod && mod.renderDashboard) return mod.renderDashboard(container);
-      // fallback si no carga el módulo
     }
 
+    // Vista admin/orientador/directivo/subdirector/auditor/secretario_*/consulta
+    return renderInstitucionalDashboard(container, role);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // VISTA INSTITUCIONAL (admin/subdirector/directivo/orientador/auditor)
+  // ═══════════════════════════════════════════════════════════════
+
+  async function renderInstitucionalDashboard(container, role) {
     try {
-      // ═══ FASE 1: Datos LIVIANOS en paralelo ═══
-      // teachers, groups, partials, assignments son colecciones pequeñas y
-      // estables. orientadorGroups solo aplica si el usuario es orientador.
-      // students lo dejamos para la fase 2 — para orientadores se carga solo
-      // los de sus grupos (mucho más eficiente que pedir los 800 alumnos).
       const isOrientadorRole = role === 'orientador';
+      const isAuditor = App.canActAs('auditor');
+      // Auditor ve todo (no se restringe a turnos)
+      const useOrientadorScope = isOrientadorRole && !isAuditor;
+
+      // ═══ FASE 1: Datos livianos en paralelo ═══
       const lightPromises = [
         Store.getTeachers(),
         Store.getGroups(),
         Store.getPartials(),
         Store.getAssignments(),
+        Store.getSubjects(),
       ];
-      if (isOrientadorRole) lightPromises.push(Store.getOrientadorGroups());
+      if (useOrientadorScope) lightPromises.push(Store.getOrientadorGroups());
       const lightResults = await Promise.all(lightPromises);
-      const [teachers, groupsAll, partials, assignments] = lightResults;
-      const oriGroupIds = isOrientadorRole ? (lightResults[4] || []) : null;
+      const [teachers, groupsAll, partials, assignments, subjects] = lightResults;
+      const oriGroupIds = useOrientadorScope ? (lightResults[5] || []) : null;
 
-      // ═══ SCOPE por rol ═══
-      // Orientador puro: ve TODOS los grupos del TURNO donde es orientador
-      // (no solo los grupos específicos asignados). Esto permite que un
-      // orientador del matutino vea estadísticas de los 9 grupos del matutino,
-      // no solo los 3 que tiene asignados directamente.
+      // ═══ SCOPE ═══
       let scopedGroups = groupsAll;
-      let isOrientadorScope = false;
-      let scopedTurnos = [];
-      if (isOrientadorRole) {
+      let scopeLabel = null;
+      if (useOrientadorScope) {
         const oriSet = new Set(oriGroupIds || []);
-        // Detectar el/los turno(s) donde es orientador
         const turnosSet = new Set(
-          groupsAll
-            .filter(g => oriSet.has(g.id))
-            .map(g => g.turno)
-            .filter(Boolean)
+          groupsAll.filter(g => oriSet.has(g.id)).map(g => g.turno).filter(Boolean)
         );
-        scopedTurnos = [...turnosSet];
-        if (scopedTurnos.length > 0) {
+        if (turnosSet.size > 0) {
           scopedGroups = groupsAll.filter(g => turnosSet.has(g.turno));
+          scopeLabel = `Vista de orientación · ${scopedGroups.length} grupos del turno ${[...turnosSet].join(' y ')}.`;
         } else {
           scopedGroups = [];
+          scopeLabel = 'Aún no tienes grupos asignados como orientador.';
         }
-        isOrientadorScope = true;
       }
 
-      // ═══ FASE 2: Students con query scoped ═══
-      // Orientador: alumnos de los grupos del/los turno(s) donde es orientador.
-      // Admin/directivo/etc: TODOS los alumnos.
-      let students;
-      if (isOrientadorScope) {
-        const gIds = scopedGroups.map(g => g.id);
+      // ═══ FASE 2: Students ═══
+      const gIds = scopedGroups.map(g => g.id);
+      let students = [];
+      if (useOrientadorScope) {
         students = gIds.length > 0 ? await Store.getStudentsByGroups(gIds) : [];
       } else {
         students = await Store.getStudents();
       }
-
       const activeStudents = students.filter(s => (s.estatus || '').toUpperCase() === 'ACTIVO');
 
-      // ═══ FASE 3: Grades del parcial seleccionado ═══
-      // Cargar SOLO el parcial activo en el primer render (no los 3 parciales
-      // a la vez). El trend chart re-carga el resto en background después.
-      if (!_selectedPartial) _selectedPartial = getCurrentPartial(partials);
-      const gIds = scopedGroups.map(g => g.id);
-      let partialGrades = [];
-      try {
-        if (gIds.length > 0) {
-          if (_selectedPartial === 'all') {
-            // Vista acumulada: necesitamos los 3 parciales. Hacerlo en paralelo.
-            partialGrades = await Store.getGradesByGroups(gIds);
-          } else {
-            partialGrades = await Store.getGradesByGroupsAndPartial(gIds, _selectedPartial);
-          }
-        }
-      } catch (e) {
-        console.warn('Dashboard: grades loading deferred', e);
+      // ═══ FASE 3: Parcial seleccionado + grades ═══
+      // El dashboard refleja EXACTAMENTE las métricas del módulo Indicadores
+      // (las orientadoras comparan). Indicadores filtra por parcial; el
+      // dashboard también lo hace.
+      //   - 'P1' / 'P2' / 'P3': solo ese parcial → métricas alumno-céntricas
+      //     de ese momento puntual (alumnos con cal <6 en ese parcial).
+      //   - 'ACUM': los 3 parciales → habilita Extra/Riesgo (regla Gaceta EPO 67
+      //     requiere ver los 3 parciales para decidir si el extra es definitivo).
+      if (!_selectedPartial) _selectedPartial = App.getDefaultPartial ? App.getDefaultPartial() : 'P2';
+      const isAcumulado = _selectedPartial === 'ACUM';
+
+      // Cargamos siempre TODOS los grades porque:
+      //   - Si parcial específico: filtramos client-side para evitar otro fetch.
+      //   - Si ACUM: necesitamos los 3 para calcStatusExtraordinario.
+      const allGrades = gIds.length > 0
+        ? await Store.getGradesByGroups(gIds)
+        : [];
+      // grades = los que aplican según selector
+      const grades = isAcumulado ? allGrades : allGrades.filter(g => g.partial === _selectedPartial);
+
+      // ═══ FASE 4: Cálculo de métricas ═══
+      // Dos índices:
+      //   gradeIdxAll = TODOS los parciales (para Extra/Riesgo con Gaceta)
+      //   gradeIdxSel = solo el parcial seleccionado (para Irregulares/Promedio
+      //                 que coinciden con Indicadores; en modo ACUM = todos).
+      const gradeIdxAll = {};
+      for (const g of allGrades) {
+        const sid = g.studentId, suj = g.subjectId, p = g.partial;
+        if (!sid || !suj || !p) continue;
+        if (!gradeIdxAll[sid]) gradeIdxAll[sid] = {};
+        if (!gradeIdxAll[sid][suj]) gradeIdxAll[sid][suj] = {};
+        gradeIdxAll[sid][suj][p] = g;
       }
 
-      // El "trend chart" necesita los 3 parciales para comparar. Cargarlos
-      // de forma diferida — si están en cache son instantáneos; si no,
-      // se cargan en background sin bloquear el primer render.
+      // Construir set de (studentId, subjectId) que aplican según assignments
+      // del scope. Asignaciones globales (admin) o solo del scope (orientador).
+      const scopeGroupIds = new Set(gIds);
+      const scopeAsg = assignments.filter(a => scopeGroupIds.has(a.groupId));
+      const studentsByGroup = new Map();
+      for (const s of activeStudents) {
+        if (!studentsByGroup.has(s.groupId)) studentsByGroup.set(s.groupId, []);
+        studentsByGroup.get(s.groupId).push(s);
+      }
+
+      // Para cada (alumno, materia), calcular estatus de extraordinario
+      // y acumular estadísticas. También recogemos las listas de alumnos
+      // por categoría para el drill-down modal.
+      const alumnosEnExtra = new Set();
+      const alumnosEnRiesgo = new Set();
+      const alumnosIrregulares = new Set();
+      const reprobadasPorAlumno = new Map();
+      const extraPorGrupo = new Map();
+      const extraPorMateria = new Map();
+      const reprobPorMateria = new Map();
+      const promPorAlumno = new Map(); // para promedio general
+      const subjMap = new Map();
+      for (const s of subjects) subjMap.set(s.id, s);
+
+      // Para mostrar listas en el modal, guardar detalles
+      const detalleEnExtra = [];
+      const detalleEnRiesgo = [];
+      const detalleIrregulares = [];
+
+      for (const a of scopeAsg) {
+        const studsOfGroup = studentsByGroup.get(a.groupId) || [];
+        for (const stu of studsOfGroup) {
+          const sGrades = gradeIdxAll[stu.id]?.[a.subjectId] || {};
+          const grades3 = [sGrades.P1 || null, sGrades.P2 || null, sGrades.P3 || null];
+          // Extra/Riesgo SIEMPRE usan los 3 parciales (regla Gaceta EPO 67)
+          const status = App.calcStatusExtraordinario({ grades3 });
+
+          // Conteo de reprobadas:
+          //   - modo ACUM: cuenta cals <6 de los 3 parciales (igual que indicadores acumulado)
+          //   - modo P1/P2/P3: solo cuenta cals <6 del parcial seleccionado
+          //     → coincide EXACTAMENTE con la métrica "Irregular" de Indicadores
+          //     cuando este filtra por ese parcial.
+          const gradesToCheck = isAcumulado ? grades3.filter(Boolean) : (sGrades[_selectedPartial] ? [sGrades[_selectedPartial]] : []);
+          for (const g of gradesToCheck) {
+            const cal = g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null);
+            if (cal != null && !isNaN(cal) && cal < 6) {
+              reprobadasPorAlumno.set(stu.id, (reprobadasPorAlumno.get(stu.id) || 0) + 1);
+              reprobPorMateria.set(a.subjectId, (reprobPorMateria.get(a.subjectId) || 0) + 1);
+            }
+          }
+
+          if (status.isExtra) {
+            if (!alumnosEnExtra.has(stu.id)) {
+              detalleEnExtra.push({
+                studentId: stu.id,
+                studentName: _fmtStudentName(stu),
+                groupName: scopedGroups.find(g => g.id === a.groupId)?.nombre || a.groupId,
+                turno: a.turno || scopedGroups.find(g => g.id === a.groupId)?.turno || '',
+                grado: scopedGroups.find(g => g.id === a.groupId)?.grado || '',
+                materias: [],
+              });
+            }
+            alumnosEnExtra.add(stu.id);
+            const ref = detalleEnExtra.find(d => d.studentId === stu.id);
+            if (ref) ref.materias.push(K.getUACNombre(subjMap.get(a.subjectId)?.nombre || a.subjectName || a.subjectId));
+            extraPorGrupo.set(a.groupId, (extraPorGrupo.get(a.groupId) || new Set()).add(stu.id));
+            extraPorMateria.set(a.subjectId, (extraPorMateria.get(a.subjectId) || 0) + 1);
+          } else if (status.isRiesgo) {
+            if (!alumnosEnRiesgo.has(stu.id) && !alumnosEnExtra.has(stu.id)) {
+              detalleEnRiesgo.push({
+                studentId: stu.id,
+                studentName: _fmtStudentName(stu),
+                groupName: scopedGroups.find(g => g.id === a.groupId)?.nombre || a.groupId,
+                turno: a.turno || scopedGroups.find(g => g.id === a.groupId)?.turno || '',
+                grado: scopedGroups.find(g => g.id === a.groupId)?.grado || '',
+                materias: [],
+              });
+            }
+            if (!alumnosEnExtra.has(stu.id)) alumnosEnRiesgo.add(stu.id);
+            const ref = detalleEnRiesgo.find(d => d.studentId === stu.id);
+            if (ref) ref.materias.push(K.getUACNombre(subjMap.get(a.subjectId)?.nombre || a.subjectName || a.subjectId));
+          }
+
+          // Promedio del alumno
+          // - modo ACUM: promedia las 3 cals (igual que indicadores acumulado)
+          // - modo P1/P2/P3: solo la cal de ese parcial (alineado con indicadores)
+          const gradesForAvg = isAcumulado ? grades3.filter(Boolean) : (sGrades[_selectedPartial] ? [sGrades[_selectedPartial]] : []);
+          const calsAlumno = gradesForAvg
+            .map(g => g.cal != null ? Number(g.cal) : (g.value != null ? Number(g.value) : null))
+            .filter(c => c != null && !isNaN(c));
+          if (calsAlumno.length > 0) {
+            if (!promPorAlumno.has(stu.id)) promPorAlumno.set(stu.id, { sum: 0, cnt: 0 });
+            const p = promPorAlumno.get(stu.id);
+            // Cap a 10 (regla EPO 67: cal max). Indicadores no lo hace pero
+            // técnicamente debería; si en datos hay cal >10 es error de captura.
+            calsAlumno.forEach(c => { p.sum += Math.min(c, 10); p.cnt++; });
+          }
+        }
+      }
+
+      // Irregulares = TIENE ≥1 REPROBADA (incluye los de extra y riesgo)
+      for (const sid of reprobadasPorAlumno.keys()) {
+        alumnosIrregulares.add(sid);
+        if (!alumnosEnExtra.has(sid) && !alumnosEnRiesgo.has(sid)) {
+          const stu = activeStudents.find(s => s.id === sid);
+          if (stu) {
+            detalleIrregulares.push({
+              studentId: sid,
+              studentName: _fmtStudentName(stu),
+              groupName: scopedGroups.find(g => g.id === stu.groupId)?.nombre || stu.groupId || '',
+              turno: scopedGroups.find(g => g.id === stu.groupId)?.turno || '',
+              grado: scopedGroups.find(g => g.id === stu.groupId)?.grado || '',
+              reprobadas: reprobadasPorAlumno.get(sid) || 0,
+            });
+          }
+        }
+      }
+      // También sumar los de extra/riesgo al detalle de irregulares (pero menos visibles ahí)
+      for (const d of detalleEnExtra) detalleIrregulares.push({ ...d, reprobadas: reprobadasPorAlumno.get(d.studentId) || 0, _esExtra: true });
+      for (const d of detalleEnRiesgo) detalleIrregulares.push({ ...d, reprobadas: reprobadasPorAlumno.get(d.studentId) || 0, _esRiesgo: true });
+
+      // Promedio general — 2 decimales para coincidir con Indicadores
+      let sumPromedios = 0, cntPromedios = 0;
+      for (const p of promPorAlumno.values()) {
+        if (p.cnt > 0) { sumPromedios += p.sum / p.cnt; cntPromedios++; }
+      }
+      const promGeneral = cntPromedios > 0 ? (sumPromedios / cntPromedios).toFixed(2) : '—';
+
+      // % aprobación = alumnos SIN reprobadas / alumnos con al menos 1 cal
+      const totalConCal = promPorAlumno.size;
+      const aprobados = totalConCal - alumnosIrregulares.size;
+      const pctAprobacion = totalConCal > 0 ? Math.round((aprobados / totalConCal) * 100) : 0;
+
+      // Radiografía por grado × turno.
+      // CATEGORÍAS (corregido v7.71):
+      //   - Regular = SIN ninguna reprobada (regulares + irregulares = total)
+      //   - Irregular = CON ≥1 reprobada
+      //   - Riesgo y Extra son SUB-CATEGORÍAS de Irregular (no excluyentes).
+      //     Un alumno en Extra también cuenta como Irregular. Un alumno en Riesgo
+      //     también cuenta como Irregular. Eso es lo que las orientadoras esperan
+      //     ver — el número grande de "irregulares" debe incluir a todos los que
+      //     tienen al menos una reprobada.
+      const radiografia = {};
+      for (const grado of [1, 2, 3]) {
+        radiografia[grado] = { MATUTINO: _emptyRadioCell(), VESPERTINO: _emptyRadioCell() };
+      }
+      for (const stu of activeStudents) {
+        const grp = scopedGroups.find(g => g.id === stu.groupId);
+        if (!grp) continue;
+        const g = Number(grp.grado);
+        const t = grp.turno;
+        if (!radiografia[g] || !radiografia[g][t]) continue;
+        const cell = radiografia[g][t];
+        cell.total++;
+        // Regular vs Irregular (mutuamente excluyentes; suman al total)
+        if (alumnosIrregulares.has(stu.id)) cell.irreg++;
+        else cell.regulares++;
+        // Sub-categorías: solo en modo ACUM (Gaceta requiere los 3 parciales)
+        if (isAcumulado) {
+          if (alumnosEnExtra.has(stu.id)) cell.extra++;
+          else if (alumnosEnRiesgo.has(stu.id)) cell.riesgo++;
+        }
+        const p = promPorAlumno.get(stu.id);
+        if (p && p.cnt > 0) { cell.promSum += p.sum / p.cnt; cell.promCnt++; }
+      }
+
+      // Top 5 grupos con más alumnos en extra
+      const topGruposExtra = [...extraPorGrupo.entries()]
+        .map(([gid, set]) => {
+          const g = scopedGroups.find(g => g.id === gid);
+          return { groupId: gid, groupName: g?.nombre || gid, turno: g?.turno || '', count: set.size };
+        })
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      // Top 5 materias con más reprobados
+      const topMateriasReprob = [...reprobPorMateria.entries()]
+        .map(([sid, count]) => ({
+          subjectId: sid,
+          subjectName: K.getUACNombre(subjMap.get(sid)?.nombre || sid),
+          count,
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
       _cachedData = {
-        students, teachers, groups: scopedGroups, partials,
-        // allGrades = lo cargado por el parcial seleccionado. El trend
-        // chart usa una propiedad separada que se llena lazy.
-        allGrades: partialGrades,
-        trendGrades: null, // se llena async después del primer render
-        activeStudents, assignments,
-        isOrientadorScope,
-        scopeLabel: isOrientadorScope
-          ? (scopedTurnos.length > 0
-              ? `Vista de orientación · Estadísticas de los ${scopedGroups.length} grupos del turno ${scopedTurnos.join(' y ')}.`
-              : 'Aún no tienes grupos asignados como orientador.')
-          : null,
+        teachers, groupsAll, partials, assignments, subjects,
+        scopedGroups, activeStudents, scopeLabel, role,
+        alumnosEnExtra, alumnosEnRiesgo, alumnosIrregulares,
+        detalleEnExtra, detalleEnRiesgo, detalleIrregulares,
+        promGeneral, pctAprobacion, totalConCal,
+        radiografia, topGruposExtra, topMateriasReprob,
+        isAcumulado, selectedPartial: _selectedPartial,
       };
 
-      _renderFull();
-
-      // Cargar grades de los demás parciales en background (para el trend
-      // chart). No bloquea el primer render — el chart se renderiza con
-      // los datos que haya y se actualiza cuando llegan los otros parciales.
-      _loadTrendDataInBackground(gIds).catch(e => console.warn('trend deferred', e));
-    } catch (error) {
-      console.error('Error renderizando dashboard:', error);
-      container.innerHTML = UI.errorState('Error al cargar el dashboard');
-      Toast.show('Error al cargar el dashboard', 'error');
+      _renderUI(container);
+    } catch (err) {
+      console.error('Error en dashboard:', err);
+      container.innerHTML = UI.errorState('Error al cargar dashboard: ' + (err.message || ''));
     }
   }
 
-  // Carga los grades de los OTROS parciales (los no-seleccionados) para que
-  // el trend chart muestre la comparativa completa. Se ejecuta en background
-  // sin bloquear el render inicial.
-  async function _loadTrendDataInBackground(groupIds) {
-    if (!groupIds || groupIds.length === 0) return;
+  function _emptyRadioCell() {
+    return { total: 0, regulares: 0, irreg: 0, riesgo: 0, extra: 0, promSum: 0, promCnt: 0 };
+  }
+
+  function _fmtStudentName(stu) {
+    return ((stu.apellido1 || '') + ' ' + (stu.apellido2 || '') + ' ' + (stu.nombres || '')).trim().toUpperCase();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // RENDER UI
+  // ═══════════════════════════════════════════════════════════════
+
+  function _renderUI(container) {
     if (!_cachedData) return;
-    try {
-      // Si el selected era 'all', ya cargamos todo. No re-cargar.
-      if (_selectedPartial === 'all') {
-        _cachedData.trendGrades = _cachedData.allGrades;
-        return;
-      }
-      // Cargar los parciales que NO son el seleccionado
-      const otrosParciales = K.PARCIALES.map(p => p.id).filter(pid => pid !== _selectedPartial);
-      const proms = otrosParciales.map(pid => Store.getGradesByGroupsAndPartial(groupIds, pid));
-      const results = await Promise.all(proms);
-      const otherGrades = results.flat();
-      // Combinar con los del parcial activo
-      _cachedData.trendGrades = [...(_cachedData.allGrades || []), ...otherGrades];
-      // Re-render solo si el chart sigue visible (no cambió de página)
-      const stillOnDashboard = document.getElementById('moduleContainer')?.querySelector('[data-trend-chart]');
-      if (stillOnDashboard) _renderFull();
-    } catch (e) {
-      console.warn('Trend background load failed:', e);
-    }
-  }
+    const d = _cachedData;
 
-  function _renderFull() {
-    const container = document.getElementById('moduleContainer');
-    if (!container || !_cachedData) return;
-
-    const { students, teachers, groups, partials, allGrades, activeStudents, assignments, isOrientadorScope, scopeLabel } = _cachedData;
-
-    // Filtrar grades según el parcial seleccionado (o acumulado)
-    const partialGrades = _selectedPartial === 'all'
-      ? allGrades
-      : allGrades.filter(g => g.partial === _selectedPartial);
-    const activeIds = new Set(activeStudents.map(s => s.id));
-    const relevantGrades = partialGrades.filter(g => activeIds.has(g.studentId));
-
-    // Banner de scope: solo cuando el dashboard está acotado a los grupos del orientador
-    const scopeBanner = scopeLabel
-      ? `<div class="alert alert-info" style="margin-bottom:14px;border-left:4px solid #0891b2;background:#ecfeff;color:#155e75;">
-           <strong>📊 Vista de orientación:</strong> ${Utils.sanitize(scopeLabel)}
-         </div>`
+    const scopeBannerHtml = d.scopeLabel
+      ? `<div style="background:#eff6ff;border-left:4px solid #1e40af;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#1e3a8a;border-radius:6px;">
+          <strong>🎯 Tu alcance:</strong> ${Utils.sanitize(d.scopeLabel)}
+        </div>`
       : '';
 
-    // Si el orientador no tiene grupos asignados, mostrar mensaje y salir
-    if (isOrientadorScope && groups.length === 0) {
-      container.innerHTML = UI.moduleContainer([
-        renderHeader(),
-        scopeBanner,
-        UI.emptyState('group_off', 'No tienes grupos asignados como orientador. Avisa al admin para que te asigne.'),
-      ].join(''));
-      return;
-    }
+    // Banner de correcciones (admin/subdirector/directivo)
+    const correctionsBannerHtml = ['admin', 'subdirector', 'directivo'].includes(d.role)
+      ? `<div id="dash-corrections-banner" style="margin-bottom:14px;"></div>`
+      : '';
 
-    // Para el trend chart usar trendGrades si ya está cargado (los 3 parciales),
-    // si no, usar allGrades (parcial actual) — mostrará comparativa parcial.
-    const trendData = _cachedData.trendGrades || allGrades;
+    // Selector de parcial (afecta TODAS las métricas para coincidir con Indicadores)
+    const partialOptions = [
+      ...K.PARCIALES.map(p => ({ id: p.id, nombre: p.nombre })),
+      { id: 'ACUM', nombre: '📊 Acumulado (3 parciales)' },
+    ];
+    const partialChipsHtml = partialOptions.map(p => {
+      const active = _selectedPartial === p.id;
+      return `<button data-action="set-partial" data-partial="${p.id}"
+        style="${active ? 'background:#1e40af;color:#fff;border:1px solid #1e40af;' : 'background:#fff;color:#475569;border:1px solid #cbd5e0;'}padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit;">
+        ${p.nombre}
+      </button>`;
+    }).join('');
+    const partialSelectorHtml = `<div class="card" style="padding:12px 16px;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:12px;color:#64748b;font-weight:600;">¿Qué parcial?</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">${partialChipsHtml}</div>
+        <div style="margin-left:auto;font-size:11px;color:#94a3b8;font-style:italic;">
+          Los números coinciden con el módulo <strong>Indicadores</strong> para el mismo parcial.
+        </div>
+      </div>
+    </div>`;
 
     container.innerHTML = UI.moduleContainer([
-      renderHeader(),
-      scopeBanner,
-      '<div id="dash-corrections-banner"></div>',
-      renderPartialSelector(partials),
-      renderKPICards(activeStudents, teachers, relevantGrades, assignments),
-      renderTurnoComparison(activeStudents, relevantGrades, groups),
-      `<div data-trend-chart>${renderTrendChart(activeStudents, trendData)}</div>`,
-      renderTopBottomGroups(activeStudents, relevantGrades, groups),
-      renderGroupTable(activeStudents, relevantGrades, groups),
+      // Header
+      `<div class="card" style="background:linear-gradient(135deg,#1e40af 0%,#2563eb 100%);color:#fff;padding:22px 26px;margin-bottom:16px;">
+        <h1 style="font-size:22px;font-weight:700;margin:0 0 2px;color:#fff;">Dashboard Institucional</h1>
+        <p style="margin:0;font-size:13px;opacity:0.92;">EPO 67 · Vista en tiempo real basada en las calificaciones capturadas</p>
+      </div>`,
+
+      // Recordatorio gigante para imprimir Concentrado F1 al cerrar P3
+      _renderF1Banner(App.currentUser?.role),
+
+      scopeBannerHtml,
+      correctionsBannerHtml,
+
+      // Selector de parcial — afecta TODAS las métricas
+      partialSelectorHtml,
+
+      // 4 KPIs ejecutivos (cambian según parcial)
+      _renderKPIsEjecutivos(d),
+
+      // 🎯 FOCO CRÍTICO — solo en modo ACUM (Extra/Riesgo requiere ver los 3 parciales)
+      _renderFocoCritico(d),
+
+      // 🗺️ Radiografía por grado × turno
+      _renderRadiografia(d),
+
+      // Top 5 grupos + Top 5 materias problemáticas
+      _renderTopProblemas(d),
+
+      // Accesos directos
+      _renderAccesosDirectos(),
     ].join(''));
 
-    _bindPartialSelector();
-    _renderCorrectionsBanner();
+    _bindEvents();
+    _loadCorrectionsBanner();
   }
 
-  // Banner correcciones — NO bloquea el dashboard. Carga async despues del render.
-  // Cache en memoria para no re-consultar al navegar varias veces.
-  let _correctionsBannerCache = { data: null, timestamp: 0 };
-  const BANNER_CACHE_MS = 60 * 1000; // 1 min
+  // ═══════════════════════════════════════════════════════════════
+  // KPIs EJECUTIVOS
+  // ═══════════════════════════════════════════════════════════════
 
-  async function _renderCorrectionsBanner() {
-    const root = document.getElementById('dash-corrections-banner');
-    if (!root) return;
-    const role = App.currentUser?.role;
-    if (!['admin', 'subdirector', 'directivo'].includes(role)) return;
-
-    // Pintar primero el cache si tenemos algo (evita pantalla en blanco al navegar)
-    const cacheAge = Date.now() - _correctionsBannerCache.timestamp;
-    if (_correctionsBannerCache.data && cacheAge < BANNER_CACHE_MS) {
-      _paintCorrectionsBanner(root, _correctionsBannerCache.data);
-      return;
-    }
-
-    // Diferir la query para que no bloquee el render principal
-    // (setTimeout 0 = ejecuta despues de que el browser pinte el dashboard)
-    setTimeout(async () => {
-      try {
-        // Solo traer pending/authorized/applied — los viejos rejected/cancelled no nos importan aqui.
-        // Aun mejor: 2 queries paralelas chicas en lugar de una grande de 500.
-        const fs = firebase.firestore();
-        const today = new Date(); today.setHours(0,0,0,0);
-
-        const [snapPending, snapApplied] = await Promise.all([
-          fs.collection('gradeCorrections').where('status','==','pending').limit(60).get(),
-          fs.collection('gradeCorrections')
-            .where('status','==','applied')
-            .where('appliedAt','>=', firebase.firestore.Timestamp.fromDate(today))
-            .limit(60).get()
-            .catch(() => ({ docs: [] }))
-        ]);
-
-        const pendingFolios = new Set();
-        snapPending.docs.forEach(d => pendingFolios.add(d.data().folio));
-        const appliedToday = new Set();
-        snapApplied.docs.forEach(d => appliedToday.add(d.data().folio));
-
-        const data = {
-          pending: pendingFolios.size,
-          appliedToday: appliedToday.size,
-        };
-        _correctionsBannerCache = { data, timestamp: Date.now() };
-        _paintCorrectionsBanner(root, data);
-      } catch (e) {
-        console.warn('Banner correcciones (no critico):', e.message);
-        // Fallar silencioso — no es esencial para el dashboard
-      }
-    }, 0);
-  }
-
-  function _paintCorrectionsBanner(root, data) {
-    if (!root) return;
-    if (!data || (data.pending === 0 && data.appliedToday === 0)) {
-      root.innerHTML = '';
-      return;
-    }
-
-    const items = [];
-    if (data.appliedToday > 0) {
-      items.push(`<div style="display:flex;gap:8px;align-items:center;">
-        <span class="material-icons-round" style="color:#6366f1;">check_circle</span>
-        <span><strong>${data.appliedToday}</strong> cambio(s) aplicado(s) hoy</span>
-      </div>`);
-    }
-    if (data.pending > 0) {
-      items.push(`<div style="display:flex;gap:8px;align-items:center;">
-        <span class="material-icons-round" style="color:#d97706;">schedule</span>
-        <span><strong>${data.pending}</strong> solicitud(es) pendiente(s)</span>
-      </div>`);
-    }
-
-    root.innerHTML = `
-      <div class="card" style="background:linear-gradient(90deg,#f0f9ff 0%,#fafaff 100%);border-left:4px solid #6366f1;margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
-          <div>
-            <strong style="font-size:14px;color:#3730a3;">📋 Correcciones de Calificación</strong>
-            <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:6px;font-size:13px;color:#1e293b;">
-              ${items.join('')}
-            </div>
-          </div>
-          <button class="btn btn-sm btn-primary" onclick="Router.navigate('grade-corrections')">
-            Ver detalle →
-          </button>
-        </div>
-      </div>`;
-  }
-
-  function _bindPartialSelector() {
-    document.querySelectorAll('.dash-partial-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        _selectedPartial = btn.dataset.partial;
-        // Si ya tenemos los datos del trend (los 3 parciales), no hace falta
-        // re-fetchear — _renderFull filtra por _selectedPartial sobre la fuente
-        // completa.
-        if (!_cachedData) return;
-        if (_cachedData.trendGrades) {
-          // Tenemos todos los parciales en cache — solo re-render
-          _cachedData.allGrades = _cachedData.trendGrades;
-          _renderFull();
-          return;
-        }
-        // No tenemos todo — necesitamos cargar el parcial nuevo si no
-        // está en allGrades (que solo trae el parcial inicial)
-        const groupIds = (_cachedData.groups || []).map(g => g.id);
-        try {
-          let nuevosGrades;
-          if (_selectedPartial === 'all') {
-            nuevosGrades = await Store.getGradesByGroups(groupIds);
-          } else {
-            nuevosGrades = await Store.getGradesByGroupsAndPartial(groupIds, _selectedPartial);
-          }
-          _cachedData.allGrades = nuevosGrades;
-          _renderFull();
-        } catch (e) {
-          console.warn('Cambio de parcial falló:', e);
-          _renderFull(); // mostrar con lo que tengamos
-        }
-      });
-    });
-  }
-
-  // ─── SELECTOR DE PARCIAL ────────────────────────────────────
-  function renderPartialSelector(partials) {
-    const opts = [...K.PARCIALES.map(p => ({ id: p.id, label: p.nombre })), { id: 'all', label: 'Acumulado (todos)' }];
-    return `
-      <div class="card" style="margin-bottom:16px;padding:14px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-        <span style="font-weight:600;color:#1a202c;">Vista del parcial:</span>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          ${opts.map(o => {
-            const active = _selectedPartial === o.id;
-            const bg = active ? '#3182ce' : '#fff';
-            const color = active ? '#fff' : '#3182ce';
-            const border = active ? '#3182ce' : '#cbd5e0';
-            return `<button class="dash-partial-btn" data-partial="${o.id}" style="padding:8px 14px;border:1px solid ${border};border-radius:6px;background:${bg};color:${color};font-weight:600;font-size:13px;cursor:pointer;">${o.label}</button>`;
-          }).join('')}
-        </div>
-        <span style="margin-left:auto;font-size:12px;color:#666;">
-          ${_selectedPartial === 'all' ? 'Mostrando promedios de los 3 parciales acumulados' : `Mostrando datos de ${K.PARCIALES.find(p => p.id === _selectedPartial)?.nombre || _selectedPartial}`}
-        </span>
-      </div>
-    `;
-  }
-
-  // ─── KPIs PRINCIPALES ───────────────────────────────────────
-  function renderKPICards(activeStudents, teachers, grades, assignments) {
-    const avg = computeAverage(grades);
-    const interimAsg = (assignments || []).filter(a => a.interim).length;
-
-    // ═══ MÉTRICAS ALUMNO-CÉNTRICAS (correcto) ═══
-    // El ALUMNO es la unidad — no la calificación.
-    // Aprobado = alumno SIN ninguna materia reprobada
-    // Irregular = alumno con AL MENOS 1 materia reprobada
-    // Aprobados + Irregulares = Total (siempre cuadra contra los alumnos del salón)
-    //
-    // Solo contamos alumnos QUE TIENEN AL MENOS UNA CALIFICACIÓN CAPTURADA.
-    // Si no se les ha capturado nada, no podemos clasificarlos todavía.
-    const failsByStudent = {};
-    const studentsWithGrades = new Set();
-    let totalIncidencias = 0; // sumatoria de calificaciones < 6 (magnitud del problema)
-    grades.forEach(g => {
-      const cal = getGradeCal(g);
-      if (cal !== null && cal !== undefined && !isNaN(cal)) {
-        studentsWithGrades.add(g.studentId);
-        if (cal < K.THRESHOLDS.PASS_GRADE) {
-          failsByStudent[g.studentId] = (failsByStudent[g.studentId] || 0) + 1;
-          totalIncidencias++;
-        }
-      }
-    });
-
-    // Solo consideramos activos con al menos una cal capturada
-    const activeIds = new Set(activeStudents.map(s => s.id));
-    const evaluatedIds = [...studentsWithGrades].filter(id => activeIds.has(id));
-    const totalEval = evaluatedIds.length;
-    const studentsIrregulares = evaluatedIds.filter(id => (failsByStudent[id] || 0) > 0).length;
-    const studentsAprobados = totalEval - studentsIrregulares;
-    const aprobPctStudents = totalEval > 0 ? (studentsAprobados * 100 / totalEval) : 0;
-
-    // Niveles de riesgo (clasificación oficial EPO 67):
-    //   ALTO  ≥ 5 materias reprobadas
-    //   MEDIO 3-4 materias reprobadas
-    //   BAJO  1-2 materias reprobadas
-    let alto = 0, medio = 0, bajo = 0;
-    Object.values(failsByStudent).forEach(n => {
-      if (n >= 5) alto++;
-      else if (n >= 3) medio++;
-      else if (n >= 1) bajo++;
-    });
-    const enRiesgoAtencion = alto + medio;
-
-    const kpis = [
-      { label: 'Promedio General', value: grades.length > 0 ? avg.toFixed(2) : '—', icon: 'analytics', color: avg >= 8.3 ? '#16a34a' : avg >= 7 ? '#d97706' : '#dc2626', bg: avg >= 8.3 ? '#f0fdf4' : avg >= 7 ? '#fffbeb' : '#fef2f2' },
-      {
-        label: '% Alumnos Aprobados',
-        value: totalEval > 0 ? aprobPctStudents.toFixed(1) + '%' : '—',
-        icon: 'check_circle',
-        color: aprobPctStudents >= 86 ? '#16a34a' : aprobPctStudents >= 75 ? '#d97706' : '#dc2626',
-        bg: aprobPctStudents >= 86 ? '#f0fdf4' : aprobPctStudents >= 75 ? '#fffbeb' : '#fef2f2',
-        sub: `${studentsAprobados} de ${totalEval} sin reprobadas`
-      },
-      {
-        label: 'Alumnos Irregulares',
-        value: studentsIrregulares,
-        icon: 'priority_high',
-        color: '#d97706',
-        bg: '#fffbeb',
-        sub: `${totalIncidencias} incidencia${totalIncidencias === 1 ? '' : 's'} de reprobación`
-      },
-      {
-        label: 'Alumnos en Riesgo (≥3 mat.)',
-        value: enRiesgoAtencion,
-        icon: 'warning',
-        color: '#dc2626',
-        bg: '#fef2f2',
-        sub: `🔴 ${alto} alto · 🟡 ${medio} medio · 🟢 ${bajo} bajo`
-      },
-      { label: 'Coberturas Activas', value: interimAsg, icon: 'swap_horiz', color: '#d97706', bg: '#fffbeb' },
-      { label: 'Total Alumnos', value: activeStudents.length, icon: 'people', color: '#3182ce', bg: '#eff6ff' },
-      { label: 'Docentes', value: teachers.length, icon: 'school', color: '#3182ce', bg: '#eff6ff' }
-    ];
-
+  function _renderKPIsEjecutivos(d) {
+    const partialLabel = d.isAcumulado
+      ? 'Acumulado (3 parciales)'
+      : (K.PARCIALES.find(p => p.id === d.selectedPartial)?.nombre || d.selectedPartial);
     return `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">
-        ${kpis.map(k => `
-          <div class="card" style="padding:14px 16px;background:${k.bg};border-left:4px solid ${k.color};">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <span class="material-icons-round" style="font-size:22px;color:${k.color};">${k.icon}</span>
-              <span style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">${k.label}</span>
-            </div>
-            <div style="font-size:28px;font-weight:700;color:${k.color};">${k.value}</div>
-            ${k.sub ? `<div style="font-size:11px;color:#555;margin-top:4px;">${k.sub}</div>` : ''}
-          </div>
-        `).join('')}
-      </div>
-    `;
-  }
-
-  // ─── COMPARATIVA POR TURNO ──────────────────────────────────
-  function renderTurnoComparison(activeStudents, grades, groups) {
-    const studentMap = {}; activeStudents.forEach(s => { studentMap[s.id] = s; });
-    const groupMap = {}; groups.forEach(g => { groupMap[g.id] = g; });
-
-    // Normaliza turno desde groupId del estudiante o desde groups
-    const getTurno = (s) => {
-      const g = groupMap[s.groupId];
-      const t = (g?.turno || s.turno || '').toUpperCase().trim();
-      return t.startsWith('MAT') ? 'MATUTINO' : t.startsWith('VES') ? 'VESPERTINO' : 'OTRO';
-    };
-
-    const turnoData = { MATUTINO: { students: [], grades: [] }, VESPERTINO: { students: [], grades: [] } };
-    activeStudents.forEach(s => {
-      const t = getTurno(s);
-      if (turnoData[t]) turnoData[t].students.push(s);
-    });
-    grades.forEach(g => {
-      const s = studentMap[g.studentId];
-      if (!s) return;
-      const t = getTurno(s);
-      if (turnoData[t]) turnoData[t].grades.push(g);
-    });
-
-    const card = (turnoName, data) => {
-      const avg = computeAverage(data.grades);
-      const fail = computeFailRate(data.grades);
-      const apr = data.grades.length > 0 ? 100 - fail : 0;
-      const hCount = data.students.filter(s => s.sexo === 'H').length;
-      const mCount = data.students.filter(s => s.sexo === 'M').length;
-      const color = turnoName === 'MATUTINO' ? '#3182ce' : '#d97706';
-      const bgColor = turnoName === 'MATUTINO' ? '#eff6ff' : '#fffbeb';
-      return `
-        <div class="card" style="background:${bgColor};border-top:4px solid ${color};padding:16px 18px;">
-          <h3 style="margin:0 0 10px;font-size:14px;color:${color};font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
-            <span class="material-icons-round" style="vertical-align:middle;font-size:20px;margin-right:6px;">${turnoName === 'MATUTINO' ? 'wb_sunny' : 'nights_stay'}</span>
-            ${turnoName}
-          </h3>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">
-            <div><strong>Alumnos:</strong> ${data.students.length}</div>
-            <div><strong>H/M:</strong> ${hCount} / ${mCount}</div>
-            <div><strong>Promedio:</strong> <span style="color:${avg >= 8.3 ? '#16a34a' : avg >= 7 ? '#d97706' : '#dc2626'};font-weight:700;">${data.grades.length > 0 ? avg.toFixed(2) : '—'}</span></div>
-            <div><strong>% Aprob:</strong> <span style="color:${apr >= 86 ? '#16a34a' : apr >= 75 ? '#d97706' : '#dc2626'};font-weight:700;">${data.grades.length > 0 ? apr.toFixed(1) + '%' : '—'}</span></div>
-            <div><strong>% Reprob:</strong> <span style="color:${fail <= 14 ? '#16a34a' : fail <= 20 ? '#d97706' : '#dc2626'};font-weight:700;">${data.grades.length > 0 ? fail.toFixed(1) + '%' : '—'}</span></div>
-            <div><strong>Calif. cap.:</strong> ${data.grades.length}</div>
-          </div>
-        </div>`;
-    };
-
-    return `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
-        ${card('MATUTINO', turnoData.MATUTINO)}
-        ${card('VESPERTINO', turnoData.VESPERTINO)}
-      </div>`;
-  }
-
-  // ─── TENDENCIA ENTRE PARCIALES ──────────────────────────────
-  function renderTrendChart(activeStudents, allGrades) {
-    const activeIds = new Set(activeStudents.map(s => s.id));
-    const trends = K.PARCIALES.map(p => {
-      const pGrades = allGrades.filter(g => g.partial === p.id && activeIds.has(g.studentId));
-      const avg = computeAverage(pGrades);
-      const fail = computeFailRate(pGrades);
-      return { id: p.id, label: p.nombre, avg, fail, count: pGrades.length };
-    });
-
-    const maxAvg = 10;
-    const points = trends.map((t, i) => {
-      if (t.count === 0) return null;
-      const x = 50 + i * 200;
-      const y = 180 - (t.avg / maxAvg) * 140;
-      return { ...t, x, y };
-    }).filter(Boolean);
-
-    const path = points.length > 1
-      ? 'M ' + points.map(p => `${p.x} ${p.y}`).join(' L ')
-      : '';
-
-    return `
-      <div class="card" style="margin-bottom:16px;padding:16px 18px;">
-        <h3 style="margin:0 0 12px;font-size:15px;font-weight:700;color:#1a202c;">
-          <span class="material-icons-round" style="vertical-align:middle;font-size:20px;margin-right:6px;">trending_up</span>
-          Tendencia de promedio entre parciales
-        </h3>
-        <div style="display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap;">
-          <svg width="500" height="200" style="background:#f8fafc;border-radius:6px;flex-shrink:0;">
-            <line x1="40" y1="40" x2="450" y2="40" stroke="#e5e7eb" stroke-dasharray="4"/>
-            <line x1="40" y1="180" x2="450" y2="180" stroke="#94a3b8"/>
-            <text x="36" y="44" text-anchor="end" font-size="10" fill="#666">10</text>
-            <text x="36" y="184" text-anchor="end" font-size="10" fill="#666">0</text>
-            ${path ? `<path d="${path}" stroke="#3182ce" stroke-width="3" fill="none"/>` : ''}
-            ${points.map(p => `
-              <circle cx="${p.x}" cy="${p.y}" r="6" fill="#3182ce" stroke="#fff" stroke-width="2"/>
-              <text x="${p.x}" y="${p.y - 12}" text-anchor="middle" font-size="13" font-weight="700" fill="#1a202c">${p.avg.toFixed(2)}</text>
-              <text x="${p.x}" y="195" text-anchor="middle" font-size="11" fill="#666">${p.label}</text>
-            `).join('')}
-          </svg>
-          <div style="flex:1;min-width:200px;">
-            <table style="width:100%;font-size:13px;">
-              <thead><tr><th style="text-align:left;padding:4px 8px;border-bottom:1px solid #e5e7eb;">Parcial</th><th style="text-align:right;padding:4px 8px;border-bottom:1px solid #e5e7eb;">Promedio</th><th style="text-align:right;padding:4px 8px;border-bottom:1px solid #e5e7eb;">% Reprob</th><th style="text-align:right;padding:4px 8px;border-bottom:1px solid #e5e7eb;">Cal.</th></tr></thead>
-              <tbody>
-                ${trends.map(t => `<tr>
-                  <td style="padding:4px 8px;">${t.label}</td>
-                  <td style="text-align:right;padding:4px 8px;font-weight:600;color:${t.avg >= 8.3 ? '#16a34a' : t.avg >= 7 ? '#d97706' : '#dc2626'};">${t.count > 0 ? t.avg.toFixed(2) : '—'}</td>
-                  <td style="text-align:right;padding:4px 8px;font-weight:600;color:${t.fail <= 14 ? '#16a34a' : '#dc2626'};">${t.count > 0 ? t.fail.toFixed(1) + '%' : '—'}</td>
-                  <td style="text-align:right;padding:4px 8px;color:#666;">${t.count}</td>
-                </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
+        <div class="card" style="padding:16px;border-left:5px solid #1e40af;">
+          <div style="font-size:10px;font-weight:700;color:#1e3a8a;letter-spacing:1.5px;">TOTAL ALUMNOS</div>
+          <div style="font-size:36px;font-weight:900;color:#1e40af;line-height:1;margin-top:4px;">${d.activeStudents.length}</div>
+          <div style="font-size:10px;color:#6b7280;margin-top:2px;">activos en sistema</div>
+        </div>
+        <div class="card" style="padding:16px;border-left:5px solid #0891b2;" title="Promedio de promedios individuales (cada alumno cuenta una vez). ${d.isAcumulado ? 'Usa los 3 parciales.' : 'Solo cuenta cals de ' + partialLabel + '.'}">
+          <div style="font-size:10px;font-weight:700;color:#155e75;letter-spacing:1.5px;">PROMEDIO · ${Utils.sanitize(partialLabel).toUpperCase()}</div>
+          <div style="font-size:36px;font-weight:900;color:#0891b2;line-height:1;margin-top:4px;">${d.promGeneral}</div>
+          <div style="font-size:10px;color:#6b7280;margin-top:2px;">de ${d.totalConCal} alumnos con cal</div>
+        </div>
+        <div class="card" style="padding:16px;border-left:5px solid #10b981;" title="Alumnos sin NINGUNA cal <6 en ${partialLabel}. Definición idéntica a Indicadores.">
+          <div style="font-size:10px;font-weight:700;color:#065f46;letter-spacing:1.5px;">% APROBACIÓN</div>
+          <div style="font-size:36px;font-weight:900;color:#10b981;line-height:1;margin-top:4px;">${d.pctAprobacion}%</div>
+          <div style="font-size:10px;color:#6b7280;margin-top:2px;">${d.totalConCal - d.alumnosIrregulares.size} de ${d.totalConCal} regulares</div>
+        </div>
+        <div class="card" style="padding:16px;border-left:5px solid #6366f1;">
+          <div style="font-size:10px;font-weight:700;color:#3730a3;letter-spacing:1.5px;">DOCENTES</div>
+          <div style="font-size:36px;font-weight:900;color:#6366f1;line-height:1;margin-top:4px;">${d.teachers.length}</div>
+          <div style="font-size:10px;color:#6b7280;margin-top:2px;">en plantilla</div>
         </div>
       </div>`;
   }
 
-  // ─── TOP / BOTTOM GRUPOS ────────────────────────────────────
-  function renderTopBottomGroups(activeStudents, grades, groups) {
-    const studentMap = {}; activeStudents.forEach(s => { studentMap[s.id] = s; });
-    const groupAvgs = groups.map(g => {
-      const groupGrades = grades.filter(gd => {
-        const s = studentMap[gd.studentId];
-        return s && s.groupId === g.id;
-      });
-      return { ...g, avg: computeAverage(groupGrades), count: groupGrades.length };
-    }).filter(g => g.count > 0).sort((a, b) => b.avg - a.avg);
+  // ═══════════════════════════════════════════════════════════════
+  // 🎯 FOCO CRÍTICO — 3 cards grandes (clickeables)
+  // ═══════════════════════════════════════════════════════════════
 
-    if (groupAvgs.length === 0) {
-      return `<div class="card" style="margin-bottom:16px;padding:16px;"><p style="color:#666;text-align:center;">No hay calificaciones capturadas en este parcial todavía.</p></div>`;
-    }
+  function _renderFocoCritico(d) {
+    const partialLabel = d.isAcumulado
+      ? 'Acumulado'
+      : (K.PARCIALES.find(p => p.id === d.selectedPartial)?.nombre || d.selectedPartial);
+    const tooltipExtra = 'Alumnos que YA NO PUEDEN aprobar en parciales regulares: ≥2 parciales reprobados, o 3 cals con prom <6, o >20% inasistencia. Reglas Gaceta EPO 67. Requiere los 3 parciales.';
+    const tooltipRiesgo = 'Alumnos RECUPERABLES: 1 parcial reprobado pero pueden salvarse capturando el siguiente parcial. Si no aprueban, irán a extra.';
+    const tooltipIrreg = `Alumnos con AL MENOS 1 cal <6 en ${partialLabel}. Misma definición que Indicadores para el mismo parcial.`;
 
-    const top5 = groupAvgs.slice(0, 5);
-    const bottom5 = groupAvgs.slice(-5).reverse();
+    // Card "Irregulares" SIEMPRE visible (coincide con Indicadores por parcial)
+    const irregularCard = `<button data-action="show-list" data-tipo="irregulares" title="${Utils.sanitize(tooltipIrreg)}"
+      style="text-align:left;background:linear-gradient(135deg,#a855f7 0%,#7e22ce 100%);color:#fff;border:none;border-radius:12px;padding:18px 22px;cursor:pointer;box-shadow:0 4px 12px rgba(168,85,247,0.25);transition:transform .15s;font-family:inherit;"
+      onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+      <div style="font-size:36px;line-height:1;">📉</div>
+      <div style="font-size:48px;font-weight:900;line-height:1;margin:8px 0 4px;">${d.alumnosIrregulares.size}</div>
+      <div style="font-size:14px;font-weight:700;letter-spacing:.3px;">ALUMNOS IRREGULARES</div>
+      <div style="font-size:11px;opacity:.9;margin-top:4px;">Con ≥1 reprobada en ${Utils.sanitize(partialLabel)}</div>
+    </button>`;
 
-    const renderList = (list, label, color, icon) => `
-      <div class="card" style="padding:14px 16px;">
-        <h3 style="margin:0 0 10px;font-size:14px;color:${color};font-weight:700;">
-          <span class="material-icons-round" style="vertical-align:middle;font-size:18px;">${icon}</span>
-          ${label}
-        </h3>
-        <ol style="margin:0;padding-left:18px;font-size:13px;">
-          ${list.map(g => `<li style="margin-bottom:4px;"><strong>${Utils.sanitize(g.nombre)}</strong> <span style="color:#666;font-size:12px;">(${g.turno || ''})</span> — <span style="color:${g.avg >= 8.3 ? '#16a34a' : g.avg >= 7 ? '#d97706' : '#dc2626'};font-weight:600;">${g.avg.toFixed(2)}</span></li>`).join('')}
-        </ol>
-      </div>`;
+    // Cards Extra y Riesgo SOLO en modo ACUM (requieren los 3 parciales)
+    const extraYRiesgoCards = d.isAcumulado ? `
+      <button data-action="show-list" data-tipo="extra" title="${Utils.sanitize(tooltipExtra)}"
+        style="text-align:left;background:linear-gradient(135deg,#dc2626 0%,#991b1b 100%);color:#fff;border:none;border-radius:12px;padding:18px 22px;cursor:pointer;box-shadow:0 4px 12px rgba(220,38,38,0.25);transition:transform .15s;font-family:inherit;"
+        onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+        <div style="font-size:36px;line-height:1;">🚨</div>
+        <div style="font-size:48px;font-weight:900;line-height:1;margin:8px 0 4px;">${d.alumnosEnExtra.size}</div>
+        <div style="font-size:14px;font-weight:700;letter-spacing:.3px;">ALUMNOS EN EXTRAORDINARIO</div>
+        <div style="font-size:11px;opacity:.9;margin-top:4px;">Confirmado — irán a examen extraordinario</div>
+      </button>
+      <button data-action="show-list" data-tipo="riesgo" title="${Utils.sanitize(tooltipRiesgo)}"
+        style="text-align:left;background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);color:#fff;border:none;border-radius:12px;padding:18px 22px;cursor:pointer;box-shadow:0 4px 12px rgba(245,158,11,0.25);transition:transform .15s;font-family:inherit;"
+        onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+        <div style="font-size:36px;line-height:1;">⚠️</div>
+        <div style="font-size:48px;font-weight:900;line-height:1;margin:8px 0 4px;">${d.alumnosEnRiesgo.size}</div>
+        <div style="font-size:14px;font-weight:700;letter-spacing:.3px;">EN RIESGO DE EXTRA</div>
+        <div style="font-size:11px;opacity:.9;margin-top:4px;">Recuperables — pueden salvarse aún</div>
+      </button>` : '';
+
+    // Si NO es ACUM, mostrar nota explicativa que Extra/Riesgo solo aplican acumulado
+    const notaParcial = !d.isAcumulado ? `
+      <div style="background:#eff6ff;border-left:3px solid #1e40af;padding:8px 12px;margin-top:12px;border-radius:6px;font-size:11px;color:#1e3a8a;">
+        💡 <strong>Para ver alumnos en Extraordinario / Riesgo:</strong> cambia el selector arriba a "📊 Acumulado". La regla de extraordinario (Gaceta EPO 67) requiere ver los 3 parciales completos.
+      </div>` : '';
 
     return `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
-        ${renderList(top5, 'Top 5 grupos (mejor promedio)', '#16a34a', 'emoji_events')}
-        ${renderList(bottom5, 'Atención: 5 grupos con menor promedio', '#dc2626', 'priority_high')}
+      <div style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border-radius:14px;padding:18px 22px;margin-bottom:16px;border:2px solid #d97706;">
+        <h2 style="font-size:16px;font-weight:800;color:#78350f;margin:0 0 4px;letter-spacing:.3px;">
+          🎯 FOCO CRÍTICO ${d.isAcumulado ? '· Vista acumulada' : '· ' + Utils.sanitize(partialLabel)}
+        </h2>
+        <p style="font-size:11px;color:#92400e;margin:0 0 14px;">Click en cualquier tarjeta para ver la lista de alumnos específicos.</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;">
+          ${extraYRiesgoCards}
+          ${irregularCard}
+        </div>
+        ${notaParcial}
       </div>`;
   }
 
-  // ─── DASHBOARD SIMPLIFICADO PARA MAESTROS ─────────────────
+  // ═══════════════════════════════════════════════════════════════
+  // 🗺️ RADIOGRAFÍA POR GRADO × TURNO
+  // ═══════════════════════════════════════════════════════════════
+
+  function _renderRadiografia(d) {
+    // Diseño nuevo: 6 cards grandes (3 grados × 2 turnos) en grid responsive.
+    // Tipografía grande, números prominentes, barra de progreso visible.
+    const radioCard = (grado, turno) => {
+      const c = d.radiografia[grado]?.[turno] || _emptyRadioCell();
+      const isMatutino = turno === 'MATUTINO';
+      const turnoIcon = isMatutino ? '☀️' : '🌙';
+      const turnoBg = isMatutino
+        ? 'linear-gradient(135deg,#fef3c7 0%,#fde68a 100%)'
+        : 'linear-gradient(135deg,#ede9fe 0%,#ddd6fe 100%)';
+      const turnoAccent = isMatutino ? '#d97706' : '#7c3aed';
+
+      if (c.total === 0) {
+        return `<div style="background:#f9fafb;border:2px dashed #e5e7eb;border-radius:14px;padding:24px;text-align:center;color:#9ca3af;display:flex;flex-direction:column;justify-content:center;min-height:200px;">
+          <div style="font-size:28px;line-height:1;">${turnoIcon}</div>
+          <div style="font-size:13px;font-weight:700;margin-top:6px;color:#64748b;">${grado}° ${isMatutino ? 'Matutino' : 'Vespertino'}</div>
+          <div style="font-size:11px;margin-top:6px;">sin datos</div>
+        </div>`;
+      }
+
+      const prom = c.promCnt > 0 ? (c.promSum / c.promCnt).toFixed(2) : '—';
+      const promNum = c.promCnt > 0 ? c.promSum / c.promCnt : null;
+      const promColor = promNum === null ? '#475569'
+        : promNum < 7 ? '#dc2626'
+        : promNum >= 8.3 ? '#10b981'
+        : '#0891b2';
+      const pctIrreg = c.total > 0 ? Math.round((c.irreg + c.riesgo + c.extra) / c.total * 100) : 0;
+      const pctReg = 100 - pctIrreg;
+      const regColor = pctReg >= 80 ? '#10b981' : pctReg >= 60 ? '#f59e0b' : '#dc2626';
+
+      return `<div style="background:${turnoBg};border-left:6px solid ${turnoAccent};border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:12px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+        <!-- Header: grado + turno -->
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:30px;font-weight:900;color:#1e293b;line-height:1;">${grado}°</span>
+            <div style="display:flex;flex-direction:column;line-height:1.1;">
+              <span style="font-size:11px;color:${turnoAccent};font-weight:700;letter-spacing:.5px;">${turnoIcon} ${isMatutino ? 'MATUTINO' : 'VESPERTINO'}</span>
+              <span style="font-size:10px;color:#6b7280;">${grado === 1 ? '2°' : grado === 2 ? '4°' : '6°'} semestre</span>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:32px;font-weight:900;color:#1e293b;line-height:1;">${c.total}</div>
+            <div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">alumnos</div>
+          </div>
+        </div>
+
+        <!-- Barra de regularidad -->
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
+            <span style="font-size:11px;color:#475569;font-weight:600;">Regularidad</span>
+            <span style="font-size:18px;font-weight:800;color:${regColor};">${pctReg}%</span>
+          </div>
+          <div style="background:rgba(255,255,255,0.7);height:8px;border-radius:4px;overflow:hidden;">
+            <div style="background:${regColor};height:100%;width:${pctReg}%;transition:width .3s;"></div>
+          </div>
+        </div>
+
+        <!-- Stats:
+             Reg/Irreg suman al total (mutuamente excluyentes).
+             Riesgo y Extra son SUBCONJUNTOS de Irreg, separados visualmente con borde dashed. -->
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;background:rgba(255,255,255,0.7);border-radius:8px;padding:10px;">
+          <div style="text-align:center;">
+            <div style="font-size:28px;font-weight:800;color:#10b981;line-height:1;">${c.regulares}</div>
+            <div style="font-size:10px;color:#065f46;font-weight:700;text-transform:uppercase;margin-top:3px;">Regulares</div>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:28px;font-weight:800;color:#a855f7;line-height:1;">${c.irreg}</div>
+            <div style="font-size:10px;color:#6b21a8;font-weight:700;text-transform:uppercase;margin-top:3px;">Irregulares</div>
+          </div>
+        </div>
+        ${d.isAcumulado ? `
+        <div style="background:rgba(255,255,255,0.55);border-radius:8px;padding:8px 10px;border:1px dashed ${turnoAccent};">
+          <div style="font-size:9px;color:#475569;font-weight:700;text-transform:uppercase;margin-bottom:6px;letter-spacing:.4px;">de los irregulares:</div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
+            <div style="text-align:center;">
+              <div style="font-size:22px;font-weight:800;color:#f59e0b;line-height:1;">${c.riesgo}</div>
+              <div style="font-size:9px;color:#92400e;font-weight:700;text-transform:uppercase;margin-top:2px;">⚠️ Riesgo</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="font-size:22px;font-weight:800;color:#dc2626;line-height:1;">${c.extra}</div>
+              <div style="font-size:9px;color:#991b1b;font-weight:700;text-transform:uppercase;margin-top:2px;">🚨 Extra</div>
+            </div>
+          </div>
+        </div>
+        ` : ''}
+
+        <!-- Promedio del grupo -->
+        <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid rgba(0,0,0,0.08);">
+          <span style="font-size:11px;color:#475569;font-weight:600;">📊 Promedio del grado</span>
+          <span style="font-size:24px;font-weight:900;color:${promColor};line-height:1;">${prom}</span>
+        </div>
+      </div>`;
+    };
+
+    const partialLabel = d.isAcumulado
+      ? 'Acumulado (3 parciales)'
+      : (K.PARCIALES.find(p => p.id === d.selectedPartial)?.nombre || d.selectedPartial);
+    const leyenda = d.isAcumulado
+      ? `<strong style="color:#10b981;">Regulares</strong> sin reprobadas · <strong style="color:#a855f7;">Irregulares</strong> con ≥1 reprobada (incluye los de Riesgo y Extra) · <strong style="color:#f59e0b;">Riesgo</strong> y <strong style="color:#dc2626;">Extra</strong> son sub-categorías de los irregulares según regla Gaceta EPO 67.`
+      : `<strong style="color:#10b981;">Regulares</strong> sin reprobadas en ${Utils.sanitize(partialLabel)} · <strong style="color:#a855f7;">Irregulares</strong> con ≥1 reprobada · <em>los números coinciden con Indicadores para el mismo parcial</em>`;
+
+    return `
+      <div class="card" style="padding:18px 22px;margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;flex-wrap:wrap;gap:6px;">
+          <h2 style="font-size:18px;font-weight:800;color:#1e293b;margin:0;">
+            🗺️ Radiografía por Grado y Turno · ${Utils.sanitize(partialLabel)}
+          </h2>
+          <span style="font-size:11px;color:#64748b;font-style:italic;">Mirada general a la situación académica de cada grado</span>
+        </div>
+        <p style="font-size:12px;color:#64748b;margin:0 0 16px;line-height:1.5;">${leyenda}</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;">
+          ${radioCard(1, 'MATUTINO')}
+          ${radioCard(1, 'VESPERTINO')}
+          ${radioCard(2, 'MATUTINO')}
+          ${radioCard(2, 'VESPERTINO')}
+          ${radioCard(3, 'MATUTINO')}
+          ${radioCard(3, 'VESPERTINO')}
+        </div>
+      </div>`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // TOP 5 GRUPOS Y MATERIAS PROBLEMÁTICAS
+  // ═══════════════════════════════════════════════════════════════
+
+  function _renderTopProblemas(d) {
+    const gruposHtml = d.topGruposExtra.length === 0
+      ? `<div style="font-size:11px;color:#9ca3af;padding:14px;text-align:center;">Sin alumnos en extra</div>`
+      : d.topGruposExtra.map((g, i) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #f1f5f9;">
+            <div>
+              <span style="color:#94a3b8;font-size:11px;font-weight:600;margin-right:6px;">${i + 1}.</span>
+              <strong style="font-size:13px;">${Utils.sanitize(g.groupName)}</strong>
+              <span style="font-size:10px;color:#64748b;margin-left:4px;">${Utils.sanitize(g.turno)}</span>
+            </div>
+            <span style="background:#dc2626;color:#fff;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:700;">${g.count}</span>
+          </div>
+        `).join('');
+
+    const materiasHtml = d.topMateriasReprob.length === 0
+      ? `<div style="font-size:11px;color:#9ca3af;padding:14px;text-align:center;">Sin reprobados</div>`
+      : d.topMateriasReprob.map((m, i) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #f1f5f9;">
+            <div style="flex:1;min-width:0;">
+              <span style="color:#94a3b8;font-size:11px;font-weight:600;margin-right:6px;">${i + 1}.</span>
+              <strong style="font-size:13px;">${Utils.sanitize(m.subjectName)}</strong>
+            </div>
+            <span style="background:#dc2626;color:#fff;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:700;">${m.count}</span>
+          </div>
+        `).join('');
+
+    return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:16px;">
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div style="background:#f8fafc;padding:12px 16px;border-bottom:1px solid #e5e7eb;">
+            <h3 style="font-size:13px;font-weight:800;color:#1e293b;margin:0;">🏫 Top 5 grupos con más alumnos en EXTRA</h3>
+          </div>
+          ${gruposHtml}
+        </div>
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div style="background:#f8fafc;padding:12px 16px;border-bottom:1px solid #e5e7eb;">
+            <h3 style="font-size:13px;font-weight:800;color:#1e293b;margin:0;">📚 Top 5 materias con más reprobadas</h3>
+          </div>
+          ${materiasHtml}
+        </div>
+      </div>`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ACCESOS DIRECTOS
+  // ═══════════════════════════════════════════════════════════════
+
+  function _renderAccesosDirectos() {
+    const accesos = [
+      { mod: 'extraordinarios', icon: 'gavel', label: 'Extraordinarios', color: '#dc2626' },
+      { mod: 'at-risk', icon: 'warning', label: 'Alumnos en Riesgo', color: '#f59e0b' },
+      { mod: 'indicadores', icon: 'insights', label: 'Indicadores', color: '#6366f1' },
+      { mod: 'concentrado', icon: 'grid_on', label: 'Concentrado', color: '#0891b2' },
+      { mod: 'boletas', icon: 'description', label: 'Preboletas', color: '#16a34a' },
+      { mod: 'honor-roll', icon: 'emoji_events', label: 'Cuadros de Honor', color: '#a855f7' },
+    ];
+    const btnsHtml = accesos.map(a => `
+      <button data-action="nav" data-module="${a.mod}"
+        style="background:#fff;border:2px solid #e5e7eb;border-radius:10px;padding:14px 12px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;transition:all .15s;font-family:inherit;"
+        onmouseover="this.style.borderColor='${a.color}';this.style.transform='translateY(-1px)';"
+        onmouseout="this.style.borderColor='#e5e7eb';this.style.transform='translateY(0)';">
+        <span class="material-icons-round" style="font-size:28px;color:${a.color};">${a.icon}</span>
+        <span style="font-size:11px;font-weight:600;color:#475569;text-align:center;">${a.label}</span>
+      </button>
+    `).join('');
+
+    return `
+      <div class="card" style="padding:18px 22px;">
+        <h2 style="font-size:14px;font-weight:800;color:#1e293b;margin:0 0 12px;">🔗 Accesos directos</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;">
+          ${btnsHtml}
+        </div>
+      </div>`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MODAL DRILL-DOWN — lista de alumnos por categoría
+  // ═══════════════════════════════════════════════════════════════
+
+  // Estado de filtros del modal de drill-down
+  let _modalFilters = { tipo: '', turno: '', grado: '', grupo: '', materia: '', search: '' };
+
+  function _showAlumnosModal(tipo) {
+    if (!_cachedData) return;
+    let lista, titulo, descripcion, color;
+    if (tipo === 'extra') {
+      lista = _cachedData.detalleEnExtra;
+      titulo = `🚨 Alumnos en Extraordinario (${lista.length})`;
+      descripcion = 'Confirmados — irán a examen extraordinario porque tienen ≥2 parciales reprobados, o prom <6 con los 3 parciales capturados.';
+      color = '#dc2626';
+    } else if (tipo === 'riesgo') {
+      lista = _cachedData.detalleEnRiesgo;
+      titulo = `⚠️ Alumnos en Riesgo (${lista.length})`;
+      descripcion = 'Recuperables — tienen 1 parcial reprobado pero todavía pueden salvarse capturando el siguiente parcial.';
+      color = '#f59e0b';
+    } else if (tipo === 'irregulares') {
+      lista = _cachedData.detalleIrregulares;
+      titulo = `📉 Alumnos Irregulares (${lista.length})`;
+      descripcion = 'Con AL MENOS 1 materia reprobada. Incluye los de Extra (rojo), Riesgo (naranja) y otros con solo una baja.';
+      color = '#a855f7';
+    } else { return; }
+
+    // Reset filtros del modal al tipo actual
+    _modalFilters = { tipo, turno: '', grado: '', grupo: '', materia: '', search: '' };
+
+    // Extraer valores únicos para los selectores
+    const turnos = [...new Set(lista.map(a => a.turno).filter(Boolean))].sort();
+    const grados = [...new Set(lista.map(a => String(a.grado || '')).filter(Boolean))].sort();
+    const grupos = [...new Set(lista.map(a => a.groupName).filter(Boolean))].sort();
+    const materiasSet = new Set();
+    for (const a of lista) {
+      (a.materias || []).forEach(m => materiasSet.add(m));
+    }
+    const materias = [...materiasSet].sort();
+
+    const turnoOpts = turnos.map(t => `<option value="${Utils.sanitize(t)}">${Utils.sanitize(t)}</option>`).join('');
+    const gradoOpts = grados.map(g => `<option value="${Utils.sanitize(g)}">${Utils.sanitize(g)}°</option>`).join('');
+    const grupoOpts = grupos.map(g => `<option value="${Utils.sanitize(g)}">${Utils.sanitize(g)}</option>`).join('');
+    const materiaOpts = materias.map(m => `<option value="${Utils.sanitize(m)}">${Utils.sanitize(m)}</option>`).join('');
+
+    const filtrosHtml = `
+      <div id="modal-filters" style="background:#f8fafc;padding:10px 12px;border-radius:6px;margin-bottom:10px;border:1px solid #e2e8f0;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;align-items:end;">
+          <div>
+            <label style="display:block;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:3px;">🔍 Buscar</label>
+            <input id="modal-search" type="text" placeholder="Nombre del alumno…"
+              style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e0;border-radius:4px;outline:none;">
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Turno</label>
+            <select id="modal-turno" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e0;border-radius:4px;background:#fff;">
+              <option value="">Todos</option>${turnoOpts}
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Grado</label>
+            <select id="modal-grado" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e0;border-radius:4px;background:#fff;">
+              <option value="">Todos</option>${gradoOpts}
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Grupo</label>
+            <select id="modal-grupo" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e0;border-radius:4px;background:#fff;">
+              <option value="">Todos</option>${grupoOpts}
+            </select>
+          </div>
+          ${materias.length > 0 ? `
+          <div>
+            <label style="display:block;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Materia</label>
+            <select id="modal-materia" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e0;border-radius:4px;background:#fff;">
+              <option value="">Todas</option>${materiaOpts}
+            </select>
+          </div>` : ''}
+          <div>
+            <button id="modal-clear-filters" style="padding:6px 10px;background:#fff;border:1px solid #cbd5e0;border-radius:4px;font-size:11px;color:#475569;cursor:pointer;font-weight:600;">✕ Limpiar</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const exportBtn = `<button data-action="export-list-csv" data-tipo="${tipo}"
+      style="padding:6px 12px;background:#0891b2;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
+      📥 Exportar CSV
+    </button>`;
+
+    Modal.open(titulo, `
+      <div style="font-size:12px;color:#64748b;background:#f8fafc;padding:8px 12px;border-radius:6px;border-left:3px solid ${color};margin-bottom:10px;">
+        ${descripcion}
+      </div>
+      ${filtrosHtml}
+      <div id="modal-stats" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div id="modal-count" style="font-size:13px;color:#64748b;">Mostrando ${lista.length} alumno${lista.length === 1 ? '' : 's'}</div>
+        ${exportBtn}
+      </div>
+      <div style="max-height:55vh;overflow:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead style="background:#1e40af;color:#fff;position:sticky;top:0;z-index:1;">
+            <tr>
+              <th style="padding:9px 6px;font-size:10px;width:30px;">#</th>
+              <th style="padding:9px 12px;text-align:left;font-size:10px;">ALUMNO</th>
+              <th style="padding:9px 6px;font-size:10px;">GRUPO</th>
+              <th style="padding:9px 6px;font-size:10px;">TURNO</th>
+              <th style="padding:9px 10px;text-align:left;font-size:10px;">${tipo === 'irregulares' ? 'DETALLE' : 'MATERIAS'}</th>
+            </tr>
+          </thead>
+          <tbody id="modal-tbody">${_renderModalRows(lista, tipo)}</tbody>
+        </table>
+      </div>
+    `, `<button class="btn btn-outline" data-action="close-modal">Cerrar</button>`);
+
+    // Bind filtros del modal
+    _bindModalFilters(tipo, lista);
+  }
+
+  function _renderModalRows(lista, tipo) {
+    // Filtrar según _modalFilters
+    let filtered = lista.slice();
+    if (_modalFilters.turno) filtered = filtered.filter(a => a.turno === _modalFilters.turno);
+    if (_modalFilters.grado) filtered = filtered.filter(a => String(a.grado || '') === _modalFilters.grado);
+    if (_modalFilters.grupo) filtered = filtered.filter(a => a.groupName === _modalFilters.grupo);
+    if (_modalFilters.materia) filtered = filtered.filter(a => (a.materias || []).includes(_modalFilters.materia));
+    if (_modalFilters.search) {
+      const q = _modalFilters.search.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      filtered = filtered.filter(a => {
+        const n = (a.studentName || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        return n.includes(q);
+      });
+    }
+
+    // Ordenar por #materias/reprobadas desc, luego nombre
+    filtered.sort((a, b) => {
+      const ka = (a.materias?.length || a.reprobadas || 0);
+      const kb = (b.materias?.length || b.reprobadas || 0);
+      if (ka !== kb) return kb - ka;
+      return (a.studentName || '').localeCompare(b.studentName || '');
+    });
+
+    if (filtered.length === 0) {
+      return `<tr><td colspan="5" style="padding:24px;text-align:center;color:#9ca3af;">Sin alumnos con estos filtros 🔍</td></tr>`;
+    }
+
+    return filtered.map((a, i) => {
+      const materiasDisplay = a.materias && a.materias.length > 0
+        ? a.materias.map(m => `<span style="background:#fef2f2;color:#991b1b;padding:1px 6px;border-radius:4px;font-size:10px;margin-right:2px;display:inline-block;margin-bottom:2px;">${Utils.sanitize(m)}</span>`).join('')
+        : (a.reprobadas ? `<span style="font-size:11px;color:#64748b;">${a.reprobadas} reprobada${a.reprobadas === 1 ? '' : 's'}</span>` : '—');
+      const tag = a._esExtra
+        ? '<span style="background:#dc2626;color:#fff;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;margin-left:4px;">EXTRA</span>'
+        : a._esRiesgo
+          ? '<span style="background:#f59e0b;color:#fff;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;margin-left:4px;">RIESGO</span>'
+          : '';
+      return `<tr>
+        <td style="padding:8px 6px;text-align:center;color:#9ca3af;font-size:11px;">${i + 1}</td>
+        <td style="padding:8px 12px;font-weight:600;font-size:13px;">${Utils.sanitize(a.studentName)}${tag}</td>
+        <td style="padding:8px 6px;text-align:center;font-size:12px;">${Utils.sanitize(a.groupName)}</td>
+        <td style="padding:8px 6px;text-align:center;font-size:11px;color:#64748b;">${Utils.sanitize(a.turno)}</td>
+        <td style="padding:8px 10px;">${materiasDisplay}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function _bindModalFilters(tipo, lista) {
+    // Recalcula las opciones del selector de Materia según los OTROS filtros.
+    // REGLA: muestra TODAS las materias OFICIALES del semestre del grado/grupo
+    // seleccionado, incluso si tienen 0 alumnos en riesgo/extra. Las que sí
+    // tienen alumnos muestran el conteo "(N alumnos)". Las que no, "(0)".
+    // Así las orientadoras ven la lista completa del semestre sin sorprenderse
+    // porque una materia falte.
+    const refreshMateriaOptions = () => {
+      const sel = document.getElementById('modal-materia');
+      if (!sel) return;
+      // Filtrar la lista por todo MENOS materia
+      let subset = lista.slice();
+      if (_modalFilters.turno) subset = subset.filter(a => a.turno === _modalFilters.turno);
+      if (_modalFilters.grado) subset = subset.filter(a => String(a.grado || '') === _modalFilters.grado);
+      if (_modalFilters.grupo) subset = subset.filter(a => a.groupName === _modalFilters.grupo);
+      if (_modalFilters.search) {
+        const q = _modalFilters.search.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        subset = subset.filter(a => (a.studentName || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').includes(q));
+      }
+      // Conteo por materia en el subset filtrado
+      const counts = {};
+      for (const a of subset) (a.materias || []).forEach(m => { counts[m] = (counts[m] || 0) + 1; });
+
+      // Determinar el grado implícito (filtro grado explícito o grupo seleccionado)
+      let gradoImplicito = _modalFilters.grado;
+      if (!gradoImplicito && _modalFilters.grupo) {
+        const match = _modalFilters.grupo.match(/^(\d)/);
+        if (match) gradoImplicito = match[1];
+      }
+
+      // Materias OFICIALES del grado (catálogo SEP / K.SUBJECT_ORDER)
+      // Si no hay grado implícito, usar TODAS las materias de los 3 grados.
+      const materiasOficiales = new Set();
+      const gradosACubrir = gradoImplicito
+        ? [Number(gradoImplicito)]
+        : [1, 2, 3];
+      for (const g of gradosACubrir) {
+        const lista = (K.SUBJECT_ORDER || {})[g] || [];
+        for (const nom of lista) {
+          // Convertir al formato display (K.getUACNombre normaliza con acentos)
+          materiasOficiales.add(K.getUACNombre(nom));
+        }
+      }
+      // Agregar también las que aparecen en el subset pero no están en el catálogo
+      // (caso edge: materia legacy o nombre con variación).
+      Object.keys(counts).forEach(m => materiasOficiales.add(m));
+
+      // Ordenar: oficial primero (siguiendo orden SEP del grado), luego extras
+      let opts = [...materiasOficiales];
+      if (gradosACubrir.length === 1) {
+        const sepOrder = ((K.SUBJECT_ORDER || {})[gradosACubrir[0]] || []).map(n => K.getUACNombre(n));
+        opts.sort((a, b) => {
+          const ia = sepOrder.indexOf(a);
+          const ib = sepOrder.indexOf(b);
+          if (ia === -1 && ib === -1) return a.localeCompare(b);
+          if (ia === -1) return 1;
+          if (ib === -1) return -1;
+          return ia - ib;
+        });
+      } else {
+        opts.sort();
+      }
+
+      // Si la materia previamente seleccionada ya no está, reset
+      if (_modalFilters.materia && !opts.includes(_modalFilters.materia)) {
+        _modalFilters.materia = '';
+      }
+      const current = _modalFilters.materia;
+      // Cada opción muestra conteo: con 0 cuando no aparece en subset
+      sel.innerHTML = `<option value="">Todas (${Object.values(counts).reduce((a, b) => a + b, 0)})</option>` +
+        opts.map(m => {
+          const n = counts[m] || 0;
+          const label = n > 0 ? `${m} (${n})` : `${m} (0)`;
+          return `<option value="${Utils.sanitize(m)}"${m === current ? ' selected' : ''}${n === 0 ? ' style="color:#94a3b8;"' : ''}>${Utils.sanitize(label)}</option>`;
+        }).join('');
+    };
+
+    // Recalcula opciones del selector de Grupo según turno/grado seleccionados.
+    const refreshGrupoOptions = () => {
+      const sel = document.getElementById('modal-grupo');
+      if (!sel) return;
+      let subset = lista.slice();
+      if (_modalFilters.turno) subset = subset.filter(a => a.turno === _modalFilters.turno);
+      if (_modalFilters.grado) subset = subset.filter(a => String(a.grado || '') === _modalFilters.grado);
+      const gs = new Set();
+      for (const a of subset) if (a.groupName) gs.add(a.groupName);
+      const opts = [...gs].sort();
+      if (_modalFilters.grupo && !opts.includes(_modalFilters.grupo)) {
+        _modalFilters.grupo = '';
+      }
+      const current = _modalFilters.grupo;
+      sel.innerHTML = `<option value="">Todos</option>` +
+        opts.map(g => `<option value="${Utils.sanitize(g)}"${g === current ? ' selected' : ''}>${Utils.sanitize(g)}</option>`).join('');
+    };
+
+    const reRender = () => {
+      // Primero recalcular opciones dependientes (grupo → materia)
+      refreshGrupoOptions();
+      refreshMateriaOptions();
+      const tbody = document.getElementById('modal-tbody');
+      const count = document.getElementById('modal-count');
+      if (!tbody) return;
+      tbody.innerHTML = _renderModalRows(lista, tipo);
+      const visible = (tbody.querySelectorAll('tr').length || 0);
+      const hasResults = !tbody.innerHTML.includes('Sin alumnos con estos filtros');
+      if (count) {
+        const total = lista.length;
+        const filtered = hasResults ? visible : 0;
+        const hasFilters = !!(_modalFilters.turno || _modalFilters.grado || _modalFilters.grupo || _modalFilters.materia || _modalFilters.search);
+        count.innerHTML = hasFilters
+          ? `<strong>${filtered}</strong> de ${total} alumno${total === 1 ? '' : 's'} (con filtros)`
+          : `Mostrando ${total} alumno${total === 1 ? '' : 's'}`;
+      }
+    };
+
+    let searchTimer = null;
+    document.getElementById('modal-search')?.addEventListener('input', (e) => {
+      clearTimeout(searchTimer);
+      const v = e.target.value;
+      searchTimer = setTimeout(() => { _modalFilters.search = v; reRender(); }, 200);
+    });
+    document.getElementById('modal-turno')?.addEventListener('change', (e) => { _modalFilters.turno = e.target.value; reRender(); });
+    document.getElementById('modal-grado')?.addEventListener('change', (e) => { _modalFilters.grado = e.target.value; reRender(); });
+    document.getElementById('modal-grupo')?.addEventListener('change', (e) => { _modalFilters.grupo = e.target.value; reRender(); });
+    document.getElementById('modal-materia')?.addEventListener('change', (e) => { _modalFilters.materia = e.target.value; reRender(); });
+    document.getElementById('modal-clear-filters')?.addEventListener('click', () => {
+      _modalFilters = { tipo, turno: '', grado: '', grupo: '', materia: '', search: '' };
+      ['modal-search', 'modal-turno', 'modal-grado', 'modal-grupo', 'modal-materia'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      reRender();
+    });
+
+    // BUGFIX (v7.68): el botón "Exportar CSV" vive DENTRO del modal, que se
+    // renderiza fuera de moduleContainer. El listener delegado en _bindEvents
+    // NO lo captura. Solución: bindeo directo aquí, después de abrir el modal.
+    const exportBtn = document.querySelector('[data-action="export-list-csv"][data-tipo="' + tipo + '"]');
+    if (exportBtn) {
+      exportBtn.addEventListener('click', () => _exportListaCsv(tipo));
+    }
+  }
+
+  function _exportListaCsv(tipo) {
+    if (!_cachedData) return;
+    const fullList = tipo === 'extra' ? _cachedData.detalleEnExtra
+      : tipo === 'riesgo' ? _cachedData.detalleEnRiesgo
+      : _cachedData.detalleIrregulares;
+    if (!fullList || fullList.length === 0) { Toast.show('Lista vacía', 'info'); return; }
+
+    // Aplicar mismos filtros que la tabla visible
+    let lista = fullList.slice();
+    if (_modalFilters.tipo === tipo) {
+      if (_modalFilters.turno) lista = lista.filter(a => a.turno === _modalFilters.turno);
+      if (_modalFilters.grado) lista = lista.filter(a => String(a.grado || '') === _modalFilters.grado);
+      if (_modalFilters.grupo) lista = lista.filter(a => a.groupName === _modalFilters.grupo);
+      if (_modalFilters.materia) lista = lista.filter(a => (a.materias || []).includes(_modalFilters.materia));
+      if (_modalFilters.search) {
+        const q = _modalFilters.search.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        lista = lista.filter(a => {
+          const n = (a.studentName || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+          return n.includes(q);
+        });
+      }
+    }
+    if (lista.length === 0) { Toast.show('Sin alumnos con los filtros aplicados', 'info'); return; }
+
+    const esc = s => {
+      const str = String(s == null ? '' : s);
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) return '"' + str.replace(/"/g, '""') + '"';
+      return str;
+    };
+    const lines = ['#,ALUMNO,GRUPO,TURNO,GRADO,MATERIAS_REPROBADAS,#REPROBADAS,CATEGORIA'];
+    lista.forEach((a, i) => {
+      const materias = (a.materias || []).join('; ');
+      const cat = a._esExtra ? 'EXTRA' : a._esRiesgo ? 'RIESGO' : tipo.toUpperCase();
+      lines.push([
+        i + 1, esc(a.studentName), esc(a.groupName), esc(a.turno),
+        esc(a.grado), esc(materias), a.reprobadas || (a.materias?.length || 0), esc(cat),
+      ].join(','));
+    });
+    const csv = '﻿' + lines.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const today = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `dashboard-${tipo}-${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+    Toast.show(`✓ CSV descargado: ${lista.length} alumnos`, 'success');
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // BANNER DE CORRECCIONES (admin/subdirector/directivo)
+  // ═══════════════════════════════════════════════════════════════
+
+  async function _loadCorrectionsBanner() {
+    const root = document.getElementById('dash-corrections-banner');
+    if (!root || !window.db) return;
+    try {
+      const snap = await window.db.collection('gradeCorrections').where('status', '==', 'pending').limit(50).get();
+      const folios = new Set();
+      snap.forEach(d => folios.add(d.data().folio));
+      if (folios.size === 0) { root.innerHTML = ''; return; }
+      root.innerHTML = `<div style="background:#fef3c7;border-left:4px solid #d97706;padding:10px 14px;font-size:13px;color:#78350f;border-radius:6px;cursor:pointer;" data-action="nav" data-module="grade-corrections">
+        <strong>📋 ${folios.size} folio${folios.size === 1 ? '' : 's'} de corrección pendiente${folios.size === 1 ? '' : 's'}</strong> · click para revisar.
+      </div>`;
+    } catch (_) { /* silencioso */ }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // EVENTS
+  // ═══════════════════════════════════════════════════════════════
+
+  function _bindEvents() {
+    if (_eventsBound) return;
+    _eventsBound = true;
+    const container = document.getElementById('moduleContainer');
+    if (!container) return;
+    container.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === 'show-list') {
+        _showAlumnosModal(btn.dataset.tipo);
+      } else if (action === 'set-partial') {
+        _selectedPartial = btn.dataset.partial;
+        render();
+      } else if (action === 'nav') {
+        const mod = btn.dataset.module;
+        if (mod && typeof Router !== 'undefined') Router.navigate(mod);
+      } else if (action === 'goto-f1') {
+        const target = btn.dataset.target || 'my-f1';
+        if (typeof Router !== 'undefined') Router.navigate(target);
+      } else if (action === 'export-list-csv') {
+        _exportListaCsv(btn.dataset.tipo);
+      }
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // VISTA MAESTRO (sin cambios respecto al original)
+  // ═══════════════════════════════════════════════════════════════
+
   async function renderTeacherDashboard(container) {
     try {
       const userName = Utils.displayName(App.currentUser?.displayName || App.currentUser?.email || '');
 
       let assignments = [];
-      try { assignments = await Store.getMyAssignments(); } catch (e) {
+      // v8.09: STRICT — el dashboard del maestro debe mostrar SOLO sus
+      // asignaciones, sin importar roles aditivos (auditor/presidente_academia).
+      try { assignments = await Store.getOwnAssignments(); } catch (e) {
         console.warn('No se pudieron cargar asignaciones:', e);
       }
 
@@ -619,12 +1196,10 @@ const DashboardModule = (() => {
           <div class="card" style="text-align:center;padding:40px;">
             <h1 style="font-size:20px;font-weight:700;margin:0 0 8px;">Bienvenido(a), ${Utils.sanitize(userName)}</h1>
             <p style="color:#4a5568;">Aún no tienes asignaciones registradas. Contacta a la administración si crees que es un error.</p>
-            <p style="color:#4a5568;font-size:13px;margin-top:8px;">Soporte: WhatsApp 55 1078 2357</p>
           </div>`);
         return;
       }
 
-      // ─── Cargar datos por cada asignacion ───
       const turnoOrd = { 'MATUTINO': 1, 'VESPERTINO': 2, 'AMBOS': 3 };
       assignments.sort((a, b) =>
         (turnoOrd[(a.turno || '').toUpperCase()] || 9) - (turnoOrd[(b.turno || '').toUpperCase()] || 9)
@@ -633,776 +1208,313 @@ const DashboardModule = (() => {
       );
 
       const groupIds = [...new Set(assignments.map(a => a.groupId))];
-      const [studentsAll, gradesAll, partials] = await Promise.all([
+      // v8.27: cargar también teacherHours por cada asignación para mostrar
+      // panel "Lo que te falta" + chip en cada tarjeta. Las horas se guardan
+      // replicadas en P1/P2/P3 (v8.15), así que basta leer una.
+      const MESES_SEM = ['febrero','marzo','abril','mayo','junio','julio'];
+      const [studentsAll, gradesAll, horasChecks] = await Promise.all([
         Store.getStudentsByGroups(groupIds),
         Store.getGradesByGroups(groupIds),
-        Store.getPartials(),
+        Promise.all(assignments.map(async (a) => {
+          const docId = `${a.groupId}_${a.subjectId}_P1`;
+          try {
+            const doc = await db.collection('teacherHours').doc(docId).get();
+            const data = doc.exists ? doc.data() : {};
+            const missing = MESES_SEM.filter(m =>
+              data[m] === undefined || data[m] === null || data[m] === '' || isNaN(Number(data[m]))
+            );
+            return { asgId: a.id, missing };
+          } catch (_) {
+            return { asgId: a.id, missing: MESES_SEM.slice() };
+          }
+        })),
       ]);
+      const horasByAsg = new Map(horasChecks.map(h => [h.asgId, h.missing]));
       const activeStudents = studentsAll.filter(s => {
         const e = (s.estatus || '').toString().toUpperCase().trim();
         return e === '' || e === 'ACTIVO';
       });
 
-      // ─── Estadísticas por asignación ───
+      const studentsByGroup = new Map();
+      for (const s of activeStudents) {
+        if (!studentsByGroup.has(s.groupId)) studentsByGroup.set(s.groupId, []);
+        studentsByGroup.get(s.groupId).push(s);
+      }
+      const gradesByGroupSubj = new Map();
+      for (const g of gradesAll) {
+        const k = g.groupId + '|' + g.subjectId;
+        if (!gradesByGroupSubj.has(k)) gradesByGroupSubj.set(k, []);
+        gradesByGroupSubj.get(k).push(g);
+      }
+
       const asgStats = assignments.map(a => {
-        const groupStu = activeStudents.filter(s => s.groupId === a.groupId);
-        const myGrades = gradesAll.filter(g => g.groupId === a.groupId && g.subjectId === a.subjectId);
+        const groupStu = studentsByGroup.get(a.groupId) || [];
+        const myGrades = gradesByGroupSubj.get(a.groupId + '|' + a.subjectId) || [];
         const byPartial = { P1: [], P2: [], P3: [] };
         myGrades.forEach(g => { if (byPartial[g.partial]) byPartial[g.partial].push(g); });
-
         const calc = (arr) => {
           const valid = arr.map(g => Number(g.cal)).filter(n => !isNaN(n));
           if (!valid.length) return { count: 0, avg: 0, aprob: 0, reprob: 0 };
           const sum = valid.reduce((s, x) => s + x, 0);
           const avg = sum / valid.length;
           const aprob = valid.filter(n => n >= K.THRESHOLDS.PASS_GRADE).length;
-          const reprob = valid.length - aprob;
-          return { count: valid.length, avg, aprob, reprob };
+          return { count: valid.length, avg, aprob, reprob: valid.length - aprob };
         };
-
-        const stats = {
-          P1: calc(byPartial.P1),
-          P2: calc(byPartial.P2),
-          P3: calc(byPartial.P3),
-        };
+        const stats = { P1: calc(byPartial.P1), P2: calc(byPartial.P2), P3: calc(byPartial.P3) };
         const total = groupStu.length;
-        const totalCaptured = Math.max(stats.P1.count, stats.P2.count, stats.P3.count);
-        // Usar el parcial mas reciente con captura para el "promedio actual"
         const latest = stats.P3.count > 0 ? stats.P3 : (stats.P2.count > 0 ? stats.P2 : stats.P1);
-        return { asg: a, total, totalCaptured, stats, latest };
+        return { asg: a, total, stats, latest };
       });
 
-      // KPIs globales del maestro
       const totalAlumnos = asgStats.reduce((s, x) => s + x.total, 0);
-      const totalAsignaciones = assignments.length;
-      const totalGrupos = groupIds.length;
-      const allValidLast = asgStats.flatMap(x => {
-        if (x.latest.count === 0) return [];
-        return Array(x.latest.count).fill(x.latest.avg);
-      });
-      const promedioGlobal = allValidLast.length > 0
-        ? (allValidLast.reduce((s, x) => s + x, 0) / allValidLast.length).toFixed(2)
-        : '—';
       const totalAprob = asgStats.reduce((s, x) => s + x.latest.aprob, 0);
       const totalReprob = asgStats.reduce((s, x) => s + x.latest.reprob, 0);
       const totalCaptured = totalAprob + totalReprob;
-      const aprobPct = totalCaptured > 0 ? ((totalAprob / totalCaptured) * 100).toFixed(1) : '—';
-
-      const interimCount = assignments.filter(a => a.interim).length;
-      const interimBanner = interimCount > 0
-        ? `<div style="background:#fffbeb;border-left:4px solid #d97706;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#78350f;border-radius:6px;">
-             <strong>🟠 ${interimCount} cobertura${interimCount > 1 ? 's' : ''} temporal${interimCount > 1 ? 'es' : ''}</strong> entre tus asignaciones.
-             Las marcadas en naranja son listas que cubres mientras se asigna al docente oficial.
-           </div>`
-        : '';
+      const aprobPct = totalCaptured > 0 ? ((totalAprob / totalCaptured) * 100).toFixed(1) + '%' : '—';
+      const allLastAvgs = asgStats.flatMap(x => x.latest.count > 0 ? [x.latest.avg] : []);
+      const promedioGlobal = allLastAvgs.length > 0
+        ? (allLastAvgs.reduce((s, x) => s + x, 0) / allLastAvgs.length).toFixed(2)
+        : '—';
 
       const fmt = (n) => n === 0 || n ? n.toFixed(2) : '—';
-      const pct = (a, b) => b > 0 ? ((a / b) * 100).toFixed(0) + '%' : '—';
 
-      // ─── Cards de stats por asignación ───
       const asgCardsHtml = asgStats.map(x => {
         const a = x.asg;
         const turnoClass = (a.turno || '').toUpperCase() === 'MATUTINO' ? 'badge-matutino' : 'badge-vespertino';
-        const isInterim = !!a.interim;
-        const borderColor = isInterim ? '#d97706' : '#3182ce';
-        const cardBg = isInterim ? 'background:#fffbeb;' : '';
         const lastAvg = x.latest.count > 0 ? x.latest.avg : null;
         const avgColor = lastAvg === null ? '#888' : (lastAvg >= 8 ? '#16a34a' : lastAvg >= 7 ? '#d97706' : '#dc2626');
         const capturePct = x.total > 0 ? Math.round((x.latest.count / x.total) * 100) : 0;
-
         const asgIdAttr = Utils.sanitize(a.id || '');
         const groupIdAttr = Utils.sanitize(a.groupId || '');
         const subjectIdAttr = Utils.sanitize(a.subjectId || '');
+        // v8.27: chip rojo si faltan horas semestrales en esta materia.
+        // Tarjetas con horas faltantes resaltan con borde rojo para ojo rápido.
+        const horasFaltan = (horasByAsg.get(a.id) || []).length > 0;
+        const alumnosFaltan = Math.max(0, x.total - x.latest.count);
+        const borderColor = (horasFaltan || alumnosFaltan > 0) ? '#dc2626' : '#3182ce';
+        const horasChip = horasFaltan
+          ? `<span style="background:#fecaca;color:#991b1b;font-size:10px;font-weight:800;padding:2px 7px;border-radius:8px;white-space:nowrap;">⏱ Faltan horas</span>`
+          : '';
+        const alumnosChip = alumnosFaltan > 0
+          ? `<span style="background:#fef3c7;color:#78350f;font-size:10px;font-weight:800;padding:2px 7px;border-radius:8px;white-space:nowrap;">📝 ${alumnosFaltan} sin calificar</span>`
+          : '';
         return `
-          <div class="card" style="padding:14px;border-left:4px solid ${borderColor};${cardBg}cursor:pointer;transition:all 0.15s;"
-               onclick="GradesModule.setPendingOpen({assignmentId:'${asgIdAttr}',groupId:'${groupIdAttr}',subjectId:'${subjectIdAttr}'});Router.navigate('my-grades')"
-               onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)';"
-               onmouseout="this.style.boxShadow='none';">
+          <div class="card" style="padding:14px;border-left:4px solid ${borderColor};cursor:pointer;transition:all 0.15s;"
+               onclick="GradesModule.setPendingOpen({assignmentId:'${asgIdAttr}',groupId:'${groupIdAttr}',subjectId:'${subjectIdAttr}'});Router.navigate('my-grades')">
             <div style="font-weight:700;font-size:14px;color:#1a202c;margin-bottom:4px;">
               ${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId))}
             </div>
             <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">
               <span class="badge ${turnoClass}" style="font-size:10px;">${Utils.sanitize(a.turno || '')}</span>
               <span class="badge" style="font-size:10px;background:#edf2f7;color:#2d3748;">Grupo ${Utils.sanitize(a.groupName || '')}</span>
-              ${isInterim ? '<span class="badge" style="font-size:10px;background:#d97706;color:#fff;">🟠 Cobertura</span>' : ''}
+              ${horasChip}
+              ${alumnosChip}
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px;text-align:center;border-top:1px solid #e5e7eb;padding-top:10px;">
-              <div>
-                <div style="color:#666;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Alumnos</div>
-                <div style="font-size:18px;font-weight:700;color:#1a202c;">${x.total}</div>
-              </div>
-              <div>
-                <div style="color:#666;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Promedio</div>
-                <div style="font-size:18px;font-weight:700;color:${avgColor};">${fmt(lastAvg)}</div>
-              </div>
-              <div>
-                <div style="color:#666;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Captura</div>
-                <div style="font-size:18px;font-weight:700;color:${capturePct === 100 ? '#16a34a' : capturePct > 0 ? '#d97706' : '#dc2626'};">${capturePct}%</div>
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;font-size:11px;">
-              <div style="text-align:center;background:#dcfce7;padding:4px;border-radius:4px;">
-                <strong style="color:#166534;">${x.latest.aprob}</strong>
-                <span style="color:#15803d;font-size:10px;"> aprob.</span>
-              </div>
-              <div style="text-align:center;background:#fee2e2;padding:4px;border-radius:4px;">
-                <strong style="color:#991b1b;">${x.latest.reprob}</strong>
-                <span style="color:#b91c1c;font-size:10px;"> reprob.</span>
-              </div>
+              <div><div style="color:#666;font-weight:600;">Alumnos</div><div style="font-size:18px;font-weight:700;">${x.total}</div></div>
+              <div><div style="color:#666;font-weight:600;">Promedio</div><div style="font-size:18px;font-weight:700;color:${avgColor};">${fmt(lastAvg)}</div></div>
+              <div><div style="color:#666;font-weight:600;">Captura</div><div style="font-size:18px;font-weight:700;color:${capturePct === 100 ? '#16a34a' : '#d97706'};">${capturePct}%</div></div>
             </div>
           </div>`;
       }).join('');
 
-      container.innerHTML = UI.moduleContainer(`
-        <!-- HEADER personal del maestro -->
-        <div class="card" style="background:linear-gradient(135deg,#3182ce 0%,#2b6cb0 100%);color:#fff;padding:24px;margin-bottom:16px;">
-          <h1 style="font-size:22px;font-weight:700;margin:0 0 4px;color:#fff;">
-            Bienvenido(a), ${Utils.sanitize(userName)}
-          </h1>
-          <p style="margin:0;font-size:13px;opacity:0.92;">
-            ${totalAsignaciones} materia(s) en ${totalGrupos} grupo(s) · ${totalAlumnos} alumnos en total
+      // v8.27: panel "Lo que te falta" — arriba del todo cuando hay pendientes.
+      // Resumen ejecutivo de horas + alumnos faltantes para entrega oficial.
+      const asgsConHorasFaltantes = horasChecks.filter(h => h.missing.length > 0).length;
+      const asgsConAlumnosPendientes = asgStats.filter(x => x.latest.count < x.total && x.total > 0).length;
+      const totalAlumnosPendientes = asgStats.reduce((s, x) => s + Math.max(0, x.total - x.latest.count), 0);
+      const tieneAlgoPendiente = asgsConHorasFaltantes > 0 || asgsConAlumnosPendientes > 0;
+      const panelLoQueFalta = tieneAlgoPendiente ? `
+        <div class="card" style="background:linear-gradient(135deg,#fee2e2 0%,#fef2f2 100%);border-left:5px solid #dc2626;margin-bottom:16px;padding:18px 22px;box-shadow:0 4px 12px rgba(220,38,38,0.15);">
+          <div style="display:flex;align-items:center;gap:8px;font-weight:800;color:#991b1b;font-size:16px;margin-bottom:10px;">
+            <span class="material-icons-round" style="font-size:24px;">priority_high</span>
+            Para entregar tus listas a Dirección te falta:
+          </div>
+          <ul style="margin:0 0 12px 26px;padding:0;color:#7f1d1d;font-size:13.5px;line-height:1.75;">
+            ${asgsConHorasFaltantes > 0 ? `<li>⏱ Horas del semestre en <strong>${asgsConHorasFaltantes}</strong> ${asgsConHorasFaltantes === 1 ? 'materia' : 'materias'}.</li>` : ''}
+            ${asgsConAlumnosPendientes > 0 ? `<li>📝 Calificaciones de <strong>${totalAlumnosPendientes}</strong> ${totalAlumnosPendientes === 1 ? 'alumno' : 'alumnos'} en <strong>${asgsConAlumnosPendientes}</strong> ${asgsConAlumnosPendientes === 1 ? 'lista' : 'listas'}.</li>` : ''}
+          </ul>
+          <p style="margin:0;font-size:12.5px;color:#991b1b;line-height:1.5;">
+            Las tarjetas con borde <span style="color:#dc2626;font-weight:800;">rojo</span> abajo te marcan lo pendiente.
+            <strong>Sin esto no podrás imprimir la lista oficial para entregar firmada en Dirección.</strong>
           </p>
         </div>
+      ` : '';
 
-        <!-- AVISO IMPORTANTE — ventana de edición y responsabilidad de impresión -->
-        <div style="background:linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%);border:2px solid #d97706;border-radius:12px;padding:18px 22px;margin-bottom:16px;display:flex;gap:16px;align-items:flex-start;">
-          <span class="material-icons-round" style="font-size:36px;color:#b45309;flex-shrink:0;">campaign</span>
-          <div style="flex:1;">
-            <h3 style="font-size:16px;font-weight:800;color:#78350f;margin:0 0 10px;line-height:1.3;">
-              📌 Reglas clave de captura y entrega — léelas
-            </h3>
-            <ol style="font-size:13px;color:#7c2d12;line-height:1.6;margin:0 0 10px;padding-left:22px;">
-              <li style="margin-bottom:8px;">
-                <strong>Mientras el parcial esté abierto, edita libremente.</strong>
-                Cambia calificaciones, faltas, puntos extra u horas impartidas las veces que
-                necesites. Cada cambio se guarda <strong>solo</strong> en 3 segundos — no hay botón
-                "Guardar" y no pides permiso para corregir.
-              </li>
-              <li style="margin-bottom:8px;">
-                <strong>NO uses "Cambios de Calificación" mientras el parcial esté abierto.</strong>
-                Las solicitudes formales están bloqueadas hasta que el parcial cierre porque
-                tú mismo puedes corregir en tu lista. Si entras a ese módulo verás un aviso de
-                bloqueo, no es un error.
-              </li>
-              <li style="margin-bottom:8px;">
-                <strong>Dirección recibe UNA sola lista por grupo y materia</strong> — la última
-                versión, con TODAS las firmas. Imprime <em>solo cuando ya hayas capturado y
-                revisado todas tus listas</em>.
-              </li>
-              <li style="margin-bottom:0;">
-                <strong>⛔ No se acepta entregar dos hojas.</strong> No puedes dar a Dirección una
-                lista con errores y luego otra "con las correcciones" firmada solo por los
-                alumnos corregidos. Si imprimes y luego cambias algo, tienes que
-                <strong>reimprimir la lista completa y volver a recoger TODAS las firmas</strong>
-                antes de entregar.
-              </li>
-            </ol>
-            <p style="font-size:12px;color:#92400e;margin:0;font-style:italic;">
-              Las correcciones formales (con folio y firma del Subdirector) solo se piden
-              <strong>después</strong> de que el parcial cierre. Mientras esté abierto, todo es
-              en directo desde tu lista.
-            </p>
-          </div>
+      // v8.38: modal automático bloqueante si tienen horas pendientes.
+      // Sale una vez por sesión por maestro (no acosa cada refresh).
+      // Si capturan, el modal ya no vuelve a salir ese día.
+      const showMandatoryHoursAlert = asgsConHorasFaltantes > 0;
+      const HOURS_ALERT_KEY = 'epo67_horas_alert_shown_' + (App.currentUser?.uid || 'anon');
+      const lastShownDay = (() => {
+        try { return localStorage.getItem(HOURS_ALERT_KEY) || ''; } catch (_) { return ''; }
+      })();
+      const todayDay = new Date().toISOString().slice(0,10);
+      const yaSeMostroHoy = lastShownDay === todayDay;
+
+      container.innerHTML = UI.moduleContainer(`
+        <div class="card" style="background:linear-gradient(135deg,#3182ce 0%,#2b6cb0 100%);color:#fff;padding:24px;margin-bottom:16px;">
+          <h1 style="font-size:22px;font-weight:700;margin:0 0 4px;color:#fff;">Bienvenido(a), ${Utils.sanitize(userName)}</h1>
+          <p style="margin:0;font-size:13px;opacity:0.92;">${assignments.length} materia(s) · ${groupIds.length} grupo(s) · ${totalAlumnos} alumnos</p>
         </div>
 
-        ${interimBanner}
+        ${_renderF1Banner(App.currentUser?.role)}
 
-        <!-- KPIs globales -->
+        ${panelLoQueFalta}
+
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px;">
           <div class="card" style="padding:14px 16px;background:#eff6ff;border-left:4px solid #3182ce;">
-            <div style="font-size:11px;color:#1e40af;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Tu promedio</div>
-            <div style="font-size:28px;font-weight:800;color:#1e40af;line-height:1.1;margin-top:4px;">${promedioGlobal}</div>
-            <div style="font-size:11px;color:#475569;margin-top:2px;">Parcial más reciente con captura</div>
+            <div style="font-size:11px;color:#1e40af;font-weight:700;">Tu promedio</div>
+            <div style="font-size:28px;font-weight:800;color:#1e40af;">${promedioGlobal}</div>
+            <div style="font-size:11px;color:#475569;">Parcial más reciente</div>
           </div>
           <div class="card" style="padding:14px 16px;background:#f0fdf4;border-left:4px solid #16a34a;">
-            <div style="font-size:11px;color:#166534;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Aprobación</div>
-            <div style="font-size:28px;font-weight:800;color:#166534;line-height:1.1;margin-top:4px;">${aprobPct}</div>
-            <div style="font-size:11px;color:#475569;margin-top:2px;">${totalAprob} aprobados de ${totalCaptured} con cal.</div>
+            <div style="font-size:11px;color:#166534;font-weight:700;">Aprobación</div>
+            <div style="font-size:28px;font-weight:800;color:#166534;">${aprobPct}</div>
+            <div style="font-size:11px;color:#475569;">${totalAprob} de ${totalCaptured}</div>
           </div>
           <div class="card" style="padding:14px 16px;background:#fef2f2;border-left:4px solid #dc2626;">
-            <div style="font-size:11px;color:#991b1b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Reprobados</div>
-            <div style="font-size:28px;font-weight:800;color:#991b1b;line-height:1.1;margin-top:4px;">${totalReprob}</div>
-            <div style="font-size:11px;color:#475569;margin-top:2px;">Suma de tus listas</div>
+            <div style="font-size:11px;color:#991b1b;font-weight:700;">Reprobados</div>
+            <div style="font-size:28px;font-weight:800;color:#991b1b;">${totalReprob}</div>
+            <div style="font-size:11px;color:#475569;">Suma de tus listas</div>
           </div>
           <div class="card" style="padding:14px 16px;background:#fffbeb;border-left:4px solid #d97706;">
-            <div style="font-size:11px;color:#78350f;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Pendientes</div>
-            <div style="font-size:28px;font-weight:800;color:#78350f;line-height:1.1;margin-top:4px;">${totalAlumnos - totalCaptured}</div>
-            <div style="font-size:11px;color:#475569;margin-top:2px;">Alumnos sin captura aún</div>
+            <div style="font-size:11px;color:#78350f;font-weight:700;">Pendientes</div>
+            <div style="font-size:28px;font-weight:800;color:#78350f;">${totalAlumnos - totalCaptured}</div>
+            <div style="font-size:11px;color:#475569;">Sin captura aún</div>
           </div>
         </div>
 
-        <!-- Accesos rápidos -->
         <div class="card" style="margin-bottom:16px;">
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn btn-primary" onclick="Router.navigate('my-grades')" style="padding:10px 16px;font-weight:600;">
-              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">edit_note</span>
-              Capturar Calificaciones
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">edit_note</span> Capturar Calificaciones
             </button>
             <button class="btn btn-outline" onclick="Router.navigate('my-lists')" style="padding:10px 16px;">
-              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">list_alt</span>
-              Mis Listas
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">list_alt</span> Mis Listas
             </button>
             <button class="btn btn-outline" onclick="Router.navigate('my-f1')" style="padding:10px 16px;">
-              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">grid_on</span>
-              Concentrado F1
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">grid_on</span> Concentrado F1
             </button>
-            <button class="btn btn-outline" onclick="Router.navigate('correction-request')" style="padding:10px 16px;">
-              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">rate_review</span>
-              Cambios de Calificación
+            <button class="btn btn-outline" onclick="Router.navigate('extraordinarios')" style="padding:10px 16px;">
+              <span class="material-icons-round" style="font-size:16px;vertical-align:middle;">gavel</span> Extraordinarios
             </button>
           </div>
         </div>
 
-        <!-- Tarjetas estadísticas por asignación -->
         <div class="card">
           <h2 style="font-size:16px;font-weight:700;margin:0 0 12px;color:#1a202c;">
             <span class="material-icons-round" style="vertical-align:middle;font-size:20px;color:#3182ce;">analytics</span>
             Tus grupos y materias
           </h2>
-          <p style="font-size:12px;color:#64748b;margin:0 0 12px;">Toca una tarjeta para ir a capturar calificaciones de ese grupo.</p>
+          <p style="font-size:12px;color:#64748b;margin:0 0 12px;">Toca una tarjeta para capturar calificaciones de ese grupo.</p>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">
             ${asgCardsHtml}
           </div>
         </div>
       `);
 
-      // Nota: el mega card del dashboard se removió. La impresión vive donde
-      // sucede naturalmente: dentro del editor (al terminar de capturar).
+      // v8.38: modal automático bloqueante para maestros con horas pendientes.
+      // Aparece UNA vez al día por maestro (no acosa). Lista cada materia con
+      // botón clickeable que lleva directo al editor para capturar.
+      // Forma más eficiente de avisar sin que admin envíe WhatsApps uno a uno.
+      if (showMandatoryHoursAlert && !yaSeMostroHoy && typeof Modal !== 'undefined' && Modal.open) {
+        const asgsConHoras = asgStats.filter(x => (horasByAsg.get(x.asg.id) || []).length > 0);
+        const listaMatItems = asgsConHoras.map(x => `
+          <li style="margin:8px 0;line-height:1.5;">
+            <button data-asg-pick="${Utils.sanitize(x.asg.id)}"
+                    data-group-pick="${Utils.sanitize(x.asg.groupId)}"
+                    data-subject-pick="${Utils.sanitize(x.asg.subjectId)}"
+                    style="background:#fff;border:2px solid #dc2626;color:#991b1b;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:13px;width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <span>${Utils.sanitize(x.asg.groupName)} · ${Utils.sanitize(K.getUACNombre(x.asg.subjectName || x.asg.subjectId))}</span>
+              <span style="font-size:11px;background:#fef3c7;color:#78350f;padding:2px 6px;border-radius:4px;font-weight:600;">⏱ Capturar →</span>
+            </button>
+          </li>
+        `).join('');
+
+        const body = `
+          <div style="font-size:14px;color:#1e293b;line-height:1.6;">
+            <div style="background:#fee2e2;border-left:4px solid #dc2626;padding:14px 18px;border-radius:6px;margin-bottom:14px;">
+              <strong style="color:#991b1b;font-size:15px;">Te faltan capturar las HORAS DEL SEMESTRE</strong> en <strong>${asgsConHorasFaltantes}</strong> de tus materias.
+              <br><br>
+              <strong>Sin estas horas NO podrás imprimir tu lista oficial</strong> para entregar firmada en Dirección, y el sistema no podrá calcular bien quién está en riesgo por inasistencias.
+            </div>
+
+            <h3 style="font-size:14px;font-weight:700;margin:14px 0 6px;color:#1e293b;">
+              Toca cada materia para ir directo al editor:
+            </h3>
+            <ul style="list-style:none;margin:0;padding:0;">
+              ${listaMatItems}
+            </ul>
+
+            <div style="background:#eff6ff;border-left:3px solid #3182ce;padding:10px 14px;margin-top:14px;font-size:12.5px;color:#1e3a8a;border-radius:4px;">
+              💡 <strong>Sólo capturas las horas UNA VEZ por materia</strong> (Feb a Jul) y aplican a los 3 parciales automáticamente. Es muy rápido.
+            </div>
+          </div>`;
+
+        const footer = `
+          <button class="btn btn-outline" id="hours-alert-later" data-action="modal-cancel">Capturar después</button>
+          <button class="btn" id="hours-alert-go" style="background:#dc2626;color:#fff;border:none;font-weight:700;">
+            Voy a capturar ahora
+          </button>`;
+
+        Modal.open('⏱ Tienes horas pendientes', body, footer);
+
+        // Marcar como mostrado hoy para no acosar
+        try { localStorage.setItem(HOURS_ALERT_KEY, todayDay); } catch (_) {}
+
+        const mb = document.getElementById('modalBody');
+        if (mb) {
+          // Click en cualquier tarjeta de materia → abrir editor en esa materia
+          mb.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-asg-pick]');
+            if (!btn) return;
+            const asgId = btn.dataset.asgPick;
+            const groupId = btn.dataset.groupPick;
+            const subjectId = btn.dataset.subjectPick;
+            if (typeof GradesModule !== 'undefined' && GradesModule.setPendingOpen) {
+              GradesModule.setPendingOpen({ assignmentId: asgId, groupId, subjectId });
+            }
+            Modal.close();
+            Router.navigate('my-grades');
+          });
+        }
+        const mf = document.getElementById('modalFooter');
+        if (mf) {
+          mf.addEventListener('click', (e) => {
+            if (e.target.closest('#hours-alert-later') || e.target.closest('[data-action="modal-cancel"]')) {
+              Modal.close();
+              return;
+            }
+            if (e.target.closest('#hours-alert-go')) {
+              // Abrir directamente la primera materia con horas pendientes
+              const first = asgsConHoras[0];
+              if (first && typeof GradesModule !== 'undefined' && GradesModule.setPendingOpen) {
+                GradesModule.setPendingOpen({
+                  assignmentId: first.asg.id,
+                  groupId: first.asg.groupId,
+                  subjectId: first.asg.subjectId,
+                });
+              }
+              Modal.close();
+              Router.navigate('my-grades');
+            }
+          });
+        }
+      }
     } catch (error) {
       console.error('Error en dashboard de maestro:', error);
       container.innerHTML = UI.moduleContainer(`
         <div class="card">
-          <h1 style="font-size:20px;font-weight:700;margin:0 0 8px;">Bienvenido(a)</h1>
-          <p style="color:#4a5568;">Hubo un error cargando tus estadísticas. Usa el menú lateral para navegar.</p>
-          <p style="font-size:11px;color:#888;margin-top:8px;">Detalle técnico: ${Utils.sanitize(error.message || '')}</p>
-        </div>
-      `);
+          <h1 style="font-size:20px;font-weight:700;">Bienvenido(a)</h1>
+          <p style="color:#4a5568;">Hubo un error cargando tus estadísticas.</p>
+        </div>`);
     }
   }
 
-  // ─── HELPERS ────────────────────────────────────────────────
-
-  /**
-   * Determina el parcial activo (no bloqueado). Si todos estan
-   * bloqueados, usa el ultimo. Si ninguno tiene doc en Firestore,
-   * usa P1 como fallback.
-   */
-  function getCurrentPartial(partials) {
-    if (!partials || partials.length === 0) return 'P1';
-
-    // Ordenar por numero ascendente
-    const sorted = K.PARCIALES.map(kp => {
-      const doc = partials.find(p => p.id === kp.id);
-      return { id: kp.id, numero: kp.numero, locked: doc ? (doc.locked || false) : false };
-    });
-
-    // Primer parcial no bloqueado
-    const open = sorted.find(p => !p.locked);
-    if (open) return open.id;
-
-    // Todos bloqueados: ultimo parcial
-    return sorted[sorted.length - 1].id;
-  }
-
-  /** Cap grade value at 10 */
-  function capGrade(value) {
-    if (value === undefined || value === null) return null;
-    return Math.min(Number(value), 10);
-  }
-
-  /** Get grade CAL value (new format: g.cal, legacy: g.value) */
-  function getGradeCal(g) {
-    if (g.cal !== undefined && g.cal !== null && g.cal !== '') return capGrade(g.cal);
-    return capGrade(g.value);
-  }
-
-  /** Compute average from array of grade objects */
-  function computeAverage(gradeObjs) {
-    const valid = gradeObjs.map(g => getGradeCal(g)).filter(v => v !== null);
-    if (valid.length === 0) return 0;
-    return valid.reduce((sum, v) => sum + v, 0) / valid.length;
-  }
-
-  /** Compute fail rate from array of grade objects */
-  function computeFailRate(gradeObjs) {
-    const valid = gradeObjs.map(g => getGradeCal(g)).filter(v => v !== null);
-    if (valid.length === 0) return 0;
-    const failed = valid.filter(v => v < K.THRESHOLDS.PASS_GRADE).length;
-    return (failed / valid.length) * 100;
-  }
-
-  // ─── SECTION 1: STAT CARDS ─────────────────────────────────
-
-  function renderHeader() {
-    return UI.pageHeader(
-      'Dashboard Institucional',
-      'EPO 67 -- Resumen general del plantel'
-    );
-  }
-
-  function renderStatCards(activeStudents, teachers) {
-    const hombres = activeStudents.filter(s => s.sexo === 'H').length;
-    const mujeres = activeStudents.filter(s => s.sexo === 'M').length;
-
-    const cards = [
-      { label: 'Total Alumnos', value: activeStudents.length, icon: 'people', colorClass: 'success' },
-      { label: 'Hombres', value: hombres, icon: 'male', colorClass: 'primary' },
-      { label: 'Mujeres', value: mujeres, icon: 'female', colorClass: 'danger' },
-      { label: 'Docentes', value: teachers.length, icon: 'school', colorClass: 'warning' },
-      { label: 'Grupos', value: 18, icon: 'groups', colorClass: 'primary' },
-      { label: 'Parciales', value: 3, icon: 'assignment', colorClass: 'success' },
-      { label: 'Turnos', value: 2, icon: 'schedule', colorClass: 'warning' },
-      { label: 'Grados', value: 3, icon: 'stairs', colorClass: 'primary' }
-    ];
-
-    return UI.statsGrid(cards);
-  }
-
-  // ─── SECTION 2: METAS INSTITUCIONALES ──────────────────────
-
-  function renderMetasCard(grades, currentPartialId) {
-    const metaPromedio = 8.3;
-    const metaReprob = 14;
-
-    const avg = computeAverage(grades);
-    const failRate = computeFailRate(grades);
-    const passRate = 100 - failRate;
-
-    const parcialLabel = K.PARCIALES.find(p => p.id === currentPartialId)?.nombre || currentPartialId;
-
-    // Progress bar color logic (CSS classes: default=green, .warning=yellow, .critical=red)
-    const avgClass = avg >= metaPromedio ? '' : avg >= 7 ? 'warning' : 'critical';
-    const reprobClass = failRate <= metaReprob ? '' : failRate <= 20 ? 'warning' : 'critical';
-    const aprobClass = passRate >= 86 ? '' : passRate >= 80 ? 'warning' : 'critical';
-
-    // Cap progress widths for visual display
-    const avgPct = Math.min((avg / 10) * 100, 100);
-    const reprobPct = Math.min(failRate, 100);
-    const aprobPct = Math.min(passRate, 100);
-
-    return `
-      <div class="card" style="margin-top:24px;">
-        <h2 class="section-title" style="margin-bottom:4px;">
-          <span class="material-icons-round" style="vertical-align:middle;margin-right:8px;font-size:22px;">flag</span>
-          Metas Institucionales
-        </h2>
-        <p style="color:var(--color-text-light);font-size:13px;margin-bottom:20px;">${Utils.sanitize(parcialLabel)} -- Parcial activo</p>
-
-        <div style="display:grid;gap:20px;">
-          <!-- Promedio General -->
-          <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-              <span style="font-weight:600;font-size:14px;">Promedio General</span>
-              <span>
-                <strong>${avg.toFixed(2)}</strong>
-                <span style="color:var(--color-text-light);font-size:12px;"> / meta ${metaPromedio}</span>
-              </span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-fill ${avgClass}" style="width:${avgPct.toFixed(1)}%"></div>
-            </div>
-          </div>
-
-          <!-- Reprobación -->
-          <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-              <span style="font-weight:600;font-size:14px;">Reprobación</span>
-              <span>
-                <strong>${failRate.toFixed(1)}%</strong>
-                <span style="color:var(--color-text-light);font-size:12px;"> / meta max ${metaReprob}%</span>
-              </span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-fill ${reprobClass}" style="width:${reprobPct.toFixed(1)}%"></div>
-            </div>
-          </div>
-
-          <!-- Aprobación -->
-          <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-              <span style="font-weight:600;font-size:14px;">Aprobación</span>
-              <span>
-                <strong>${passRate.toFixed(1)}%</strong>
-              </span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-fill ${aprobClass}" style="width:${aprobPct.toFixed(1)}%"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  // ─── SECTION 3: ESTADO DE GRUPOS ──────────────────────────
-
-  function renderGroupTable(activeStudents, grades, groups) {
-    // Build group name lookup: groupId -> nombre
-    const groupNameById = {};
-    const groupInfoById = {};
-    groups.forEach(g => {
-      groupNameById[g.id] = g.nombre || g.grupo || g.id;
-      groupInfoById[g.id] = { turno: g.turno || '', grado: g.grado || '', nombre: g.nombre || g.grupo || g.id };
-    });
-
-    // Build student-to-grupo map using groupId → nombre (not student.grupo which can be stale)
-    const studentsByGrupo = {};
-    activeStudents.forEach(s => {
-      const key = groupNameById[s.groupId] || s.grupo || 'Sin grupo';
-      if (!studentsByGrupo[key]) studentsByGrupo[key] = [];
-      studentsByGrupo[key].push(s);
-    });
-
-    // Build grades-by-grupo using student groupId field
-    const gradesByGrupo = {};
-    const studentMap = {};
-    activeStudents.forEach(s => { studentMap[s.id] = s; });
-
-    grades.forEach(g => {
-      const student = studentMap[g.studentId];
-      if (!student) return;
-      const key = groupNameById[student.groupId] || student.grupo || 'Sin grupo';
-      if (!gradesByGrupo[key]) gradesByGrupo[key] = [];
-      gradesByGrupo[key].push(g);
-    });
-
-    // Build group info from groups collection
-    const groupInfoMap = {};
-    groups.forEach(g => {
-      const name = g.nombre || g.grupo;
-      if (name) {
-        groupInfoMap[name] = { turno: g.turno || '', grado: g.grado || '' };
-      }
-    });
-
-    // Collect all unique group names (from groups collection, canonical)
-    const allGrupos = [...new Set(
-      groups.map(g => g.nombre || g.grupo).filter(Boolean)
-    )].sort((a, b) => {
-      const infoA = groupInfoMap[a] || {};
-      const infoB = groupInfoMap[b] || {};
-      const turnoComp = (infoA.turno || '').localeCompare(infoB.turno || '');
-      if (turnoComp !== 0) return turnoComp;
-      return a.localeCompare(b);
-    });
-
-    const rows = allGrupos.map(grupoName => {
-      const info = groupInfoMap[grupoName] || {};
-      const studentList = studentsByGrupo[grupoName] || [];
-      const gradeList = gradesByGrupo[grupoName] || [];
-      const avg = computeAverage(gradeList);
-
-      // ═══ Métrica ALUMNO-céntrica de irregularidad ═══
-      // Contamos alumnos del grupo, no calificaciones.
-      // Irregular = alumno con AL MENOS una calificación < 6.
-      // Solo consideramos alumnos CON al menos una cal capturada.
-      const failsByStudent = {};
-      const evaluatedStudents = new Set();
-      let totalIncidencias = 0;
-      gradeList.forEach(g => {
-        const cal = getGradeCal(g);
-        if (cal !== null && cal !== undefined && !isNaN(cal)) {
-          evaluatedStudents.add(g.studentId);
-          if (cal < K.THRESHOLDS.PASS_GRADE) {
-            failsByStudent[g.studentId] = (failsByStudent[g.studentId] || 0) + 1;
-            totalIncidencias++;
-          }
-        }
-      });
-      const totalEval = evaluatedStudents.size;
-      const irregulares = Object.keys(failsByStudent).length;
-      const aprobados = totalEval - irregulares;
-      const pctIrregulares = totalEval > 0 ? (irregulares * 100 / totalEval) : 0;
-
-      let statusHtml;
-      if (gradeList.length === 0) {
-        statusHtml = '<span style="color:var(--color-text-light);font-size:13px;">— Sin datos</span>';
-      } else if (avg >= 8) {
-        statusHtml = '<span style="color:var(--color-success);font-weight:600;font-size:13px;">● Bueno</span>';
-      } else if (avg >= 7) {
-        statusHtml = '<span style="color:#c05621;font-weight:600;font-size:13px;">● Regular</span>';
-      } else {
-        statusHtml = '<span style="color:var(--color-danger);font-weight:600;font-size:13px;">● Crítico</span>';
-      }
-
-      let turno = info.turno || '';
-      if (!turno && studentList.length > 0) {
-        turno = studentList[0].turno || '';
-      }
-
-      const irrColor = pctIrregulares <= 14 ? 'var(--color-success)' : pctIrregulares <= 30 ? '#c05621' : 'var(--color-danger)';
-
-      return `
-        <tr>
-          <td>${Utils.sanitize(turno)}</td>
-          <td><strong>${Utils.sanitize(grupoName)}</strong></td>
-          <td style="text-align:center;">${studentList.length}</td>
-          <td style="text-align:center;font-weight:600;color:${gradeList.length > 0 ? (avg >= 8 ? 'var(--color-success)' : avg >= 7 ? '#c05621' : 'var(--color-danger)') : 'inherit'};">${gradeList.length > 0 ? avg.toFixed(2) : '-'}</td>
-          <td style="text-align:center;font-weight:600;color:${gradeList.length > 0 ? 'var(--color-success)' : 'inherit'};">${totalEval > 0 ? aprobados : '-'}</td>
-          <td style="text-align:center;font-weight:600;color:${gradeList.length > 0 ? irrColor : 'inherit'};">${totalEval > 0 ? `${irregulares} (${pctIrregulares.toFixed(0)}%)` : '-'}</td>
-          <td style="text-align:center;color:#6b7280;font-size:12px;">${totalIncidencias > 0 ? totalIncidencias : '-'}</td>
-          <td style="text-align:center;">${statusHtml}</td>
-        </tr>
-      `;
-    }).join('');
-
-    return `
-      <div class="card" style="margin-top:24px;">
-        <h2 class="section-title" style="margin-bottom:6px;">
-          <span class="material-icons-round" style="vertical-align:middle;margin-right:8px;font-size:22px;">table_chart</span>
-          Estado de Grupos
-        </h2>
-        <p style="margin:0 0 16px;font-size:12px;color:#6b7280;">
-          <strong>Aprobados / Irregulares:</strong> alumnos sin / con al menos una materia reprobada.
-          <strong>Incidencias:</strong> total de calificaciones &lt; 6 (un alumno puede tener varias).
-        </p>
-        <div class="table-container">
-          <table class="table-light">
-            <thead>
-              <tr>
-                <th>Turno</th>
-                <th>Grupo</th>
-                <th style="text-align:center;">Alumnos</th>
-                <th style="text-align:center;">Promedio</th>
-                <th style="text-align:center;">Aprobados</th>
-                <th style="text-align:center;">Irregulares</th>
-                <th style="text-align:center;">Incidencias</th>
-                <th style="text-align:center;">Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows || '<tr><td colspan="8" style="text-align:center;">Sin datos de grupos</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `;
-  }
-
-  // ─── SECTION 4: CHARTS (CSS-BASED) ────────────────────────
-
-  function renderCharts(activeStudents) {
-    const total = activeStudents.length || 1;
-
-    // Alumnos por turno
-    const turnoCount = {};
-    K.TURNOS.forEach(t => { turnoCount[t] = 0; });
-    activeStudents.forEach(s => {
-      const t = s.turno || 'OTRO';
-      turnoCount[t] = (turnoCount[t] || 0) + 1;
-    });
-
-    const turnoColors = { MATUTINO: 'var(--color-primary)', VESPERTINO: 'var(--color-warning)' };
-    const turnoBars = Object.entries(turnoCount)
-      .filter(([, count]) => count > 0)
-      .map(([turno, count]) => {
-        const pct = (count / total) * 100;
-        const color = turnoColors[turno] || 'var(--color-text-light)';
-        return `
-          <div style="margin-bottom:12px;">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-              <span style="font-size:13px;font-weight:500;">${Utils.sanitize(turno)}</span>
-              <span style="font-size:13px;color:var(--color-text-light);">${count} (${pct.toFixed(0)}%)</span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-fill" style="width:${pct.toFixed(1)}%;background:${color};"></div>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-    // Distribucion por genero
-    const hombres = activeStudents.filter(s => s.sexo === 'H').length;
-    const mujeres = activeStudents.filter(s => s.sexo === 'M').length;
-    const hPct = (hombres / total) * 100;
-    const mPct = (mujeres / total) * 100;
-
-    const generoBars = `
-      <div style="margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-          <span style="font-size:13px;font-weight:500;">Hombres</span>
-          <span style="font-size:13px;color:var(--color-text-light);">${hombres} (${hPct.toFixed(0)}%)</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width:${hPct.toFixed(1)}%;background:var(--color-primary);"></div>
-        </div>
-      </div>
-      <div style="margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-          <span style="font-size:13px;font-weight:500;">Mujeres</span>
-          <span style="font-size:13px;color:var(--color-text-light);">${mujeres} (${mPct.toFixed(0)}%)</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width:${mPct.toFixed(1)}%;background:#ec4899;"></div>
-        </div>
-      </div>
-    `;
-
-    return `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px;">
-        <div class="card">
-          <h2 class="section-title" style="margin-bottom:16px;">
-            <span class="material-icons-round" style="vertical-align:middle;margin-right:8px;font-size:22px;">bar_chart</span>
-            Alumnos por Turno
-          </h2>
-          ${turnoBars || '<p style="color:var(--color-text-light);">Sin datos</p>'}
-        </div>
-        <div class="card">
-          <h2 class="section-title" style="margin-bottom:16px;">
-            <span class="material-icons-round" style="vertical-align:middle;margin-right:8px;font-size:22px;">wc</span>
-            Distribucion por Genero
-          </h2>
-          ${generoBars}
-        </div>
-      </div>
-    `;
-  }
-
-  // ─── MEGA CARD: IMPRIMIR TODAS LAS LISTAS EN 1 CLIC (dashboard del maestro) ───
-  // Esta función auxiliar genera el HTML del card. El binding de los clics se hace
-  // dentro de renderTeacherDashboard via document.querySelector después del innerHTML.
-  function _renderBulkPrintMegaCard(assignments, partials) {
-    if (!assignments || assignments.length === 0) return '';
-    const total = assignments.length;
-
-    // Determinar parcial activo: primero busca uno NO bloqueado.
-    // Si todos están bloqueados, toma el último (cronológicamente más reciente).
-    const partialState = (K.PARCIALES || []).map(kp => {
-      const doc = (partials || []).find(p => p.id === kp.id);
-      return { id: kp.id, label: kp.nombre, locked: doc?.locked === true };
-    });
-    const activePartial = partialState.find(p => !p.locked) || partialState[partialState.length - 1];
-    const defaultId = activePartial?.id || 'P1';
-
-    // 3 pastillas de parcial
-    const pills = partialState.map(p => {
-      const isActive = p.id === defaultId;
-      const lockedIcon = p.locked ? '🔒' : '🟢';
-      const statusLabel = p.locked
-        ? '<span style="font-size:11px;color:#475569;">Cerrado · imprimible</span>'
-        : '<span style="font-size:11px;color:#16a34a;font-weight:600;">En curso ✓</span>';
-      return `
-        <button data-bulk-partial="${p.id}"
-          class="bulk-pill${isActive ? ' active' : ''}"
-          style="${isActive ? 'background:#fde68a;border:3px solid #d97706;' : 'background:#fff;border:2px solid #d1d5db;'}
-                 border-radius:10px;padding:14px 18px;cursor:pointer;text-align:center;
-                 flex:1;min-width:140px;transition:all 0.15s;font-family:inherit;">
-          <div style="font-size:13px;font-weight:700;color:#78350f;margin-bottom:4px;">${Utils.sanitize(p.label)}</div>
-          <div style="font-size:18px;line-height:1;">${lockedIcon}</div>
-          <div style="margin-top:6px;">${statusLabel}</div>
-        </button>`;
-    }).join('');
-
-    const activeLabel = activePartial?.label || 'Parcial';
-
-    return `
-      <div id="bulk-print-mega-card" style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:3px solid #d97706;border-radius:14px;padding:22px 24px;margin-bottom:16px;box-shadow:0 4px 12px rgba(217,119,6,0.15);">
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
-          <span class="material-icons-round" style="font-size:44px;color:#b45309;">picture_as_pdf</span>
-          <div style="flex:1;">
-            <h3 style="font-size:18px;font-weight:800;margin:0 0 4px;color:#7c2d12;">
-              📄 Imprimir todas mis listas en 1 clic
-            </h3>
-            <p style="font-size:13px;color:#92400e;margin:0;line-height:1.45;">
-              Genera <strong>un solo PDF</strong> con tus <strong>${total} listas</strong> del parcial que elijas.
-              Lo puedes guardar como archivo o mandar directo a la impresora.
-            </p>
-          </div>
-        </div>
-
-        <div style="margin-bottom:14px;">
-          <div style="font-size:12px;font-weight:700;color:#7c2d12;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">
-            Elige parcial:
-          </div>
-          <div id="bulk-pills" style="display:flex;gap:10px;flex-wrap:wrap;">
-            ${pills}
-          </div>
-        </div>
-
-        <button id="bulk-print-mega-action"
-          data-partial-id="${defaultId}"
-          style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;
-                 background:linear-gradient(135deg,#d97706 0%,#b45309 100%);color:#fff;
-                 border:none;border-radius:10px;padding:18px 24px;font-size:16px;font-weight:800;
-                 cursor:pointer;box-shadow:0 4px 8px rgba(180,83,9,0.3);transition:transform 0.1s;
-                 font-family:inherit;">
-          <span class="material-icons-round" style="font-size:28px;">download</span>
-          <span id="bulk-action-label">OBTENER PDF — ${total} listas del ${Utils.sanitize(activeLabel)}</span>
-        </button>
-
-        <div style="text-align:center;margin-top:12px;">
-          <a href="#" id="bulk-go-granular" style="font-size:13px;color:#92400e;text-decoration:underline;">
-            ¿Solo necesitas algunas? Elegir manualmente las listas →
-          </a>
-        </div>
-      </div>`;
-  }
-
-  /** Vincula los clics del mega card (debe llamarse DESPUÉS de innerHTML). */
-  function _bindBulkPrintMegaCard(assignments, partials) {
-    const card = document.getElementById('bulk-print-mega-card');
-    if (!card) return;
-
-    const actionBtn = document.getElementById('bulk-print-mega-action');
-    const actionLabel = document.getElementById('bulk-action-label');
-
-    // Click en pastilla → cambiar parcial activo
-    card.querySelectorAll('[data-bulk-partial]').forEach(pill => {
-      pill.addEventListener('click', (e) => {
-        e.preventDefault();
-        const pid = pill.dataset.bulkPartial;
-        // Actualizar estilos: quitar active de todas, ponerla en la clicada
-        card.querySelectorAll('[data-bulk-partial]').forEach(p => {
-          p.style.background = '#fff';
-          p.style.border = '2px solid #d1d5db';
-          p.classList.remove('active');
-        });
-        pill.style.background = '#fde68a';
-        pill.style.border = '3px solid #d97706';
-        pill.classList.add('active');
-
-        // Actualizar el botón de acción
-        const partial = (K.PARCIALES || []).find(p => p.id === pid);
-        if (actionBtn) actionBtn.dataset.partialId = pid;
-        if (actionLabel) actionLabel.textContent = `OBTENER PDF — ${assignments.length} listas del ${partial?.nombre || pid}`;
-      });
-    });
-
-    // Click en botón principal → llamar a GradesModule.printMultipleAssignments
-    if (actionBtn) {
-      actionBtn.addEventListener('click', async () => {
-        const partialId = actionBtn.dataset.partialId || 'P1';
-        const ids = assignments.map(a => a.id);
-        try {
-          actionBtn.disabled = true;
-          actionBtn.style.opacity = '0.7';
-          if (actionLabel) actionLabel.textContent = 'Generando PDF, espera…';
-          await GradesModule.printMultipleAssignments(ids, partialId);
-        } catch (e) {
-          console.error('Error al generar PDF:', e);
-          if (typeof Toast !== 'undefined') Toast.show('No se pudo generar el PDF: ' + (e.message || ''), 'error');
-        } finally {
-          actionBtn.disabled = false;
-          actionBtn.style.opacity = '1';
-          const partial = (K.PARCIALES || []).find(p => p.id === partialId);
-          if (actionLabel) actionLabel.textContent = `OBTENER PDF — ${assignments.length} listas del ${partial?.nombre || partialId}`;
-        }
-      });
-    }
-
-    // Click en link "elegir manualmente" → ir a my-grades donde está el panel granular
-    const granular = document.getElementById('bulk-go-granular');
-    if (granular) {
-      granular.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (typeof Router !== 'undefined') Router.navigate('my-grades');
-      });
-    }
-  }
-
-  // ─── PUBLIC API ─────────────────────────────────────────────
   return { render };
 })();
 
-// Self-register in Router
-Router.modules['dashboard'] = () => DashboardModule.render();
+if (typeof Router !== 'undefined' && Router.modules) {
+  Router.modules['dashboard'] = () => DashboardModule.render();
+}

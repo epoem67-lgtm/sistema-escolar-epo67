@@ -82,10 +82,14 @@ const K = Object.freeze({
     { key: 'pe',  label: 'PUNTO EXTRA',          abbr: 'PUNTO<br>EXTRA',          max: 10, step: 0.1 }
   ]),
 
+  // Orden OFICIAL SEP en el PDF de Control Parcial: EC, TRANSVERSAL, EXAMEN, PE.
+  // Los maestros imprimen ese PDF y al comparar con el sistema notaban las
+  // columnas invertidas (parecía que los datos del examen estaban "cambiados").
+  // Las KEYS (ec/ex/tr/pe) NO cambian — los datos en Firestore se preservan.
   RUBROS_VESPERTINO: Object.freeze([
     { key: 'ec',  label: 'EVALUACIÓN CONTINUA',  abbr: 'EVALUACIÓN<br>CONTINUA',  max: 5,  step: 0.1 },
-    { key: 'ex',  label: 'EXAMEN PARCIAL',       abbr: 'EXAMEN<br>PARCIAL',       max: 3,  step: 0.1 },
     { key: 'tr',  label: 'TRANSVERSAL',          abbr: 'TRANSVERSAL',             max: 2,  step: 0.1 },
+    { key: 'ex',  label: 'EXAMEN PARCIAL',       abbr: 'EXAMEN<br>PARCIAL',       max: 3,  step: 0.1 },
     { key: 'pe',  label: 'PUNTO EXTRA',          abbr: 'PUNTO<br>EXTRA',          max: 10, step: 0.1 }
   ]),
 
@@ -185,15 +189,19 @@ const K = Object.freeze({
   // ═══════════════════════════════════════════════════════════
 
   SUBJECT_ORDER: Object.freeze({
+    // Orden oficial SEP/EPO 67 — Semestre 2 (1er grado)
+    // Ratificado por Olivia (mayo 2026): Taller de Ciencias I va INMEDIATAMENTE
+    // después de Ciencias Naturales (componente científico), antes de los
+    // componentes humanístico y socioemocional.
     1: [
       'LENGUA Y COMUNICACION II',
       'INGLES II',
       'PENSAMIENTO MATEMATICO II',
       'CULTURA DIGITAL II',
       'CIENCIAS NATURALES EXPERIMENTALES Y TECNOLOGIA II',
+      'TALLER DE CIENCIAS I',
       'PENSAMIENTO FILOSOFICO Y HUMANIDADES II',
       'CIENCIAS SOCIALES II',
-      'TALLER DE CIENCIAS I',
       'ACTIVIDADES FISICAS Y DEPORTIVAS II',
       'EDUCACION PARA LA SALUD II',
       'TEMAS SELECTOS DE IGUALDAD Y DERECHOS HUMANOS II'
@@ -261,7 +269,38 @@ const K = Object.freeze({
    *  (definida en RUBROS_MATUTINO / RUBROS_VESPERTINO). Cualquier otra
    *  clave se considera parte de la sumaBase.
    */
-  calcSuma(rubros) {
+  // ─── COMPONENTE SOCIOEMOCIONAL: bloqueo TOTAL de PE ──────────────────
+  // Gaceta oficial EPO 67: las materias del componente socioemocional NO
+  // aceptan punto extra de talleres en NINGÚN parcial (P1, P2 y P3).
+  // Lista de IDs verificada directo en la colección /subjects de Firestore
+  // (Mayo 2026) — son las 9 materias socioemocionales del semestre actual:
+  //   actividades físicas y deportivas, actividades artísticas y culturales,
+  //   educación para la salud, educación integral en sexualidad y género,
+  //   temas selectos de igualdad y derechos humanos,
+  //   práctica y colaboración ciudadana.
+  SUBJECTS_SIN_PE: Object.freeze([
+    'G1_actividades_físicas_y_deportivas_ii',
+    'G1_educación_para_la_salud_ii',
+    'G1_temas_selectos_de_igualdad_y_derechos_hu',
+    'G2_actividades_artísticas_y_culturales_i',
+    'G2_educación_integral_en_sexualidad_y_géner',
+    'G2_temas_selectos_de_igualdad_y_derechos_hu',
+    'G3_actividades_artísticas_y_culturales_iii',
+    'G3_práctica_y_colaboración_ciudadana_ii',
+    'G3_temas_selectos_de_igualdad_y_derechos_hu',
+  ]),
+  // Alias retrocompatible — código viejo puede seguir leyendo SUBJECTS_SIN_PE_P3.
+  get SUBJECTS_SIN_PE_P3() { return this.SUBJECTS_SIN_PE; },
+
+  /** ¿La materia acepta PE? Retorna false cuando es materia del componente
+   *  socioemocional (regla aplica en TODOS los parciales). El parámetro
+   *  `partial` se mantiene por compatibilidad pero ya no afecta la decisión. */
+  subjectAllowsPE(subjectId, _partial) {
+    if (!subjectId) return true;
+    return !this.SUBJECTS_SIN_PE.includes(subjectId);
+  },
+
+  calcSuma(rubros, opts) {
     const PASS = 6;
     let sumaBase = 0;
     let pe = 0;
@@ -272,16 +311,20 @@ const K = Object.freeze({
       if (key === 'pe') pe = n;
       else sumaBase += n;
     }
-    // Regla: PE solo cuenta si la base ya es aprobatoria
+    // Regla socioemocional: si la materia no permite PE, lo ignora en todo parcial.
+    if (opts && opts.subjectId && !this.subjectAllowsPE(opts.subjectId)) {
+      pe = 0;
+    }
+    // Regla EPO67: PE solo cuenta si la base ya es aprobatoria.
     const total = sumaBase < PASS ? sumaBase : sumaBase + pe;
     return Math.min(Math.round(total * 10) / 10, 10); // 1 decimal, cap 10
   },
 
-  /** Indica si el PUNTO EXTRA esta siendo IGNORADO por la regla EPO67.
-   *  Util para mostrar feedback visual en captura ("PE no aplica").
-   *  Retorna true solo cuando: hay un PE > 0 ingresado Y la sumaBase < 6.
-   *  No tiene efecto sobre el calculo (eso lo hace calcSuma); solo es informativo. */
-  isPEIgnored(rubros) {
+  /** Indica si el PUNTO EXTRA esta siendo IGNORADO. Razones posibles:
+   *   1. La materia es socioemocional (NUNCA acepta PE — todos los parciales)
+   *   2. La sumaBase < 6 (regla EPO67 clásica del PE)
+   *  Si pasas opts={subjectId}, considera ambas reglas. */
+  isPEIgnored(rubros, opts) {
     let sumaBase = 0;
     let pe = 0;
     for (const [key, val] of Object.entries(rubros || {})) {
@@ -291,6 +334,11 @@ const K = Object.freeze({
       if (key === 'pe') pe = n;
       else sumaBase += n;
     }
+    // Razón 1: PE bloqueado por regla socioemocional (todos los parciales)
+    if (opts && opts.subjectId && !this.subjectAllowsPE(opts.subjectId)) {
+      return pe > 0; // tenía PE escrito pero no aplica
+    }
+    // Razón 2: PE bloqueado por sumaBase < 6
     return pe > 0 && sumaBase < 6;
   },
 
@@ -302,6 +350,81 @@ const K = Object.freeze({
     if (isNaN(s)) return '';
     if (s >= 6) return Math.min(Math.round(s), 10);
     return 5; // Menor a 6 siempre es 5
+  },
+
+  /** v8.07: ¿Está el parcial CERRADO para un grado específico?
+   *
+   * Modelo de datos en partials/{P1|P2|P3}:
+   *   { locked: bool, lockedByGrade: { '1': bool, '2': bool, '3': bool } }
+   *
+   * Si `lockedByGrade` existe y tiene la clave del grado, manda.
+   * Si no, fallback al campo `locked` global (retrocompatible).
+   *
+   * @param {Object} partialDoc - doc de Firestore de partials/{P1|P2|P3}
+   * @param {number|string} grado - grado del alumno (1, 2 o 3)
+   * @returns {boolean} true si está cerrado para ese grado
+   */
+  isPartialLockedForGrade(partialDoc, grado) {
+    if (!partialDoc) return false;
+    const g = String(grado || '').trim();
+    if (partialDoc.lockedByGrade && typeof partialDoc.lockedByGrade === 'object') {
+      if (g && g in partialDoc.lockedByGrade) {
+        return partialDoc.lockedByGrade[g] === true;
+      }
+    }
+    return partialDoc.locked === true;
+  },
+
+  /** v8.07: ¿Se puede editar el parcial directamente para un grado?
+   *  (opuesto a isPartialLockedForGrade) */
+  isPartialOpenForGrade(partialDoc, grado) {
+    return !this.isPartialLockedForGrade(partialDoc, grado);
+  },
+
+  /** v8.07: Extrae el grado (1, 2, 3) desde un groupId tipo MATUTINO_2-3.
+   *  Devuelve number o null si no se puede inferir. */
+  gradeFromGroupId(groupId) {
+    if (!groupId) return null;
+    const m = String(groupId).match(/_(\d)-/);
+    return m ? Number(m[1]) : null;
+  },
+
+  /** v8.07: ¿La ventana de correcciones está abierta AHORA?
+   *  (lee el doc config/correctionsWindow ya cargado)
+   *
+   *  @param {Object} windowDoc - { open: bool, closesAt: Timestamp }
+   *  @returns {boolean} */
+  isCorrectionsWindowOpen(windowDoc) {
+    if (!windowDoc) return false;
+    if (windowDoc.open !== true) return false;
+    if (!windowDoc.closesAt) return true; // sin fecha de cierre, está abierta indefinida
+    const closes = windowDoc.closesAt.toDate
+      ? windowDoc.closesAt.toDate()
+      : new Date(windowDoc.closesAt);
+    return closes.getTime() > Date.now();
+  },
+
+  /** v8.10: Resuelve las 4 fechas críticas del ciclo PARA UN GRADO.
+   *  Si captureWindowDoc.byGrade[grado][campo] existe, manda; si no, fallback
+   *  al campo del nivel raíz (global). Permite "Tercer grado entrega antes
+   *  que primero y segundo" sin romper compatibilidad — los grados sin
+   *  override conservan las fechas globales.
+   *
+   *  @param {Object} cfg - documento config/captureWindow
+   *  @param {number|string} grado - 1, 2 o 3
+   *  @returns {{closesAt, deliveryDate, correctionsStart, correctionsEnd}}
+   */
+  captureWindowForGrade(cfg, grado) {
+    if (!cfg) return { opensAt: null, closesAt: null, deliveryDate: null, correctionsStart: null, correctionsEnd: null };
+    const g = String(grado || '').trim();
+    const byG = (cfg.byGrade && typeof cfg.byGrade === 'object' && g) ? (cfg.byGrade[g] || {}) : {};
+    return {
+      opensAt:         byG.opensAt         || cfg.opensAt         || null,
+      closesAt:        byG.closesAt        || cfg.closesAt        || null,
+      deliveryDate:    byG.deliveryDate    || cfg.deliveryDate    || null,
+      correctionsStart: byG.correctionsStart || cfg.correctionsStart || null,
+      correctionsEnd:  byG.correctionsEnd  || cfg.correctionsEnd  || null,
+    };
   },
 
   /** Nombre oficial de UAC */

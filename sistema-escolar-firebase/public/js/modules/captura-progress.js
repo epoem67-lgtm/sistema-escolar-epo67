@@ -31,8 +31,11 @@ const CapturaProgressModule = (function () {
       });
       const currentPartialId = openPartial ? openPartial.id : K.PARCIALES[0].id;
 
-      // Load all grades in a single query (cached 5 min)
-      const allGrades = await Store.getAllGrades(true);
+      // Load all grades in a single query (cached 5 min — sin force=true).
+      // Antes hacíamos getAllGrades(true) que IGNORABA el cache y siempre
+      // re-consultaba Firestore (~10s en cada apertura). Ahora respetamos
+      // el TTL de 5min; cuando admin necesite refresh tira el cache aparte.
+      const allGrades = await Store.getAllGrades();
       const partialGrades = allGrades.filter(g => g.partial === currentPartialId);
 
       // Build lookup maps
@@ -43,21 +46,34 @@ const CapturaProgressModule = (function () {
       const subjectMap = {};
       subjects.forEach(s => { subjectMap[s.id] = s; });
 
+      // PRE-INDEX para evitar N² (218 assignments × 800 students × 5000 grades).
+      // Antes: students.filter() + partialGrades.filter() por cada assignment
+      //   = ~5.8M comparaciones, ~3s bloqueando UI.
+      // Ahora: 1 pasada de indexado + lookup O(1) por assignment.
+      const studentsByGroupId = new Map();
+      for (const s of students) {
+        if (s.estatus !== 'ACTIVO' || s.bajaPendiente) continue;
+        const gid = s.groupId;
+        if (!gid) continue;
+        if (!studentsByGroupId.has(gid)) studentsByGroupId.set(gid, []);
+        studentsByGroupId.get(gid).push(s);
+      }
+      const gradeCountByAssignment = new Map();
+      for (const g of partialGrades) {
+        const key = g.groupId + '|' + g.subjectId;
+        gradeCountByAssignment.set(key, (gradeCountByAssignment.get(key) || 0) + 1);
+      }
+
       // For each assignment, check if grades exist
       const progress = assignments.map(asg => {
         const group = groupMap[asg.groupId];
         const teacher = teacherMap[asg.teacherId];
         const subject = subjectMap[asg.subjectId];
 
-        // Count students in this group
-        const groupStudents = students.filter(s => s.groupId === asg.groupId && s.estatus === 'ACTIVO');
+        // O(1) lookups en lugar de filter()
+        const groupStudents = studentsByGroupId.get(asg.groupId) || [];
         const totalStudents = groupStudents.length;
-
-        // Count grades for this assignment+partial
-        const gradesForThis = partialGrades.filter(g =>
-          g.groupId === asg.groupId && g.subjectId === asg.subjectId
-        );
-        const gradedCount = gradesForThis.length;
+        const gradedCount = gradeCountByAssignment.get(asg.groupId + '|' + asg.subjectId) || 0;
         const pct = totalStudents > 0 ? Math.round((gradedCount / totalStudents) * 100) : 0;
 
         return {
@@ -78,12 +94,21 @@ const CapturaProgressModule = (function () {
         };
       });
 
-      // Sort: pendientes first, then by turno, grado, group
+      // Sort: pendientes first, then by turno, grado, group, SEP de materia
+      const _sepIdx = (name, grado) => {
+        const order = (K.SUBJECT_ORDER && K.SUBJECT_ORDER[Number(grado)]) || [];
+        const i = order.findIndex(n => K.normalizeSubjectName ? K.normalizeSubjectName(n) === K.normalizeSubjectName(name) : n === name);
+        return i === -1 ? 9999 : i;
+      };
       progress.sort((a, b) => {
         const statusOrder = { pendiente: 0, parcial: 1, completo: 2 };
         const d = (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0);
         if (d !== 0) return d;
-        return a.turno.localeCompare(b.turno) || (a.grado - b.grado) || a.groupName.localeCompare(b.groupName);
+        return (a.turno || '').localeCompare(b.turno || '') ||
+               ((Number(a.grado) || 0) - (Number(b.grado) || 0)) ||
+               (a.groupName || '').localeCompare(b.groupName || '') ||
+               (_sepIdx(a.subjectName, a.grado) - _sepIdx(b.subjectName, b.grado)) ||
+               (a.subjectName || '').localeCompare(b.subjectName || '');
       });
 
       // Stats

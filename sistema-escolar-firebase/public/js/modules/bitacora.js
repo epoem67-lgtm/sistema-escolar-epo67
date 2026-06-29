@@ -2,7 +2,8 @@
  * MÓDULO DE BITÁCORA — Sistema Escolar EPO 67
  *
  * Muestra el registro de auditoría completo del sistema.
- * Acceso: solo administradores.
+ * Acceso: admin, subdirector y directivo (alineado con firestore.rules
+ * y con la tabla ACCESS en app.js).
  *
  * Funcionalidades:
  * - Vista cronológica de todas las acciones del sistema
@@ -39,12 +40,12 @@ const BitacoraModule = (function () {
   const ENTITY_LABELS = {
     'alumno': 'Alumno',
     'docente': 'Docente',
-    'calificacion': 'Calificación',
-    'asignacion': 'Asignación',
+    'calificación': 'Calificación',
+    'asignación': 'Asignación',
     'usuario': 'Usuario',
     'incidencia': 'Incidencia',
     'parcial': 'Parcial',
-    'configuracion': 'Configuración',
+    'configuración': 'Configuración',
     'asistencia': 'Asistencia',
     'sesion': 'Sesión'
   };
@@ -57,8 +58,9 @@ const BitacoraModule = (function () {
     const container = document.querySelector(CONTAINER);
     if (!container) return;
 
-    if (App.currentUser?.role !== 'admin') {
-      container.innerHTML = `<div class="module-container">${UI.emptyState('block', 'Acceso solo para administradores')}</div>`;
+    const role = App.currentUser?.role;
+    if (!['admin', 'subdirector', 'directivo'].includes(role)) {
+      container.innerHTML = `<div class="module-container">${UI.emptyState('block', 'Acceso restringido. Si necesitas ver la bitácora del sistema contacta al administrador.')}</div>`;
       return;
     }
 
@@ -100,7 +102,7 @@ const BitacoraModule = (function () {
         ${UI.pageHeader('Bitácora del Sistema', 'Registro de todas las acciones realizadas en el sistema')}
 
         <!-- ═══ ESTADÍSTICAS RÁPIDAS ═══ -->
-        <div class="stats-grid" style="margin-bottom:16px;" id="bitacora-stats"></div>
+        <div class="stats-grid" style="margin-bottom:16px;" id="bitácora-stats"></div>
 
         <!-- ═══ FILTROS ═══ -->
         <div class="card" style="margin-bottom:16px;">
@@ -147,8 +149,8 @@ const BitacoraModule = (function () {
 
         <!-- ═══ TABLA DE REGISTROS ═══ -->
         <div class="card" style="padding:0;">
-          <div id="bitacora-table" style="overflow-x:auto;"></div>
-          <div id="bitacora-pagination" style="padding:12px;text-align:center;"></div>
+          <div id="bitácora-table" style="overflow-x:auto;"></div>
+          <div id="bitácora-pagination" style="padding:12px;text-align:center;"></div>
         </div>
       </div>`;
 
@@ -204,7 +206,7 @@ const BitacoraModule = (function () {
   }
 
   function renderStats() {
-    const container = document.getElementById('bitacora-stats');
+    const container = document.getElementById('bitácora-stats');
     if (!container) return;
 
     const today = new Date();
@@ -223,7 +225,7 @@ const BitacoraModule = (function () {
   }
 
   function renderTable() {
-    const container = document.getElementById('bitacora-table');
+    const container = document.getElementById('bitácora-table');
     if (!container) return;
 
     const start = currentPage * PAGE_SIZE;
@@ -246,10 +248,10 @@ const BitacoraModule = (function () {
       const detailId = `detail-${log.id}`;
 
       rows += `
-        <tr class="bitacora-row ${hasDetail ? 'bitacora-expandable' : ''}" ${hasDetail ? `data-detail="${detailId}"` : ''}>
+        <tr class="bitácora-row ${hasDetail ? 'bitácora-expandable' : ''}" ${hasDetail ? `data-detail="${detailId}"` : ''}>
           <td style="text-align:center;font-size:11px;color:var(--text-light);">${start + i + 1}</td>
           <td>
-            <span class="bitacora-action-badge" style="background:${actionMeta.color}15;color:${actionMeta.color};border:1px solid ${actionMeta.color}30;">
+            <span class="bitácora-action-badge" style="background:${actionMeta.color}15;color:${actionMeta.color};border:1px solid ${actionMeta.color}30;">
               <span class="material-icons-round" style="font-size:14px;">${actionMeta.icon}</span>
               ${Utils.sanitize(actionMeta.label)}
             </span>
@@ -260,12 +262,12 @@ const BitacoraModule = (function () {
           <td style="font-size:12px;white-space:nowrap;">${dateStr}</td>
           <td style="font-size:12px;white-space:nowrap;color:var(--text-light);">${timeStr}</td>
           <td style="text-align:center;">
-            ${hasDetail ? `<button class="btn-icon bitacora-expand-btn" data-target="${detailId}" title="Ver detalle"><span class="material-icons-round" style="font-size:16px;">expand_more</span></button>` : ''}
+            ${hasDetail ? `<button class="btn-icon bitácora-expand-btn" data-target="${detailId}" title="Ver detalle"><span class="material-icons-round" style="font-size:16px;">expand_more</span></button>` : ''}
           </td>
         </tr>
-        ${hasDetail ? `<tr id="${detailId}" class="bitacora-detail-row" style="display:none;">
+        ${hasDetail ? `<tr id="${detailId}" class="bitácora-detail-row" style="display:none;">
           <td colspan="8">
-            <div class="bitacora-detail-content">${_renderDetail(log)}</div>
+            <div class="bitácora-detail-content">${_renderDetail(log)}</div>
           </td>
         </tr>` : ''}`;
     });
@@ -288,7 +290,7 @@ const BitacoraModule = (function () {
       </table>`;
 
     // Bind expand buttons
-    container.querySelectorAll('.bitacora-expand-btn').forEach(btn => {
+    container.querySelectorAll('.bitácora-expand-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const targetId = btn.dataset.target;
         const row = document.getElementById(targetId);
@@ -301,10 +303,10 @@ const BitacoraModule = (function () {
     });
 
     // Click on row to expand
-    container.querySelectorAll('.bitacora-expandable').forEach(row => {
+    container.querySelectorAll('.bitácora-expandable').forEach(row => {
       row.addEventListener('click', (e) => {
-        if (e.target.closest('.bitacora-expand-btn')) return;
-        const btn = row.querySelector('.bitacora-expand-btn');
+        if (e.target.closest('.bitácora-expand-btn')) return;
+        const btn = row.querySelector('.bitácora-expand-btn');
         if (btn) btn.click();
       });
     });
@@ -314,41 +316,41 @@ const BitacoraModule = (function () {
     let html = '';
 
     if (log.entityId) {
-      html += `<div class="bitacora-detail-field"><span class="label">ID:</span> <code>${Utils.sanitize(log.entityId)}</code></div>`;
+      html += `<div class="bitácora-detail-field"><span class="label">ID:</span> <code>${Utils.sanitize(log.entityId)}</code></div>`;
     }
     if (log.userName) {
-      html += `<div class="bitacora-detail-field"><span class="label">Nombre usuario:</span> ${Utils.sanitize(log.userName)}</div>`;
+      html += `<div class="bitácora-detail-field"><span class="label">Nombre usuario:</span> ${Utils.sanitize(log.userName)}</div>`;
     }
     if (log.userRole) {
-      html += `<div class="bitacora-detail-field"><span class="label">Rol:</span> <span class="badge">${Utils.sanitize(log.userRole)}</span></div>`;
+      html += `<div class="bitácora-detail-field"><span class="label">Rol:</span> <span class="badge">${Utils.sanitize(log.userRole)}</span></div>`;
     }
 
     if (log.before) {
-      html += `<div class="bitacora-detail-section">
-        <div class="bitacora-detail-section-title" style="color:#e53e3e;">Antes (datos eliminados/modificados):</div>
-        <pre class="bitacora-json">${Utils.sanitize(JSON.stringify(log.before, null, 2))}</pre>
+      html += `<div class="bitácora-detail-section">
+        <div class="bitácora-detail-section-title" style="color:#e53e3e;">Antes (datos eliminados/modificados):</div>
+        <pre class="bitácora-json">${Utils.sanitize(JSON.stringify(log.before, null, 2))}</pre>
       </div>`;
     }
 
     if (log.after) {
-      html += `<div class="bitacora-detail-section">
-        <div class="bitacora-detail-section-title" style="color:#38a169;">Después (datos nuevos/actualizados):</div>
-        <pre class="bitacora-json">${Utils.sanitize(JSON.stringify(log.after, null, 2))}</pre>
+      html += `<div class="bitácora-detail-section">
+        <div class="bitácora-detail-section-title" style="color:#38a169;">Después (datos nuevos/actualizados):</div>
+        <pre class="bitácora-json">${Utils.sanitize(JSON.stringify(log.after, null, 2))}</pre>
       </div>`;
     }
 
     if (log.extra) {
-      html += `<div class="bitacora-detail-section">
-        <div class="bitacora-detail-section-title">Información adicional:</div>
-        <pre class="bitacora-json">${Utils.sanitize(JSON.stringify(log.extra, null, 2))}</pre>
+      html += `<div class="bitácora-detail-section">
+        <div class="bitácora-detail-section-title">Información adicional:</div>
+        <pre class="bitácora-json">${Utils.sanitize(JSON.stringify(log.extra, null, 2))}</pre>
       </div>`;
     }
 
     // Legacy support for old logs
     if (log.details && typeof log.details === 'object' && !log.before && !log.after) {
-      html += `<div class="bitacora-detail-section">
-        <div class="bitacora-detail-section-title">Detalles (registro anterior):</div>
-        <pre class="bitacora-json">${Utils.sanitize(JSON.stringify(log.details, null, 2))}</pre>
+      html += `<div class="bitácora-detail-section">
+        <div class="bitácora-detail-section-title">Detalles (registro anterior):</div>
+        <pre class="bitácora-json">${Utils.sanitize(JSON.stringify(log.details, null, 2))}</pre>
       </div>`;
     }
 
@@ -356,7 +358,7 @@ const BitacoraModule = (function () {
   }
 
   function renderPagination() {
-    const container = document.getElementById('bitacora-pagination');
+    const container = document.getElementById('bitácora-pagination');
     if (!container) return;
 
     const totalPages = Math.ceil(filteredLogs.length / PAGE_SIZE);
@@ -413,7 +415,7 @@ const BitacoraModule = (function () {
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Bitácora');
-      XLSX.writeFile(wb, `Bitacora_EPO67_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      XLSX.writeFile(wb, `Bitácora_EPO67_${new Date().toISOString().slice(0, 10)}.xlsx`);
       Toast.show('Excel exportado', 'success');
     } catch (err) {
       console.error(err);
@@ -425,3 +427,4 @@ const BitacoraModule = (function () {
 })();
 
 Router.modules['bitacora'] = () => BitacoraModule.render();
+Router.modules['bitácora'] = () => BitacoraModule.render();

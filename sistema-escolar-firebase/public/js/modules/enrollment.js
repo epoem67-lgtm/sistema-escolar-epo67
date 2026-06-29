@@ -197,7 +197,7 @@ const EnrollmentModule = (() => {
         </div>
         <div class="form-group">
           <label>Domicilio de Contacto</label>
-          <input type="text" id="enrollDireccion" placeholder="Calle, n\u00famero, colonia, municipio">
+          <input type="text" id="enrollDirección" placeholder="Calle, n\u00famero, colonia, municipio">
         </div>
         <div class="form-group">
           <label>Tel\u00e9fono de Contacto</label>
@@ -226,7 +226,7 @@ const EnrollmentModule = (() => {
     const folio = document.getElementById('enrollFolio').value.trim();
     const curp = document.getElementById('enrollCurp').value.trim();
     const tutorNombre = document.getElementById('enrollTutor').value.trim();
-    const direccionContacto = document.getElementById('enrollDireccion').value.trim();
+    const direccionContacto = document.getElementById('enrollDirección').value.trim();
     const telefonoContacto = document.getElementById('enrollTelefono').value.trim();
 
     if (!nombres || !apellido1 || !groupId) {

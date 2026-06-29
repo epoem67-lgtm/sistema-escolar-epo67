@@ -251,7 +251,18 @@ const ConcentradoModule = (() => {
       allSubjects = subjects;
       allAssignments = assignments;
       const groupIds = allGroups.map(g => g.id);
-      allGrades = groupIds.length > 0 ? await Store.getGradesByGroups(groupIds, true) : [];
+      // v8.26: grades SELLADAS — prefiere snapshots certificados de cada grupo.
+      // Esto blinda el concentrado contra ediciones posteriores a la firma.
+      if (groupIds.length > 0) {
+        const sealedArrays = await Promise.all(
+          groupIds.map(gid => Store.getSealedGradesByGroup(gid, { force: true }).catch(() => []))
+        );
+        allGrades = sealedArrays.flat();
+        const fromSnap = allGrades.filter(function(g){return g.__fromSnapshot;}).length;
+        console.log('[concentrado] grades cargados:', allGrades.length, '(' + fromSnap + ' del snapshot)');
+      } else {
+        allGrades = [];
+      }
     } catch (e) {
       console.error('Error cargando datos de concentrado:', e);
       Toast.show('Error al cargar datos', 'error');

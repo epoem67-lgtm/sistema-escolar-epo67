@@ -411,8 +411,10 @@
             });
           });
         } else {
-          // Maestro/Orientador: cargar solo los datos a los que tiene acceso
-          const myAsg = await Store.getMyAssignments().catch(() => []);
+          // Maestro/Orientador: cargar solo los datos a los que tiene acceso.
+          // v8.09: STRICT — usar getOwnAssignments() para que un maestro con
+          // role aditivo (Jessica) NO pueda buscar alumnos de otros grupos.
+          const myAsg = await Store.getOwnAssignments().catch(() => []);
           const myGroupIds = [...new Set(myAsg.map(a => a.groupId))];
           const [students, groups] = await Promise.all([
             myGroupIds.length ? Store.getStudentsByGroups(myGroupIds).catch(() => []) : Promise.resolve([]),

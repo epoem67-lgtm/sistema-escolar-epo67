@@ -40,11 +40,15 @@
   // Verificación inicial al cargar
   document.addEventListener('DOMContentLoaded', () => {
     _checkConnection();
-    // Cheque periódico cada 60s con un fetch real, pero TOLERANTE:
+    // Cheque periódico cada 2 minutos con un fetch real, pero TOLERANTE:
     // un solo fallo no marca offline (puede ser un blip transitorio).
     // Solo después de 2 fallos consecutivos mostramos el banner.
+    // OPT: SOLO ejecutamos si la pestaña está visible — sin esto, pestañas
+    // de fondo siguen haciendo fetch cada minuto y degradan el rendimiento
+    // del navegador con muchas pestañas abiertas.
     let consecutiveFails = 0;
     setInterval(async () => {
+      if (document.visibilityState !== 'visible') return; // skip en pestaña oculta
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 5000); // 5s timeout
@@ -55,8 +59,7 @@
       } catch (_) {
         consecutiveFails++;
         if (consecutiveFails >= 2) _showOffline();
-        // 1er fallo: callado, esperar al siguiente chequeo
       }
-    }, 60000);
+    }, 120000); // 2 min, era 60s
   });
 })();

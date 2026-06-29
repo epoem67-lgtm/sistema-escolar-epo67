@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Verificar lista oficial — Sistema EPO 67</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;}
+    body{
+      margin:0;font-family:system-ui,-apple-system,'Inter',sans-serif;
+      background:linear-gradient(135deg,#1e3a8a 0%,#4c1d95 100%);
+      min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;
+      color:#1f2937;
+    }
+    .card{
+      background:#fff;border-radius:14px;padding:32px 28px;max-width:560px;width:100%;
+      box-shadow:0 20px 50px rgba(0,0,0,.25);
+    }
+    h1{margin:0 0 4px;font-size:22px;color:#1e3a8a;text-align:center;}
+    .subtitle{text-align:center;color:#64748b;font-size:13px;margin:0 0 22px;}
+    label{display:block;font-size:13px;font-weight:600;margin:14px 0 5px;color:#374151;}
+    input{
+      width:100%;padding:12px 14px;font-size:17px;border:1.5px solid #cbd5e1;
+      border-radius:8px;background:#f8fafc;font-family:'Courier New',monospace;
+      letter-spacing:2px;text-transform:uppercase;text-align:center;
+    }
+    input:focus{outline:none;border-color:#3b82f6;background:#fff;}
+    .btn{
+      width:100%;padding:13px;margin-top:18px;font-size:15px;font-weight:700;
+      border:none;border-radius:8px;cursor:pointer;background:#1e40af;color:#fff;
+    }
+    .btn:hover{background:#1e3a8a;}
+    .btn:disabled{opacity:.6;cursor:wait;}
+    .result{margin-top:20px;padding:16px;border-radius:8px;display:none;}
+    .result h3{margin:0 0 10px;font-size:18px;}
+    .result.ok{background:#f0fdf4;border:2px solid #86efac;color:#15803d;display:block;}
+    .result.warn{background:#fef3c7;border:2px solid #fcd34d;color:#92400e;display:block;}
+    .result.err{background:#fef2f2;border:2px solid #fca5a5;color:#b91c1c;display:block;}
+    .meta{margin-top:10px;font-size:13px;line-height:1.6;}
+    .meta strong{color:#1e293b;}
+    .links{text-align:center;margin-top:14px;font-size:13px;}
+    .links a{color:#1e40af;text-decoration:none;font-weight:600;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔐 Verificar lista oficial</h1>
+    <p class="subtitle">Escribe el código de certificación que aparece al pie de la lista impresa.</p>
+
+    <form id="form">
+      <label for="hash">Código de certificación (8 caracteres)</label>
+      <input id="hash" type="text" placeholder="A1B2C3D4" maxlength="8" required autocomplete="off">
+      <button type="submit" class="btn" id="btnVerify">Verificar</button>
+    </form>
+
+    <div id="result" class="result"></div>
+
+    <div class="links">
+      <a href="/">← Volver al sistema</a>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script>
+    firebase.initializeApp({
+      apiKey: "AIzaSyDX4za0avN20Lplmf5LAR7pdfZlvNtvcJc",
+      authDomain: "epo67-sistema.firebaseapp.com",
+      projectId: "epo67-sistema",
+      storageBucket: "epo67-sistema.firebasestorage.app",
+      messagingSenderId: "425082037377",
+      appId: "1:425082037377:web:4bd72a502c874acfa25980"
+    });
+    const db = firebase.firestore();
+
+    const $ = id => document.getElementById(id);
+
+    // Auto-llenar si viene hash en URL (/verificar/ABC12345 o /verificar?h=ABC12345)
+    const pathMatch = location.pathname.match(/\/verificar\/?([A-F0-9]{8})/i);
+    const urlHash = pathMatch ? pathMatch[1] : new URLSearchParams(location.search).get('h');
+    if (urlHash) $('hash').value = urlHash.toUpperCase();
+
+    function show(type, html) {
+      const r = $('result');
+      r.className = 'result ' + type;
+      r.innerHTML = html;
+    }
+
+    async function verify(hash) {
+      const btn = $('btnVerify');
+      btn.disabled = true;
+      btn.textContent = '⏳ Buscando...';
+
+      try {
+        // Busca snapshots con ese hash
+        const snap = await db.collection('certifiedSnapshots').where('hash', '==', hash).get();
+        if (snap.empty) {
+          show('err',
+            '<h3>🚫 Código no encontrado</h3>' +
+            '<div class="meta">Este código no corresponde a ninguna lista emitida por el sistema. ' +
+            'El documento podría estar alterado o el código mal transcrito.</div>'
+          );
+          return;
+        }
+
+        const docs = snap.docs.map(d => d.data());
+        const target = docs[0];
+        const groupId = target.groupId;
+        const subjectId = target.subjectId;
+        const partial = target.partial;
+        const certifiedAtIso = target.certifiedAtIso;
+
+        // Buscar el snapshot MAS RECIENTE para ese mismo (grupo, materia, parcial)
+        const all = await db.collection('certifiedSnapshots')
+          .where('groupId', '==', groupId)
+          .where('subjectId', '==', subjectId)
+          .where('partial', '==', partial)
+          .get();
+        const allDocs = all.docs.map(d => d.data()).sort((a, b) =>
+          (b.certifiedAtIso || '').localeCompare(a.certifiedAtIso || '')
+        );
+        const latest = allDocs[0];
+        const isLatest = latest && latest.hash === hash;
+
+        const meta = `
+          <div class="meta">
+            <strong>Grupo:</strong> ${target.groupId}<br>
+            <strong>Materia:</strong> ${target.subjectId}<br>
+            <strong>Parcial:</strong> ${target.partial}<br>
+            <strong>Maestro:</strong> ${target.teacherName || '—'}<br>
+            <strong>Alumnos:</strong> ${target.itemCount || target.items?.length || 0}<br>
+            <strong>Fecha de impresión:</strong> ${new Date(certifiedAtIso).toLocaleString('es-MX')}
+          </div>`;
+
+        if (isLatest) {
+          show('ok',
+            '<h3>✅ Versión VIGENTE</h3>' +
+            '<div class="meta">Este código corresponde a la versión MÁS RECIENTE del sistema.</div>' +
+            meta
+          );
+        } else {
+          const newerCount = allDocs.findIndex(d => d.hash === hash);
+          show('warn',
+            '<h3>⚠ Versión OBSOLETA</h3>' +
+            '<div class="meta">Este código existe pero NO es la versión más reciente. El maestro ' +
+            'imprimió ' + newerCount + ' versión(es) posteriores. La última tiene código <strong>' +
+            (latest.hash || '?') + '</strong> y fue impresa el ' + new Date(latest.certifiedAtIso).toLocaleString('es-MX') +
+            '.</div>' + meta
+          );
+        }
+      } catch (e) {
+        show('err',
+          '<h3>❌ Error al verificar</h3>' +
+          '<div class="meta">' + (e.message || 'Error desconocido') + '</div>'
+        );
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Verificar';
+      }
+    }
+
+    $('form').addEventListener('submit', e => {
+      e.preventDefault();
+      const hash = $('hash').value.trim().toUpperCase();
+      if (hash.length !== 8) {
+        show('err', '<h3>⚠ Código incompleto</h3><div class="meta">El código debe tener 8 caracteres.</div>');
+        return;
+      }
+      verify(hash);
+    });
+
+    // Auto-verificar si vino en la URL
+    if (urlHash && urlHash.length === 8) {
+      verify(urlHash.toUpperCase());
+    }
+  </script>
+</body>
+</html>

@@ -203,7 +203,7 @@ const StudentsModule = (() => {
         <div class="filter-bar-grid filter-bar-grid--search">
           <div class="form-group">
             <label>Buscar por nombre</label>
-            <input type="text" id="searchInput" placeholder="Ingrese nombre, apellido...">
+            <input type="text" id="searchInput" placeholder="Ingrese nombre, apellido..." value="${Utils.sanitize(state.filters.searchText || '')}">
           </div>
           <div class="filter-bar-actions">
             <button id="clearFiltersBtn" class="btn btn-outline btn-sm">
@@ -243,6 +243,7 @@ const StudentsModule = (() => {
             <span class="badge ${badgeClass}">
               ${Utils.sanitize(student.estatus || '')}
             </span>
+            ${student.bajaPendiente ? '<span class="badge" style="background:#f97316;color:#fff;margin-left:4px;font-size:0.7rem;">TRASLADO</span>' : ''}
           </td>
           <td>${Utils.sanitize(student.expediente || '')}</td>
         </tr>
@@ -379,7 +380,11 @@ const StudentsModule = (() => {
           </div>
           <div class="form-group">
             <label>Estatus</label>
-            <div><span class="badge ${badgeClass}">${Utils.sanitize(student.estatus || '-')}</span></div>
+            <div>
+              <span class="badge ${badgeClass}">${Utils.sanitize(student.estatus || '-')}</span>
+              ${student.bajaPendiente ? `<span class="badge" style="background:#f97316;color:#fff;margin-left:6px;">TRASLADO PENDIENTE</span>` : ''}
+            </div>
+            ${student.bajaPendiente ? `<div style="margin-top:6px;font-size:0.8rem;color:#666;">Motivo: ${Utils.sanitize(student.bajaPendienteReason || '-')}. Sus celdas aparecerán vacías en boletas y no afectarán promedios hasta que se autorice la baja oficial.</div>` : ''}
           </div>
           <div class="form-group">
             <label>Expediente</label>
@@ -393,12 +398,17 @@ const StudentsModule = (() => {
       </div>
     `;
 
-    const isAdmin = App.currentUser?.role === 'admin';
+    // Subdirector también puede eliminar alumnos (autoridad académica equivalente).
+    const _r = App.currentUser?.role;
+    const isAdmin = _r === 'admin' || _r === 'subdirector';
     const isActive = student.estatus === 'ACTIVO';
+    const isPending = !!student.bajaPendiente;
 
     const footerHtml = `
       <div class="btn-group">
         <button class="btn btn-primary" data-action="edit-student" data-student-id="${student.id}">Editar</button>
+        ${isActive && !isPending ? `<button class="btn btn-outline" data-action="traslado-student" data-student-id="${student.id}" style="border-color:#f97316;color:#c2410c;">Marcar Traslado Pendiente</button>` : ''}
+        ${isActive && isPending ? `<button class="btn btn-outline" data-action="quitar-traslado-student" data-student-id="${student.id}">Quitar Traslado Pendiente</button>` : ''}
         ${isActive ? `<button class="btn btn-warning" data-action="baja-student" data-student-id="${student.id}">Dar de Baja</button>` : ''}
         ${!isActive ? `<button class="btn btn-success" data-action="reactivar-student" data-student-id="${student.id}">Reactivar</button>` : ''}
         ${isAdmin ? `<button class="btn btn-danger" data-action="delete-student" data-student-id="${student.id}">Eliminar</button>` : ''}
@@ -418,6 +428,8 @@ const StudentsModule = (() => {
       else if (action === 'edit-student') { Modal.close(); showEditStudentModal(sid); }
       else if (action === 'baja-student') { Modal.close(); showBajaModal(sid); }
       else if (action === 'reactivar-student') { Modal.close(); reactivarStudent(sid); }
+      else if (action === 'traslado-student') { Modal.close(); showTrasladoModal(sid); }
+      else if (action === 'quitar-traslado-student') { Modal.close(); quitarTrasladoPendiente(sid); }
       else if (action === 'delete-student') { Modal.close(); confirmDeleteStudent(sid); }
     });
   }
@@ -671,6 +683,125 @@ const StudentsModule = (() => {
   }
 
   /**
+   * Marca un alumno como "traslado pendiente": sigue inscrito (estatus ACTIVO)
+   * pero sus celdas salen vacías en boletas/preboletas/tira/concentrado y
+   * no afecta promedios. Para casos donde el sistema oficial no autoriza la
+   * baja hasta fin de semestre pero el alumno ya se cambió de institución.
+   */
+  function showTrasladoModal(studentId) {
+    const student = allStudents.find(s => s.id === studentId);
+    if (!student) return;
+
+    const message = `
+      <div class="modal-form-grid modal-form-grid--single">
+        <div class="form-group">
+          <label>Alumno</label>
+          <div class="detail-value detail-value--lg">${Utils.sanitize(student.nombreCompleto || '-')}</div>
+        </div>
+        <div class="form-group">
+          <label>Motivo</label>
+          <select id="trasladoReason">
+            <option value="Traslado">Traslado a otra institución</option>
+            <option value="Cambio de turno">Cambio de turno</option>
+            <option value="Suspensión temporal">Suspensión temporal</option>
+            <option value="Otra">Otra</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Detalle</label>
+          <textarea id="trasladoDetail" rows="3" placeholder="Detalle adicional..."></textarea>
+        </div>
+        <div class="alert alert-warning" style="margin-top:8px;">
+          <strong>Aviso</strong> — El alumno seguirá inscrito oficialmente (estatus ACTIVO) pero:
+          <ul style="margin:6px 0 0 18px;">
+            <li>Sus celdas saldrán <strong>vacías</strong> en boletas, preboletas, tira de materias y concentrado.</li>
+            <li>Los maestros NO podrán capturar calificaciones para este alumno.</li>
+            <li>No afectará promedios grupales.</li>
+            <li>Calificaciones previas (si las hay) se ocultan del display pero quedan guardadas en Firestore.</li>
+          </ul>
+          Cuando se autorice la baja oficial, da clic en "Dar de Baja" para hacerla definitiva.
+        </div>
+      </div>
+    `;
+
+    Modal.confirm(
+      `Marcar Traslado Pendiente: ${Utils.sanitize(student.nombreCompleto || 'Estudiante')}`,
+      message,
+      async () => {
+        try {
+          const reason = document.getElementById('trasladoReason')?.value || 'Traslado';
+          const detail = document.getElementById('trasladoDetail')?.value?.trim() || '';
+
+          await db.collection('students').doc(studentId).update({
+            bajaPendiente: true,
+            bajaPendienteReason: reason,
+            bajaPendienteDetails: detail,
+            bajaPendienteDate: new Date(),
+            bajaPendienteBy: auth.currentUser.uid
+          });
+
+          DB.audit('editar', 'alumno', studentId, {
+            description: `Alumno marcado como traslado pendiente: ${student.nombreCompleto}`,
+            before: { bajaPendiente: !!student.bajaPendiente },
+            after: { bajaPendiente: true, bajaPendienteReason: reason },
+            extra: { reason, detail }
+          });
+
+          Store.invalidate('students');
+          Toast.show('Alumno marcado como traslado pendiente', 'success');
+
+          allStudents = await Store.getStudents(true);
+          allStudents.sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+          applyFilters();
+          render();
+        } catch (error) {
+          console.error('Error marcando traslado:', error);
+          Toast.show('Error al marcar traslado: ' + error.message, 'error');
+        }
+      }
+    );
+  }
+
+  /**
+   * Revierte el flag de traslado pendiente. El alumno vuelve a comportarse normalmente.
+   */
+  function quitarTrasladoPendiente(studentId) {
+    const student = allStudents.find(s => s.id === studentId);
+    if (!student) return;
+
+    Modal.confirm(
+      `Quitar Traslado Pendiente: ${Utils.sanitize(student.nombreCompleto)}`,
+      `¿Quitar el marcador de traslado pendiente de <strong>${Utils.sanitize(student.nombreCompleto)}</strong>?<br>El alumno volverá a aparecer normalmente en capturas y reportes.`,
+      async () => {
+        try {
+          await db.collection('students').doc(studentId).update({
+            bajaPendiente: false,
+            bajaPendienteRevertidoPor: auth.currentUser.uid,
+            bajaPendienteRevertidoFecha: new Date()
+          });
+
+          DB.audit('editar', 'alumno', studentId, {
+            description: `Traslado pendiente revertido: ${student.nombreCompleto}`,
+            before: { bajaPendiente: true, bajaPendienteReason: student.bajaPendienteReason || '' },
+            after: { bajaPendiente: false }
+          });
+
+          Store.invalidate('students');
+          Toast.show('Traslado pendiente revertido', 'success');
+
+          allStudents = await Store.getStudents(true);
+          allStudents.sort((a, b) => (a.nombreCompleto || '').localeCompare(b.nombreCompleto || ''));
+          applyFilters();
+          render();
+        } catch (error) {
+          console.error('Error revirtiendo traslado:', error);
+          Toast.show('Error al revertir: ' + error.message, 'error');
+        }
+      }
+    );
+  }
+
+  /**
    * Confirm and delete student permanently
    */
   function confirmDeleteStudent(studentId) {
@@ -791,6 +922,13 @@ const StudentsModule = (() => {
       state.filters.searchText = e.target.value.trim();
       applyFilters();
       render();
+      // render() recrea el container y destruye el input; restaurar foco y cursor.
+      const newInput = document.getElementById('searchInput');
+      if (newInput) {
+        newInput.focus();
+        const len = newInput.value.length;
+        newInput.setSelectionRange(len, len);
+      }
     });
 
     // Clear filters
