@@ -937,26 +937,52 @@ const Store = (() => {
         }
       });
 
+      // Helper: extraer timestamp ms de un campo Firestore Timestamp/Date/string ISO
+      const toMs = function(t) {
+        if (!t) return 0;
+        if (typeof t === 'string') return new Date(t).getTime() || 0;
+        if (typeof t.toDate === 'function') return t.toDate().getTime();
+        if (t.seconds) return t.seconds * 1000;
+        if (t instanceof Date) return t.getTime();
+        return 0;
+      };
+
       // Para cada grade raw: si hay snapshot que lo cubre, USAR el del snapshot
+      // EXCEPTO si el grade fue editado DESPUÉS del snapshot (v8.86: la edición
+      // manual o cualquier cambio posterior debe prevalecer — el snapshot
+      // refleja "lo que se imprimió", pero si admin/maestro corrigió después,
+      // ESA corrección es la verdad oficial).
       const replaced = new Set();
       const result = [];
       (rawGrades || []).forEach(function(g){
         const k = g.subjectId + '_' + g.partial;
         if (snapMap[k]) {
-          // Buscar el item del snapshot para este alumno
-          const item = (snapMap[k].items || []).find(function(it){return it.studentId === g.studentId;});
+          const snap = snapMap[k];
+          const snapMs = toMs(snap.certifiedAtIso || snap.certifiedAt);
+          const gradeMs = toMs(g.updatedAt);
+          // Si el grade fue actualizado DESPUÉS del snapshot → prevalece la edición
+          if (gradeMs > 0 && snapMs > 0 && gradeMs > snapMs) {
+            // Marca para debugging: edición post-snapshot
+            g.__postSnapshotEdit = true;
+            g.__snapshotIgnored = snap.hash;
+            result.push(g);
+            replaced.add(g.studentId + '_' + g.subjectId + '_' + g.partial);
+            return;
+          }
+          // Snapshot prevalece (no hay edición posterior)
+          const item = (snap.items || []).find(function(it){return it.studentId === g.studentId;});
           if (item) {
             result.push({
               studentId: item.studentId,
-              subjectId: snapMap[k].subjectId,
-              groupId: snapMap[k].groupId,
-              partial: snapMap[k].partial,
+              subjectId: snap.subjectId,
+              groupId: snap.groupId,
+              partial: snap.partial,
               ec: item.ec, tr: item.tr, pe: item.pe, ex: item.ex,
               suma: item.suma, cal: item.cal,
               value: item.value !== undefined ? item.value : item.cal,
               faltas: item.faltas,
               __fromSnapshot: true,
-              __snapshotHash: snapMap[k].hash
+              __snapshotHash: snap.hash
             });
             replaced.add(g.studentId + '_' + g.subjectId + '_' + g.partial);
             return;
