@@ -1022,6 +1022,12 @@ const CotejoMige = (() => {
         const gradeDocId = `${f.studentId}_${f.subjectId}_${f.parcial}`;
         const nuevo = Number(f.hoja);
         const payload = {
+          // v8.43 BLINDAJE: identidad completa SIEMPRE. Las rules exigen doc
+          // bien formado al CREAR (cal que faltaba en el sistema) y que la
+          // identidad no cambie al EDITAR. Sin esto, corregir una cal
+          // inexistente crearía un doc huérfano sin studentId/groupId.
+          studentId: f.studentId, subjectId: f.subjectId,
+          groupId: _selectedGroupId, partial: f.parcial,
           updatedAt: new Date(), updatedBy: auth.currentUser.uid,
           cotejoFix: { at: new Date().toISOString(), by: auth.currentUser.uid, campo: f.campo, antes: f.sistema, despues: nuevo, mige: f.mige, group: _selectedGroupId },
         };

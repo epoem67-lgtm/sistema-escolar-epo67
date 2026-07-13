@@ -189,6 +189,71 @@ service cloud.firestore {
         ) || teacherHasPartialOverride(partial);
     }
 
+    // ═══ BLINDAJE DE CALIFICACIONES (v8.43 — julio 2026) ═══════════════
+    // Validación de VALORES en /grades. Filosofía:
+    //   - Solo se valida lo que ESTA escritura modifica: docs legacy con
+    //     valores raros NO bloquean ediciones de otros campos.
+    //   - Borrar un campo (FieldValue.delete) siempre es válido (limpieza).
+    //   - Admin/subdirector NO pasan por aquí (autoridad de recuperación).
+    //
+    // d       = request.resource.data (estado FINAL del doc tras el merge)
+    // changed = llaves afectadas (diff().affectedKeys() en update,
+    //           data.keys() en create)
+    function gradeFieldOk(d, changed, k, lo, hi) {
+      return !changed.hasAny([k])
+          || !(k in d)
+          || (d[k] is number && d[k] >= lo && d[k] <= hi);
+    }
+
+    // Cotas universales EPO 67 (cubren matutino y vespertino):
+    //   ec≤8, tr≤2, ex≤3, pe≤10, suma≤10, cal/value 5..10, faltas 0..200.
+    function gradeValuesOk(d, changed) {
+      return gradeFieldOk(d, changed, 'ec', 0, 8)
+          && gradeFieldOk(d, changed, 'tr', 0, 2)
+          && gradeFieldOk(d, changed, 'ex', 0, 3)
+          && gradeFieldOk(d, changed, 'pe', 0, 10)
+          && gradeFieldOk(d, changed, 'suma', 0, 10)
+          && gradeFieldOk(d, changed, 'cal', 5, 10)
+          && gradeFieldOk(d, changed, 'value', 5, 10)
+          && gradeFieldOk(d, changed, 'faltas', 0, 200);
+    }
+
+    // Coherencia suma→cal (redondeo EPO 67: ≥6 redondeo normal, <6 → 5).
+    // Solo se exige si esta escritura tocó cal o suma y ambos quedan numéricos.
+    function gradeCalCoherent(d, changed) {
+      return !changed.hasAny(['cal', 'suma'])
+          || !('cal' in d) || !('suma' in d)
+          || !(d.cal is number) || !(d.suma is number)
+          || (d.suma < 6 && d.cal == 5)
+          || (d.suma >= 6 && d.cal == math.round(d.suma));
+    }
+
+    // IDENTIDAD INMUTABLE: studentId/subjectId/groupId/partial no se pueden
+    // CAMBIAR una vez escritos (evita re-apuntar un doc de calificación a otro
+    // alumno/materia/parcial para brincarse candados de cierre o asignación).
+    // Sí se permite AÑADIR un campo faltante (repara docs legacy incompletos).
+    function gradeIdFieldIntact(before, after, k) {
+      return !(k in before)
+          || (k in after && after[k] == before[k]);
+    }
+    function gradeIdentityIntact(before, after) {
+      return gradeIdFieldIntact(before, after, 'studentId')
+          && gradeIdFieldIntact(before, after, 'subjectId')
+          && gradeIdFieldIntact(before, after, 'groupId')
+          && gradeIdFieldIntact(before, after, 'partial');
+    }
+
+    // CREATE bien formado: identidad completa + docId canónico
+    // gradeId == `${studentId}_${subjectId}_${partial}`.
+    function gradeCreateWellFormed(gradeId, d) {
+      return d.keys().hasAll(['studentId', 'subjectId', 'groupId', 'partial'])
+          && d.studentId is string && d.studentId.size() > 0
+          && d.subjectId is string && d.subjectId.size() > 0
+          && d.groupId is string && d.groupId.size() > 0
+          && d.partial is string && d.partial.size() > 0
+          && gradeId == d.studentId + '_' + d.subjectId + '_' + d.partial;
+    }
+
     // ─── CONFIGURACION ──────────────────────
     // Datos de la escuela y school.staff: SOLO admin (Olivia) + secretario_admin (Lupita).
     // correctionsWindow y captureWindow: admin (Olivia) + subdirector (Octavio).
@@ -323,23 +388,52 @@ service cloud.firestore {
         isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || canMaestro() || isPresidenteAcademia() || isAuditor()
       );
 
+      // v8.43 BLINDAJE (julio 2026) — para maestro y orientador se exige además:
+      //   1. Doc bien formado al crear (identidad completa + docId canónico).
+      //   2. Identidad INMUTABLE al editar (no re-apuntar a otro alumno/
+      //      materia/parcial para brincarse candados).
+      //   3. Valores dentro de cotas EPO 67 (solo los campos que esta
+      //      escritura toca — docs legacy no bloquean).
+      //   4. Coherencia suma→cal (regla de redondeo oficial).
+      //   5. Autoría real: updatedBy (y cotejoFix.by) == uid del que escribe.
+      // Admin/subdirector conservan vía libre (autoridad de recuperación).
       allow create: if isAuthenticated() && (
         isAdminOrSubdirector() ||
         (canMaestro()
           && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId)
-          && canMaestroWriteGradesForGroup(request.resource.data.partial, request.resource.data.groupId)) ||
+          && canMaestroWriteGradesForGroup(request.resource.data.partial, request.resource.data.groupId)
+          && gradeCreateWellFormed(gradeId, request.resource.data)
+          && request.resource.data.updatedBy == request.auth.uid
+          && gradeValuesOk(request.resource.data, request.resource.data.keys())
+          && gradeCalCoherent(request.resource.data, request.resource.data.keys())) ||
         // Corrección posterior a COTEJO MIGE (Orientación aplica en el momento).
         // Solo permitida si la escritura trae el marcador cotejoFix → queda trazada.
-        (canOrientador() && request.resource.data.cotejoFix != null)
+        (canOrientador()
+          && request.resource.data.cotejoFix is map
+          && request.resource.data.cotejoFix.by == request.auth.uid
+          && gradeCreateWellFormed(gradeId, request.resource.data)
+          && request.resource.data.updatedBy == request.auth.uid
+          && gradeValuesOk(request.resource.data, request.resource.data.keys())
+          && gradeCalCoherent(request.resource.data, request.resource.data.keys()))
       );
 
       allow update: if isAuthenticated() && (
         isAdminOrSubdirector() ||
         (canMaestro()
           && teacherHasAssignment(resource.data.groupId, resource.data.subjectId)
-          && canMaestroWriteGradesForGroup(resource.data.partial, resource.data.groupId)) ||
+          && canMaestroWriteGradesForGroup(resource.data.partial, resource.data.groupId)
+          && gradeIdentityIntact(resource.data, request.resource.data)
+          && request.resource.data.updatedBy == request.auth.uid
+          && gradeValuesOk(request.resource.data, request.resource.data.diff(resource.data).affectedKeys())
+          && gradeCalCoherent(request.resource.data, request.resource.data.diff(resource.data).affectedKeys())) ||
         // Corrección posterior a COTEJO MIGE (Orientación aplica en el momento).
-        (canOrientador() && request.resource.data.cotejoFix != null)
+        (canOrientador()
+          && request.resource.data.cotejoFix is map
+          && request.resource.data.cotejoFix.by == request.auth.uid
+          && gradeIdentityIntact(resource.data, request.resource.data)
+          && request.resource.data.updatedBy == request.auth.uid
+          && gradeValuesOk(request.resource.data, request.resource.data.diff(resource.data).affectedKeys())
+          && gradeCalCoherent(request.resource.data, request.resource.data.diff(resource.data).affectedKeys()))
       );
 
       allow delete: if isAdminOrSubdirector();
@@ -602,12 +696,21 @@ service cloud.firestore {
     // vigente de SUS materias.
     match /studentsFinalGrades/{docId} {
       allow read: if isAuthenticated();
+      // v8.43 BLINDAJE: para maestro se exige además docId canónico
+      // (`${studentId}_${subjectId}`), calVigente numérica 5..10 y
+      // autoría real (updatedBy == uid). Admin/subdirector vía libre.
       allow create, update: if isAuthenticated() && (
         isAdminOrSubdirector() ||
-        (canMaestro() && teacherHasAssignment(
-          request.resource.data.groupId,
-          request.resource.data.subjectId
-        ))
+        (canMaestro()
+          && teacherHasAssignment(
+            request.resource.data.groupId,
+            request.resource.data.subjectId
+          )
+          && docId == request.resource.data.studentId + '_' + request.resource.data.subjectId
+          && request.resource.data.calVigente is number
+          && request.resource.data.calVigente >= 5
+          && request.resource.data.calVigente <= 10
+          && request.resource.data.updatedBy == request.auth.uid)
       );
       allow delete: if isAdminOrSubdirector();
     }
