@@ -17,6 +17,47 @@ const K = Object.freeze({
   TURNOS: Object.freeze(['MATUTINO', 'VESPERTINO']),
   GRADOS: Object.freeze([1, 2, 3]),
 
+  // ─── HORARIOS / JORNADA ESCOLAR ────────────────────────────
+  // El sistema no tenía ninguna noción de tiempo. El módulo de horarios
+  // introduce la "jornada": días laborables + módulos (bloques) por turno.
+  // La definición REAL vive en Firestore (config/scheduleGrid) y es editable
+  // desde el módulo. Estos son solo los valores por defecto (semilla) que se
+  // usan cuando ese doc aún no existe. Horas 50 min, editables por Dirección.
+  HORARIOS: Object.freeze({
+    DIAS: Object.freeze([
+      { id: 'LUN', label: 'Lunes' },
+      { id: 'MAR', label: 'Martes' },
+      { id: 'MIE', label: 'Miércoles' },
+      { id: 'JUE', label: 'Jueves' },
+      { id: 'VIE', label: 'Viernes' },
+    ]),
+    PRIORIDADES: Object.freeze([
+      { id: 'alta',  label: 'Alta',  color: '#dc2626' },
+      { id: 'media', label: 'Media', color: '#d97706' },
+      { id: 'baja',  label: 'Baja',  color: '#6b7280' },
+    ]),
+    DEFAULT_MODULOS: Object.freeze({
+      MATUTINO: Object.freeze([
+        { n: 1, inicio: '07:00', fin: '07:50' },
+        { n: 2, inicio: '07:50', fin: '08:40' },
+        { n: 3, inicio: '08:40', fin: '09:30' },
+        { n: 4, inicio: '09:30', fin: '10:20' },
+        { n: 5, inicio: '10:20', fin: '11:10' },
+        { n: 6, inicio: '11:10', fin: '12:00' },
+        { n: 7, inicio: '12:00', fin: '12:50' },
+      ]),
+      VESPERTINO: Object.freeze([
+        { n: 1, inicio: '13:40', fin: '14:30' },
+        { n: 2, inicio: '14:30', fin: '15:20' },
+        { n: 3, inicio: '15:20', fin: '16:10' },
+        { n: 4, inicio: '16:10', fin: '17:00' },
+        { n: 5, inicio: '17:00', fin: '17:50' },
+        { n: 6, inicio: '17:50', fin: '18:40' },
+        { n: 7, inicio: '18:40', fin: '19:30' },
+      ]),
+    }),
+  }),
+
   // ─── Roles del sistema ─────────────────────────────────────
   ROLES: Object.freeze([
     { id: 'admin',              label: 'Administrador',          color: '#9333ea' },

@@ -261,7 +261,7 @@ service cloud.firestore {
     match /config/{docId} {
       allow read: if isAuthenticated();
       allow write: if (
-        docId == 'correctionsWindow' || docId == 'captureWindow' || docId == 'extraordinarioWindow'
+        docId == 'correctionsWindow' || docId == 'captureWindow' || docId == 'extraordinarioWindow' || docId == 'scheduleGrid'
           ? isAdminOrSubdirector()
           : canManageSchoolConfig()
       );
@@ -375,7 +375,7 @@ service cloud.firestore {
       allow create, update, delete: if canManageEnrollment();
     }
 
-    // ─── CALIFICACIONES ─────────��──────────
+    // ─── CALIFICACIONES ────────────────────
     // C-2 FIX: maestro solo escribe grades si tiene assignment de ese grupo+materia.
     //
     // Lectura para Presidente/Secretario de Academia: el rol es ADITIVO — esos
@@ -439,7 +439,7 @@ service cloud.firestore {
       allow delete: if isAdminOrSubdirector();
     }
 
-    // ─── PARCIALES ──────────────────��──────
+    // ─── PARCIALES ─────────────────────────
     // Subdirector controla apertura/cierre de parciales (jefe academico)
     match /partials/{partialId} {
       allow read: if isAuthenticated();
@@ -841,6 +841,42 @@ service cloud.firestore {
       );
 
       // DELETE: admin + subdirector (auditoria - no se borran solicitudes normales)
+      allow delete: if isAdminOrSubdirector();
+    }
+
+    // ─── HORARIOS ──────────────────────────
+    // scheduleEntries: cada celda del horario semanal (grupo × día × módulo).
+    // docId determinístico `${groupId}__${DIA}__M${n}` → un grupo NO puede tener
+    // dos clases en el mismo slot (colisión estructural). La detección de choque
+    // de MAESTRO (mismo docente en dos grupos a la misma hora) se hace en el
+    // cliente; aquí solo se restringe QUIÉN escribe.
+    // Lectura: cualquier autenticado (a futuro, "Mi horario" para maestros).
+    // Escritura: SOLO Dirección (admin/subdirector). Se valida identidad mínima.
+    match /scheduleEntries/{entryId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdminOrSubdirector()
+        && request.resource.data.keys().hasAll(['groupId', 'dia', 'modulo', 'teacherId', 'subjectId'])
+        && request.resource.data.groupId is string
+        && request.resource.data.teacherId is string
+        && request.resource.data.subjectId is string
+        && request.resource.data.modulo is int
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if isAdminOrSubdirector();
+    }
+
+    // teacherScheduleRequests: solicitud/preferencias de horario por maestro,
+    // capturadas por Dirección (qué horas no quiere, dos planteles, prioridad,
+    // necesidades). docId = teacherId.
+    // Lectura: Dirección + el propio maestro (para futura vista de solo lectura).
+    // Escritura: SOLO Dirección.
+    match /teacherScheduleRequests/{teacherId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || isSubdirector() || canReadAsDirectivo() ||
+        getTeacherId() == teacherId
+      );
+      allow create, update: if isAdminOrSubdirector()
+        && request.resource.data.teacherId == teacherId
+        && request.resource.data.updatedBy == request.auth.uid;
       allow delete: if isAdminOrSubdirector();
     }
 

@@ -188,6 +188,31 @@ const Store = (() => {
       }, force);
     },
 
+    // ─── HORARIOS ──────────────────────────────────────────────
+    // Todas las celdas del horario (una por grupo×día×módulo ocupado).
+    // Se cargan completas (máx ~18 grupos × 5 días × ~7 módulos ≈ 630 por
+    // turno) para poder detectar choques de maestro entre grupos/turnos.
+    getScheduleEntries(force) {
+      return get('scheduleEntries', async () => {
+        const snap = await db.collection('scheduleEntries').get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
+    // Solicitudes/preferencias de horario por maestro (una por teacherId),
+    // capturadas por Dirección. Contienen bloqueos (horas que no quiere),
+    // dos planteles, prioridad y necesidades.
+    getTeacherRequests(force) {
+      return get('teacherRequests', async () => {
+        const snap = await db.collection('teacherScheduleRequests').get();
+        return snapshotToArray(snap);
+      }, force);
+    },
+
+    invalidateSchedule() {
+      this.invalidate('scheduleEntries');
+    },
+
     /**
      * @deprecated Use getGradesByGroup(groupId) or getGradesByGroups(groupIds) instead for editing.
      * For the capture monitor, use getAllGrades() which reads all grades with a longer cache.

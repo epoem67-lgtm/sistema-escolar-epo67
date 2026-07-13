@@ -2144,6 +2144,9 @@ const Router = {
     // ─── Administracion ───
     'school-config': ['admin', 'directivo', 'subdirector'],
     'teachers': ['admin', 'directivo', 'subdirector'],
+    // Horarios: admin/subdirector arman y editan; directivo lo ve en solo-lectura
+    // (el módulo oculta los controles de edición si no es admin/subdirector).
+    'horarios': ['admin', 'directivo', 'subdirector'],
     'students': ['admin', 'directivo', 'subdirector', 'secretario_escolar'],
     'enrollment': ['admin', 'directivo', 'subdirector', 'secretario_escolar'],
     'partial-close': ['admin', 'directivo', 'subdirector'],

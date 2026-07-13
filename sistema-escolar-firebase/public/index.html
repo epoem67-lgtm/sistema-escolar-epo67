@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Version pin: incrementar en cada deploy. El bootstrap de abajo compara
        contra localStorage; si difiere, fuerza purga total + reload. -->
-  <meta name="app-version" content="v9.34-blindaje-calif">
+  <meta name="app-version" content="v9.35-horarios">
   <title>Sistema Escolar</title>
 
   <!-- ════════════════════════════════════════════════════════════════
@@ -99,7 +99,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="/css/styles.css?v=6.68">
+  <link rel="stylesheet" href="/css/styles.css?v=9.35">
 
   <!-- Preconnect a dominios externos para acelerar el handshake TLS/DNS -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -113,9 +113,9 @@
 
   <!-- Preload de assets criticos (anticipa descarga de los core scripts del body) -->
   <link rel="preload" href="/js/firebase-config.js?v=6.98" as="script">
-  <link rel="preload" href="/js/constants.js?v=8.12" as="script">
-  <link rel="preload" href="/js/data-store.js?v=9.02" as="script">
-  <link rel="preload" href="/js/app.js?v=9.25" as="script">
+  <link rel="preload" href="/js/constants.js?v=9.35" as="script">
+  <link rel="preload" href="/js/data-store.js?v=9.35" as="script">
+  <link rel="preload" href="/js/app.js?v=9.35" as="script">
   <link rel="preload" href="/js/components.js?v=6.29" as="script">
 
   <!-- Firebase SDKs -->
@@ -262,6 +262,11 @@
              title="Docentes y Asignaciones · Lista de todos los maestros del plantel, sus asignaciones por grupo y materia, y los orientadores de cada grupo.">
             <span class="material-icons-round">people</span>
             <span class="nav-label">Docentes y Asignaciones</span>
+          </a>
+          <a href="#" class="nav-item" data-module="horarios" onclick="Router.navigate('horarios')" data-roles="admin,directivo,subdirector"
+             title="Horarios · Arma el horario semanal de cada grupo sin choques de maestro, captura las solicitudes de horario de cada docente (horas que no quiere, dos planteles) y configura la jornada.">
+            <span class="material-icons-round">calendar_view_week</span>
+            <span class="nav-label">Horarios</span>
           </a>
           <a href="#" class="nav-item" data-module="partial-close" onclick="Router.navigate('partial-close')" data-roles="admin,directivo,subdirector"
              title="Cierre de Parciales · Programa o aplica cierre de un parcial por grado, bloqueando captura para maestros. Se puede abrir y cerrar.">
@@ -537,9 +542,9 @@
   <!-- ═══════ SCRIPTS ═══════ -->
   <!-- Core -->
   <script src="/js/firebase-config.js?v=6.98"></script>
-  <script src="/js/constants.js?v=8.12"></script>
-  <script src="/js/data-store.js?v=9.02"></script>
-  <script src="/js/app.js?v=9.25"></script>
+  <script src="/js/constants.js?v=9.35"></script>
+  <script src="/js/data-store.js?v=9.35"></script>
+  <script src="/js/app.js?v=9.35"></script>
   <script src="/js/components.js?v=6.29"></script>
   <script src="/js/lib-loader.js?v=6.29"></script>
   <script src="/js/logos.js?v=6.29"></script>
@@ -550,6 +555,7 @@
   <script src="/js/modules/dashboard.js?v=8.46" defer></script>
   <script src="/js/modules/school-config.js?v=6.29" defer></script>
   <script src="/js/modules/teachers.js?v=7.72" defer></script>
+  <script src="/js/modules/horarios.js?v=9.35" defer></script>
   <script src="/js/modules/students.js?v=7.37" defer></script>
   <script src="/js/modules/grades.js?v=9.07" defer></script>
   <script src="/js/modules/partial-close.js?v=8.16" defer></script>
