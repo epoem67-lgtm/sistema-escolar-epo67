@@ -140,6 +140,23 @@ Las `firestore.rules` implementan control de acceso por rol:
 - **Bootstrap de usuarios:** Un usuario autenticado puede crear su propio doc en `users` si no existe aún (para el primer login).
 - **Activity log:** Append-only, solo admin puede leer, nadie puede editar ni borrar.
 
+### Blindaje de calificaciones v8.43 (13 de julio de 2026)
+
+Validación server-side en `/grades` y `/studentsFinalGrades` (maestro y
+orientador; admin/subdirector conservan vía libre de recuperación):
+
+- **Identidad inmutable:** `studentId/subjectId/groupId/partial` no pueden
+  cambiarse en un update (impide re-apuntar un doc a otro alumno/materia/
+  parcial para brincarse candados de cierre o asignación).
+- **Create bien formado:** identidad completa + docId canónico
+  `{studentId}_{subjectId}_{partial}`.
+- **Cotas de valores:** ec≤8, tr≤2, ex≤3, pe≤10, suma≤10, cal/value 5..10,
+  faltas 0..200. Solo se validan los campos que la escritura toca — docs
+  legacy con valores raros no bloquean ediciones de otros campos.
+- **Coherencia suma→cal** según el redondeo oficial (≥6 redondea, <6 → 5).
+- **Autoría real:** `updatedBy == uid` y `cotejoFix.by == uid` (anti-suplantación).
+- 14/14 pruebas de escenarios via API firebaserules antes del deploy.
+
 ---
 
 ## 7. Sistema de agentes (carpeta _AGENTE/)
