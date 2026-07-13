@@ -1,0 +1,17 @@
+[
+  {
+    "groupId": "VESPERTINO_1-1",
+    "num": 4,
+    "alumno": "BRAVO VELA MARIA FERNANDA",
+    "studentId": "5IfvElCTDwErq8qmV8rv",
+    "materia": "CULT.DIG",
+    "subjectId": "G1_cultura_digital_ii",
+    "cuadroCal": 6,
+    "cuadroFaltas": 0,
+    "fsCal": 10,
+    "fsFaltas": 0,
+    "tipo": "SOLO_CAL",
+    "docId": "5IfvElCTDwErq8qmV8rv_G1_cultura_digital_ii_P1",
+    "existeEnFirestore": true
+  }
+]

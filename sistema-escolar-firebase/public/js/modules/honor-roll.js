@@ -32,13 +32,69 @@ const HonorRollModule = (() => {
     });
   }
 
+  /** Etiqueta legible del parcial (incluye el modo Acumulado). */
+  function hrPartialLabel(partial) {
+    if (partial === 'ACUM') return 'Acumulado (3 parciales)';
+    return K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
+  }
+
+  /**
+   * Calcula el promedio por alumno y los devuelve ordenados (numMaterias > 0).
+   *  - partial 'P1'/'P2'/'P3': promedio simple de las cals capturadas de ESE parcial.
+   *  - partial 'ACUM': por materia toma la CALIFICACIÓN FINAL de los 3 parciales
+   *    (mismas reglas SEP que la boleta, vía App.calcCalFinalSEP) y luego promedia
+   *    las materias. Así el promedio del cuadro coincide con el promedio general
+   *    de la boleta del alumno.
+   */
+  function computeAverages(list, allGrades, partial, isAsc) {
+    let result;
+    if (partial === 'ACUM') {
+      // Index: studentId -> subjectId -> { P1, P2, P3 }
+      const idx = {};
+      for (const g of allGrades) {
+        if (!g.studentId || !g.subjectId) continue;
+        if (!['P1', 'P2', 'P3'].includes(g.partial)) continue;
+        if (!idx[g.studentId]) idx[g.studentId] = {};
+        if (!idx[g.studentId][g.subjectId]) idx[g.studentId][g.subjectId] = {};
+        idx[g.studentId][g.subjectId][g.partial] = g;
+      }
+      result = list.map(s => {
+        const subs = idx[s.id] || {};
+        const finales = [];
+        for (const subjectId of Object.keys(subs)) {
+          const sg = subs[subjectId];
+          const grades3 = [sg.P1 || null, sg.P2 || null, sg.P3 || null];
+          const r = App.calcCalFinalSEP({ grades3 });
+          if (r && Number.isFinite(r.calFinal)) finales.push(r.calFinal);
+        }
+        const avg = finales.length ? finales.reduce((a, b) => a + b, 0) / finales.length : 0;
+        return { ...s, promedio: Math.round(avg * 100) / 100, numMaterias: finales.length };
+      });
+    } else {
+      const gradesByStudent = {};
+      for (const g of allGrades) {
+        if (g.partial !== partial) continue;
+        if (!gradesByStudent[g.studentId]) gradesByStudent[g.studentId] = [];
+        gradesByStudent[g.studentId].push(g.value || 0);
+      }
+      result = list.map(s => {
+        const grades = gradesByStudent[s.id] || [];
+        const avg = grades.length > 0 ? grades.reduce((a, b) => a + b, 0) / grades.length : 0;
+        return { ...s, promedio: Math.round(avg * 100) / 100, numMaterias: grades.length };
+      });
+    }
+    return result.filter(s => s.numMaterias > 0)
+      .sort((a, b) => isAsc ? (a.promedio - b.promedio) : (b.promedio - a.promedio));
+  }
+
   async function render() {
     const container = document.getElementById('moduleContainer');
     if (!container) return;
 
     const turnoOptions = K.TURNOS.map(t => `<option value="${t}">${t}</option>`).join('');
     const gradoOptions = K.GRADOS.map(g => `<option value="${g}">${g}\u00ba Grado</option>`).join('');
-    const parcialOptions = K.PARCIALES.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('');
+    const parcialOptions = K.PARCIALES.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('')
+      + `<option value="ACUM">📊 Acumulado (3 parciales)</option>`;
 
     container.innerHTML = `
       <div class="module-container">
@@ -174,23 +230,12 @@ const HonorRollModule = (() => {
         return;
       }
 
-      // Get grades via Store cache (per-group), filtered to relevant groups only
+      // Get grades via Store cache (per-group), filtered to relevant groups only.
+      // ACUM necesita los 3 parciales; se traen todos y computeAverages filtra.
       const relevantGroupIds = [...new Set(filtered.map(s => s.groupId).filter(Boolean))];
       const allGrades = await Store.getGradesByGroups(relevantGroupIds, true);
 
-      const gradesByStudent = {};
-      for (const g of allGrades) {
-        if (g.partial !== partial) continue;
-        if (!gradesByStudent[g.studentId]) gradesByStudent[g.studentId] = [];
-        gradesByStudent[g.studentId].push(g.value || 0);
-      }
-
-      const studentAverages = filtered.map(s => {
-        const grades = gradesByStudent[s.id] || [];
-        const avg = grades.length > 0 ? grades.reduce((a, b) => a + b, 0) / grades.length : 0;
-        return { ...s, promedio: Math.round(avg * 100) / 100, numMaterias: grades.length };
-      }).filter(s => s.numMaterias > 0)
-        .sort((a, b) => isAsc ? (a.promedio - b.promedio) : (b.promedio - a.promedio));
+      const studentAverages = computeAverages(filtered, allGrades, partial, isAsc);
 
       if (studentAverages.length === 0) {
         resultsDiv.innerHTML = `
@@ -226,7 +271,8 @@ const HonorRollModule = (() => {
         return a.grupo.localeCompare(b.grupo);
       });
 
-      const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
+      const partialLabel = hrPartialLabel(partial);
+      const isAcum = partial === 'ACUM';
       const medals = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'];
 
       const titulo = isListado
@@ -235,6 +281,9 @@ const HonorRollModule = (() => {
           ? `Lista por Promedio (menor a mayor) - ${Utils.sanitize(partialLabel)}`
           : `Cuadro de Honor - ${Utils.sanitize(partialLabel)}`);
       let html = `<h2 class="section-title">${titulo}</h2>`;
+      if (isAcum) {
+        html += `<p class="text-muted" style="font-size:12px;margin:-6px 0 12px;">\uD83D\uDCCA Promedio de las <strong>calificaciones finales de los 3 parciales</strong> por materia (mismas reglas SEP que la boleta). Coincide con el promedio general de la boleta del alumno.</p>`;
+      }
       html += '<div class="stats-grid">';
 
       for (const group of sortedGroups) {
@@ -354,7 +403,7 @@ const HonorRollModule = (() => {
     const turno = document.getElementById('hr-turno').value;
     const grado = document.getElementById('hr-grado').value;
     const partial = document.getElementById('hr-partial').value;
-    const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
+    const partialLabel = hrPartialLabel(partial);
     const turnoLabel = turno || 'AMBOS TURNOS';
     const gradoLabel = grado ? `${grado}\u00ba GRADO` : 'TODOS LOS GRADOS';
 
@@ -441,7 +490,7 @@ const HonorRollModule = (() => {
       return;
     }
 
-    const partialLabel = K.PARCIALES.find(p => p.id === partial)?.nombre || partial;
+    const partialLabel = hrPartialLabel(partial);
     // Medallas como caracteres reales (surrogate pairs)
     const TROFEO = '\uD83C\uDFC6';  // 🏆
     const MEDAL1 = '\uD83E\uDD47';  // 🥇
@@ -464,19 +513,7 @@ const HonorRollModule = (() => {
       const relevantGroupIds = [...new Set(filtered.map(s => s.groupId).filter(Boolean))];
       const allGrades = await Store.getGradesByGroups(relevantGroupIds, true);
 
-      const gradesByStudent = {};
-      for (const g of allGrades) {
-        if (g.partial !== partial) continue;
-        if (!gradesByStudent[g.studentId]) gradesByStudent[g.studentId] = [];
-        gradesByStudent[g.studentId].push(g.value || 0);
-      }
-
-      const studentAverages = filtered.map(s => {
-        const grades = gradesByStudent[s.id] || [];
-        const avg = grades.length > 0 ? grades.reduce((a, b) => a + b, 0) / grades.length : 0;
-        return { ...s, promedio: Math.round(avg * 100) / 100, numMaterias: grades.length };
-      }).filter(s => s.numMaterias > 0)
-        .sort((a, b) => isAsc ? (a.promedio - b.promedio) : (b.promedio - a.promedio));
+      const studentAverages = computeAverages(filtered, allGrades, partial, isAsc);
 
       // Group by grupo
       const byGroup = {};

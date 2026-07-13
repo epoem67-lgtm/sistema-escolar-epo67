@@ -526,15 +526,22 @@ const ImportGradesModule = (() => {
         chunk.forEach(row => {
           const docId = `${row.student.id}_${materia}_${parcial}`;
           const ref = db.collection('grades').doc(docId);
+          // BLINDAJE: la importación trae la calificación FINAL. Escribimos
+          // cal/value/suma coherentes (cal = calcCal(value)) para que nunca
+          // quede un doc con value pero sin cal (fuente vieja de cal≠value).
+          const impCal = K.calcCal(row.gradeValue);
           batch.set(ref, {
             studentId: row.student.id,
             subjectId: materia,
             groupId: grupo,
             partial: parcial,
-            value: row.gradeValue,
+            suma: row.gradeValue,
+            cal: impCal,
+            value: impCal,
             updatedAt: now,
             updatedBy: userId,
-            importedFrom: 'excel'
+            importedFrom: 'excel',
+            calSource: 'import'
           }, { merge: true });
         });
         await batch.commit();

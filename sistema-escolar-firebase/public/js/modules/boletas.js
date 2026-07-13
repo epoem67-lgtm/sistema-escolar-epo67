@@ -822,11 +822,11 @@ const BoletasModule = (() => {
             <td><strong>CICLO ESCOLAR:</strong> ${Utils.sanitize(meta.cicloEscolar)}</td>
           </tr>
           <tr>
-            <td colspan="3"><strong>NOMBRE DEL ALUMNO(A):</strong> &nbsp; ${Utils.sanitize(student.nombreCompleto || '')}</td>
+            <td colspan="3"><strong>NOMBRE DEL ALUMNO(A):</strong> &nbsp; ${Utils.sanitize(Utils.reacentuar(student.nombreCompleto || ''))}</td>
             <td><strong>N.L.</strong> ${Utils.sanitize(String(nlNumero || ''))}</td>
           </tr>` : `
           <tr>
-            <td style="width:60%;"><strong>ALUMNO(A):</strong> ${Utils.sanitize(student.nombreCompleto || '')}</td>
+            <td style="width:60%;"><strong>ALUMNO(A):</strong> ${Utils.sanitize(Utils.reacentuar(student.nombreCompleto || ''))}</td>
             <td><strong>EXP:</strong> ${Utils.sanitize(student.expediente || '')}</td>
           </tr>
           <tr>

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Version pin: incrementar en cada deploy. El bootstrap de abajo compara
        contra localStorage; si difiere, fuerza purga total + reload. -->
-  <meta name="app-version" content="v8.27-edicion-post-snapshot-prevalece">
+  <meta name="app-version" content="v9.33-filename-tm-tv">
   <title>Sistema Escolar</title>
 
   <!-- ════════════════════════════════════════════════════════════════
@@ -115,7 +115,7 @@
   <link rel="preload" href="/js/firebase-config.js?v=6.98" as="script">
   <link rel="preload" href="/js/constants.js?v=8.12" as="script">
   <link rel="preload" href="/js/data-store.js?v=9.02" as="script">
-  <link rel="preload" href="/js/app.js?v=8.89" as="script">
+  <link rel="preload" href="/js/app.js?v=9.25" as="script">
   <link rel="preload" href="/js/components.js?v=6.29" as="script">
 
   <!-- Firebase SDKs -->
@@ -298,6 +298,11 @@
             <span class="material-icons-round">fact_check</span>
             <span class="nav-label">Auditoría de Datos</span>
           </a>
+          <a href="#" class="nav-item nav-item-destacado" data-module="f1-masivo" onclick="Router.navigate('f1-masivo')" data-roles="admin,subdirector"
+             title="F1 Masivo · Genera los concentrados F1 (cal+faltas de los 3 parciales) de TODAS las materias del turno seleccionado en un solo PDF. Previa auditoría de integridad Sistema vs MIGE.">
+            <span class="material-icons-round">library_books</span>
+            <span class="nav-label">F1 Masivo</span>
+          </a>
         </div>
 
         <!-- ═══════════════════════════════════════════════ -->
@@ -425,6 +430,11 @@
             <span class="material-icons-round">list_alt</span>
             <span class="nav-label">Mis Listas</span>
           </a>
+          <a href="#" class="nav-item" data-module="listas-simples" onclick="Router.navigate('listas-simples')"
+             title="Listas de seguimiento · Lista simple de alumnos por grupo con columnas en blanco. Para asistencia, observaciones o lo que necesites anotar.">
+            <span class="material-icons-round">checklist</span>
+            <span class="nav-label">Listas de seguimiento</span>
+          </a>
           <a href="#" class="nav-item" data-module="grades-query" onclick="Router.navigate('grades-query')"
              title="Consultar Calificaciones · Solo lectura — ver las cals capturadas sin riesgo de modificar. Útil para verificar antes de imprimir.">
             <span class="material-icons-round">visibility</span>
@@ -529,11 +539,11 @@
   <script src="/js/firebase-config.js?v=6.98"></script>
   <script src="/js/constants.js?v=8.12"></script>
   <script src="/js/data-store.js?v=9.02"></script>
-  <script src="/js/app.js?v=8.89"></script>
+  <script src="/js/app.js?v=9.25"></script>
   <script src="/js/components.js?v=6.29"></script>
   <script src="/js/lib-loader.js?v=6.29"></script>
   <script src="/js/logos.js?v=6.29"></script>
-  <script src="/js/modules/student-profile.js?v=8.82" defer></script>
+  <script src="/js/modules/student-profile.js?v=9.07" defer></script>
 
   <!-- Módulos (defer: se descargan en paralelo y ejecutan tras parseo, en orden) -->
   <script src="/js/modules/help-center.js?v=6.29" defer></script>
@@ -541,27 +551,29 @@
   <script src="/js/modules/school-config.js?v=6.29" defer></script>
   <script src="/js/modules/teachers.js?v=7.72" defer></script>
   <script src="/js/modules/students.js?v=7.37" defer></script>
-  <script src="/js/modules/grades.js?v=8.65" defer></script>
+  <script src="/js/modules/grades.js?v=9.07" defer></script>
   <script src="/js/modules/partial-close.js?v=8.16" defer></script>
-  <script src="/js/modules/at-risk.js?v=8.82" defer></script>
+  <script src="/js/modules/at-risk.js?v=9.21" defer></script>
   <script src="/js/modules/extraordinarios.js?v=8.81" defer></script>
   <script src="/js/modules/examen-extraordinario.js?v=8.81" defer></script>
   <script src="/js/modules/users-mgmt.js?v=7.53" defer></script>
   <script src="/js/modules/promocion.js?v=8.82" defer></script>
   <script src="/js/modules/my-lists.js?v=8.81" defer></script>
-  <script src="/js/modules/my-f1.js?v=8.85" defer></script>
+  <script src="/js/modules/listas-simples.js?v=9.14" defer></script>
+  <script src="/js/modules/my-f1.js?v=9.20" defer></script>
+  <script src="/js/modules/f1-masivo.js?v=9.20" defer></script>
   <script src="/js/modules/enrollment.js?v=6.29" defer></script>
-  <script src="/js/modules/honor-roll.js?v=8.81" defer></script>
+  <script src="/js/modules/honor-roll.js?v=9.04" defer></script>
   <script src="/js/modules/presidente-academia.js?v=8.81" defer></script>
 
   <!-- Nuevos módulos v3.1 -->
   <script src="/js/modules/import-grades.js?v=8.88" defer></script>
   <script src="/js/modules/import-students.js?v=7.37" defer></script>
-  <script src="/js/modules/boletas.js?v=8.85" defer></script>
+  <script src="/js/modules/boletas.js?v=9.25" defer></script>
   <script src="/js/modules/indicadores.js?v=8.81" defer></script>
   <script src="/js/modules/concentrado.js?v=8.85" defer></script>
   <script src="/js/modules/irregulares.js?v=8.59" defer></script>
-  <script src="/js/modules/extras-report.js?v=8.58" defer></script>
+  <script src="/js/modules/extras-report.js?v=9.21" defer></script>
   <script src="/js/modules/attendance.js?v=8.09" defer></script>
   <script src="/js/modules/reports-comparative.js?v=8.81" defer></script>
   <script src="/js/modules/bitacora.js?v=6.29" defer></script>
@@ -574,9 +586,9 @@
   <script src="/js/help-tips.js?v=6.29" defer></script>
   <script src="/js/modules/correction-request.js?v=8.42" defer></script>
   <script src="/js/modules/replication-request.js?v=8.05" defer></script>
-  <script src="/js/modules/cotejo-mige.js?v=9.04" defer></script>
+  <script src="/js/modules/cotejo-mige.js?v=9.11" defer></script>
   <script src="/js/modules/grades-query.js?v=8.81" defer></script>
-  <script src="/js/modules/boleta-oficial.js?v=8.85" defer></script>
+  <script src="/js/modules/boleta-oficial.js?v=9.33" defer></script>
 
   <!-- ═══════ INDICADOR OFFLINE (aparece cuando se pierde la conexión) ═══════ -->
   <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#dc2626;color:#fff;text-align:center;padding:8px 16px;font-size:13px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.2);">
@@ -698,6 +710,31 @@
           // ya invoca SKIP_WAITING y el controllerchange dispara el reload.
           // Si Chrome no emite controllerchange en 8s, el siguiente check
           // periódico lo detectará (cada 2 min) y forzará nuevo intento.
+
+          // ─── GUARDIÁN DE CACHE STALE (Julio 2026) ──────────────────
+          // Bug historico: usuarios veian F1 con horas triplicadas
+          // (228 en vez de 76, 162 en vez de 54) porque su tab llevaba
+          // meses abierto con JS viejo cacheado. El SW no forzaba reload
+          // y el `meta app-version` local coincidia con el suyo (nadie
+          // lo bumpeaba). Este guardian consulta el meta REMOTO cada 2
+          // min: si difiere del local → dispara el mismo banner que ya
+          // tenemos. Independiente del SW controllerchange.
+          async function checkStaleAppVersion() {
+            try {
+              const r = await fetch('/index.html?_av=' + Date.now(), { cache: 'no-store' });
+              if (!r.ok) return;
+              const html = await r.text();
+              const m = html.match(/<meta\s+name="app-version"\s+content="([^"]+)"/);
+              if (!m) return;
+              const remote = m[1];
+              const local = document.querySelector('meta[name="app-version"]')?.content;
+              if (!local || remote === local) return;
+              console.warn('[stale-cache-guard] local=' + local + ' remote=' + remote);
+              onUpdateReady('meta drift ' + local + ' → ' + remote);
+            } catch (_) { /* offline u otro error: no molestar */ }
+          }
+          setTimeout(checkStaleAppVersion, 4000);
+          setInterval(checkStaleAppVersion, 120 * 1000);
         } catch (err) {
           console.warn('SW registration failed:', err);
         }

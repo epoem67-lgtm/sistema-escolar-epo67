@@ -440,11 +440,19 @@ const App = {
       MESES.forEach(m => { horasTotal += Number(hSemestral[m] || 0); });
     }
 
-    // 5. Faltas totales (suma de los 3 parciales)
-    let faltasTotal = 0;
+    // 5. Faltas totales (suma de los 3 parciales).
+    //    CONDONACIÓN (jul-2026): Dirección puede condonar N inasistencias de un
+    //    alumno en una materia (campo `faltasCondonadas` en el doc del parcial,
+    //    normalmente P3). El conteo BRUTO se conserva intacto; solo el % del
+    //    umbral usa el EFECTIVO = brutas − condonadas (nunca < 0). Cada
+    //    condonación queda trazada en `grade.condonacion`
+    //    {autorizadoPor, motivo, fecha, aplicadoPor} para auditoría.
+    let faltasBrutas = 0, faltasCondonadas = 0;
     for (const g of grades3) {
-      if (g && g.faltas != null) faltasTotal += Number(g.faltas) || 0;
+      if (g && g.faltas != null) faltasBrutas += Number(g.faltas) || 0;
+      if (g && g.faltasCondonadas != null) faltasCondonadas += Number(g.faltasCondonadas) || 0;
     }
+    const faltasTotal = Math.max(0, faltasBrutas - faltasCondonadas);
 
     const pctInasistencia = horasTotal > 0 ? (faltasTotal * 100) / horasTotal : 0;
     const tiene3Cals = valid.length === 3;
@@ -530,6 +538,8 @@ const App = {
       parcialesReprobados,
       promedio,
       faltasTotal,
+      faltasBrutas,
+      faltasCondonadas,
       horasTotal,
       pctInasistencia,
       tiene3Cals,
@@ -2144,6 +2154,7 @@ const Router = {
     'promocion': ['admin'],      // promoción de fin de ciclo SOLO admin (mueve a todos los alumnos)
     'bitacora': ['admin', 'directivo', 'subdirector'],
     'audit-data': ['admin', 'subdirector'],
+    'f1-masivo': ['admin', 'subdirector'],
     // ─── Direccion ───
     'grade-corrections': ['admin', 'directivo', 'subdirector'],
     'honor-roll': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
@@ -2155,6 +2166,11 @@ const Router = {
     'boleta-oficial': ['admin', 'directivo', 'subdirector', 'orientador'],
     'concentrado': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
     'at-risk': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
+    // Cotejo MIGE: herramienta de LECTURA para Orientación/Dirección (sube CSV
+    // del MIGE, compara vs sistema, reimprime F1). No escribe calificaciones.
+    // admin/subdirector/directivo ven TODOS los grupos; orientador(_docente)
+    // solo los suyos (scope aplicado en el módulo vía Store.getOrientadorGroups).
+    'cotejo-mige': ['admin', 'subdirector', 'directivo', 'orientador', 'orientador_docente'],
     'student-profile': ['admin', 'directivo', 'subdirector', 'secretario_escolar', 'orientador', 'maestro', 'auditor'],
     'reports': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
     'reports-comparative': ['admin', 'directivo', 'subdirector', 'orientador', 'auditor'],
@@ -2669,6 +2685,93 @@ const Utils = {
     // solo token "raro", retornar tal cual.
     if (apellidos.length === 0) return fullName.trim();
     return [...apellidos, ...nombres].join(' ');
+  },
+
+  /**
+   * Diccionario de re-acentuación de nombres/apellidos hispanos.
+   * Los datos históricos vienen SIN tildes (MARTINEZ, MARIA) pero SÍ con eñes.
+   * Este mapa restituye las tildes para impresión oficial (boletas, F1).
+   * Cobertura: apellidos y nombres del padrón de EPO 67 y del bachillerato
+   * general mexicano. Añadir aquí si aparece uno nuevo con tilde faltante. */
+  _NAME_ACCENTS: {
+    // Apellidos terminación -EZ
+    'MARTINEZ':'MARTÍNEZ','HERNANDEZ':'HERNÁNDEZ','GONZALEZ':'GONZÁLEZ','PEREZ':'PÉREZ',
+    'LOPEZ':'LÓPEZ','RAMIREZ':'RAMÍREZ','GOMEZ':'GÓMEZ','SANCHEZ':'SÁNCHEZ',
+    'JIMENEZ':'JIMÉNEZ','DOMINGUEZ':'DOMÍNGUEZ','VAZQUEZ':'VÁZQUEZ','VELAZQUEZ':'VELÁZQUEZ',
+    'FERNANDEZ':'FERNÁNDEZ','ALVAREZ':'ÁLVAREZ','BENITEZ':'BENÍTEZ','CHAVEZ':'CHÁVEZ',
+    'RODRIGUEZ':'RODRÍGUEZ','MENDEZ':'MÉNDEZ','MARQUEZ':'MÁRQUEZ','DIAZ':'DÍAZ',
+    'ENRIQUEZ':'ENRÍQUEZ','MELENDEZ':'MELÉNDEZ','NUÑEZ':'NÚÑEZ','SUAREZ':'SUÁREZ',
+    'GUTIERREZ':'GUTIÉRREZ','PAEZ':'PÁEZ','SAENZ':'SÁENZ','GALVEZ':'GÁLVEZ',
+    'BAEZ':'BÁEZ','TELLEZ':'TÉLLEZ','ORTIZ':'ORTIZ','RUIZ':'RUIZ',
+    'GODINEZ':'GODÍNEZ','GAMEZ':'GÁMEZ','VELEZ':'VÉLEZ','BERMUDEZ':'BERMÚDEZ',
+    'CORTEZ':'CORTÉZ',
+    // Otros apellidos con tilde
+    'GARCIA':'GARCÍA','LEON':'LEÓN','GALVAN':'GALVÁN','MEJIA':'MEJÍA',
+    'GUZMAN':'GUZMÁN','MARIN':'MARÍN','MARTIN':'MARTÍN','ROMAN':'ROMÁN',
+    'BELTRAN':'BELTRÁN','DURAN':'DURÁN','JUAREZ':'JUÁREZ','PAREDES':'PAREDES',
+    'VALDES':'VALDÉS','CORTES':'CORTÉS','ANGULO':'ANGULO','CACERES':'CÁCERES',
+    'CARDENAS':'CÁRDENAS','CAZARES':'CÁZARES','ESPINOSA':'ESPINOSA','FUENTES':'FUENTES',
+    'IBAÑEZ':'IBÁÑEZ','MORON':'MORÓN','PLASCENCIA':'PLASCENCIA','VILLASEÑOR':'VILLASEÑOR',
+    'YAÑEZ':'YÁÑEZ','AGUILAR':'AGUILAR','MONTAÑO':'MONTAÑO','ZUÑIGA':'ZÚÑIGA',
+    'ROMAN':'ROMÁN','SANDOVAL':'SANDOVAL','TAMAYO':'TAMAYO','LAGUERENNE':'LAGUERENNE',
+    // Nombres con tilde
+    'ANDRES':'ANDRÉS','MARIA':'MARÍA','JOSE':'JOSÉ','ANGEL':'ÁNGEL',
+    'JESUS':'JESÚS','VICTOR':'VÍCTOR','ADRIAN':'ADRIÁN','GERMAN':'GERMÁN',
+    'SEBASTIAN':'SEBASTIÁN','JULIAN':'JULIÁN','JOAQUIN':'JOAQUÍN','MOISES':'MOISÉS',
+    'HECTOR':'HÉCTOR','IVAN':'IVÁN','RAMON':'RAMÓN','INES':'INÉS',
+    'DAMIAN':'DAMIÁN','RAUL':'RAÚL','SAUL':'SAÚL','VALENTIN':'VALENTÍN',
+    'JOSUE':'JOSUÉ','MATIAS':'MATÍAS','TOMAS':'TOMÁS','NICOLAS':'NICOLÁS',
+    'ELIAS':'ELÍAS','CESAR':'CÉSAR','TOBIAS':'TOBÍAS','ARON':'ARÓN',
+    'SANTIAGO':'SANTIAGO','SIMON':'SIMÓN','GABRIELA':'GABRIELA','SOFIA':'SOFÍA',
+    'LUCIA':'LUCÍA','VALERIA':'VALERIA','ROCIO':'ROCÍO','ROMINA':'ROMINA',
+    'MARIANA':'MARIANA','LUCIANA':'LUCIANA','KARINA':'KARINA','ILUSION':'ILUSIÓN',
+    'DAYAN':'DAYÁN','JOEL':'JOEL','FATIMA':'FÁTIMA','ANDREA':'ANDREA',
+    'IÑAKI':'IÑAKI','MARIAN':'MARIÁN','ARIADNA':'ARIADNA',
+    // Segunda tanda — nombres masculinos frecuentes en padrón
+    'RUBEN':'RUBÉN','OSCAR':'ÓSCAR','EFREN':'EFRÉN','EFRAIN':'EFRAÍN',
+    'CRISTOBAL':'CRISTÓBAL','ANIBAL':'ANÍBAL','FELIX':'FÉLIX','ADAN':'ADÁN',
+    'ANIBAL':'ANÍBAL','ISRAEL':'ISRAEL','FABIAN':'FABIÁN','BRAYAN':'BRAYAN',
+    'GERMAN':'GERMÁN','ISAIAS':'ISAÍAS','BRYAN':'BRYAN','KEVIN':'KEVIN',
+    'HUGO':'HUGO','ANDRICK':'ANDRICK','FELIX':'FÉLIX','MAXIMILIANO':'MAXIMILIANO',
+    'MARIO':'MARIO','MATEO':'MATEO','TADEO':'TADEO','DARIO':'DARÍO',
+    'BENJAMIN':'BENJAMÍN','ISAAC':'ISAAC','MELCHOR':'MELCHOR','SERAFIN':'SERAFÍN',
+    'GERONIMO':'GERÓNIMO','TEOFILO':'TEÓFILO',
+    // Segunda tanda — nombres femeninos frecuentes
+    'SOFIA':'SOFÍA','LUCIA':'LUCÍA','ROCIO':'ROCÍO','MONICA':'MÓNICA',
+    'VERONICA':'VERÓNICA','ANGELICA':'ANGÉLICA','AZUCENA':'AZUCENA',
+    'MARIANA':'MARIANA','SAORI':'SAORI','MELINA':'MELINA','MELISA':'MELISA',
+    'VALERIA':'VALERIA','XIMENA':'XIMENA','JOSEFINA':'JOSEFINA','JOSSELIN':'JOSSELIN',
+    'YAZMIN':'YAZMÍN','YAMILE':'YAMILE','YAMILET':'YAMILET','YATSIRI':'YATSIRI',
+    'AGUEDA':'ÁGUEDA','ELIA':'ELÍA','ADRIANA':'ADRIANA','ALEXA':'ALEXA',
+    'DAYANNE':'DAYANNE','DAYANA':'DAYANA','DANIELA':'DANIELA','DANNA':'DANNA',
+    'VALENTINA':'VALENTINA','JADEN':'JADEN',
+    // Segunda tanda — apellidos frecuentes con tilde
+    'AVILA':'ÁVILA','RIOS':'RÍOS','ANGELES':'ÁNGELES','ANGELO':'ANGELO',
+    'ATENCIO':'ATENCIO','CACHO':'CACHO','CAMARENA':'CAMARENA','CANO':'CANO',
+    'CASTAÑEDA':'CASTAÑEDA','CENTENO':'CENTENO','CERON':'CERÓN','CESPEDES':'CÉSPEDES',
+    'CONCHA':'CONCHA','CONTRERAS':'CONTRERAS','CORDERO':'CORDERO','COSSIO':'COSSÍO',
+    'CUELLAR':'CUÉLLAR','ESPINDOLA':'ESPÍNDOLA','FARIAS':'FARÍAS','FARFAN':'FARFÁN',
+    'FERRAN':'FERRÁN','FERRETIZ':'FERRETIZ','GALEANO':'GALEANO','GARIBAY':'GARIBAY',
+    'GARDUÑO':'GARDUÑO','GAYTAN':'GAYTÁN','GIRON':'GIRÓN','GRIJALVA':'GRIJALVA',
+    'GRIMALDO':'GRIMALDO','HERAS':'HERAS','INIGUEZ':'IÑIGUEZ','LERIA':'LERÍA',
+    'LORENZANA':'LORENZANA','MAGAÑA':'MAGAÑA','MEJIA':'MEJÍA','MELCHOR':'MELCHOR',
+    'MILLAN':'MILLÁN','MIÑON':'MIÑÓN','NUÑEZ':'NÚÑEZ','OCON':'OCÓN',
+    'PATIÑO':'PATIÑO','PEÑALOZA':'PEÑALOZA','PIÑA':'PIÑA','PIÑEDA':'PIÑEDA',
+    'RENDON':'RENDÓN','REPIZO':'REPIZO','RIVERON':'RIVERÓN','ROSARIO':'ROSARIO',
+    'SEPULVEDA':'SEPÚLVEDA','SIMON':'SIMÓN','TAMAYO':'TAMAYO','TIBURCIO':'TIBURCIO',
+    'URRUTIA':'URRUTIA','VILLASEÑOR':'VILLASEÑOR','ZUÑIGA':'ZÚÑIGA','ZUAZUA':'ZUAZUA'
+  },
+
+  /**
+   * Restituye tildes a un texto en mayúsculas (nombres/apellidos).
+   * No toca palabras desconocidas ni conectores (DE, LA, DEL, LOS, Y).
+   * Idempotente: si ya tiene tildes, las respeta. */
+  reacentuar(text) {
+    if (!text) return '';
+    return String(text).split(/\s+/).map(w => {
+      const upper = w.toUpperCase();
+      return this._NAME_ACCENTS[upper] || w;
+    }).join(' ');
   },
 
   /**

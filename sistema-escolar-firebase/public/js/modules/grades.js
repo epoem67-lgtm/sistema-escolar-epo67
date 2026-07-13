@@ -4998,7 +4998,7 @@ const GradesModule = (function () {
   const _PRINT_TRIGGER_SCRIPT = '<script>(function(){function shrinkNameCells(){document.querySelectorAll(".MT td.nm").forEach(function(td){if(td.scrollWidth<=td.clientWidth+1)return;var cur=parseFloat(getComputedStyle(td).fontSize);var min=5;var step=0.3;var guard=80;while(td.scrollWidth>td.clientWidth+1&&cur>min&&guard-->0){cur-=step;td.style.fontSize=cur+"px";}if(td.scrollWidth>td.clientWidth+1)td.style.overflow="visible";});}window.addEventListener("load",function(){setTimeout(function(){shrinkNameCells();window.print();},300);});})();<\/script>';
 
   function _buildOfficialPrintHTML(studentsList, gradeData, meta) {
-    const { teacherName, subjectName, groupName, groupNum, grado, turno, parcialNum, parcialText, semText, orientador, horas } = meta;
+    const { teacherName, subjectName, groupName, groupNum, grado, turno, parcialNum, parcialText, semText, orientador, horas, cotejoLegend } = meta;
     const horasData = horas || {};
     const n = studentsList.length;
 
@@ -5188,6 +5188,7 @@ html, body { margin:0; padding:0; }
 <div class="PG-ttl">
 <div class="ttl-esc">ESCUELA PREPARATORIA OFICIAL NÚM. 67</div>
 <div class="ttl-ctrl">CONTROL ${parcialText} PARCIAL</div>
+${cotejoLegend ? `<div style="text-align:center;margin:0.5mm 0 0;"><span style="font-size:7pt;font-weight:bold;color:#0a5c2e;border:1pt solid #0a5c2e;border-radius:1.5mm;padding:0.5mm 3mm;letter-spacing:0.3px;-webkit-print-color-adjust:exact;print-color-adjust:exact;">✓ ${Utils.sanitize(cotejoLegend)}</span></div>` : ''}
 </div>
 
 <!-- ═══ INFO DOCENTE/MATERIA (fijo) ═══ -->
@@ -5442,7 +5443,7 @@ ${meta.snapshotInfo ? `
    * @param {string[]} assignmentIds - IDs de assignments a incluir
    * @param {string} partialId - ej. 'P1', 'P2', 'P3'
    */
-  async function printMultipleAssignments(assignmentIds, partialId) {
+  async function printMultipleAssignments(assignmentIds, partialId, opts = {}) {
     if (!Array.isArray(assignmentIds) || assignmentIds.length === 0) {
       Toast.show('No hay listas seleccionadas para imprimir', 'warning');
       return;
@@ -5456,9 +5457,21 @@ ${meta.snapshotInfo ? `
     // false, así que admin/subdirector terminaban llamando getOwnAssignments.
     const role = App.currentUser?.role;
     const isAdminLike = (role === 'admin' || role === 'subdirector');
-    const myAsg = isAdminLike
-      ? await Store.getAssignments()
-      : await Store.getOwnAssignments();
+    // v9.06: REIMPRESIÓN por orientación (opts.reprint, p.ej. Cotejo MIGE). El
+    // orientador NO imparte esas materias, así que getOwnAssignments() no las
+    // encuentra. Para reimpresión le damos alcance a las assignments de SUS
+    // grupos (getOrientadorGroups → null = ve todo). Es solo lectura de datos
+    // que ya puede consultar (concentrado/consulta de su grupo). NO cambia el
+    // flujo normal del editor (sin opts.reprint todo queda igual).
+    const canOrient = !!(App.canActAs && App.canActAs('orientador'));
+    let myAsg;
+    if (opts.reprint && canOrient && !isAdminLike) {
+      const all = await Store.getAssignments();
+      const oriGroups = await Store.getOrientadorGroups();
+      myAsg = (oriGroups === null) ? all : all.filter(a => oriGroups.includes(a.groupId));
+    } else {
+      myAsg = isAdminLike ? await Store.getAssignments() : await Store.getOwnAssignments();
+    }
     let targetAsgs = assignmentIds.map(id => myAsg.find(a => a.id === id)).filter(Boolean);
     if (targetAsgs.length === 0) {
       Toast.show('No se encontraron las asignaciones solicitadas', 'error');
@@ -5469,7 +5482,10 @@ ${meta.snapshotInfo ? `
     // El validador necesita acceso a _assignmentStatusCache; si esta función se
     // llama desde fuera del editor (p.ej. desde imprimir múltiples desde la
     // cascada), el cache puede estar vacío para esta lista → recargar primero.
-    if (!isAdminLike || _capAssignments.length > 0) {
+    // v9.06: la reimpresión (opts.reprint, Cotejo MIGE) NO pasa por el gate de
+    // "lista completa" — es reimpresión de datos ya finalizados/corregidos, y
+    // orientación no es responsable de la completitud de captura del maestro.
+    if (!opts.reprint && (!isAdminLike || _capAssignments.length > 0)) {
       const readyOk = await _enforcePrintReadiness(targetAsgs, partialId, 'imprimir esta(s) lista(s)', {
         allowReadyOnly: targetAsgs.length > 1
       });
@@ -5585,7 +5601,8 @@ ${meta.snapshotInfo ? `
       const meta = {
         teacherName, subjectName, groupName, groupNum, grado, turno,
         parcialNum, parcialText, semText, orientador, horas,
-        snapshotInfo: snapshotInfo
+        snapshotInfo: snapshotInfo,
+        cotejoLegend: opts.cotejoLegend || ''
       };
       const html = _buildOfficialPrintHTML(studentsForPrint, gradeDataByDocId, meta);
 

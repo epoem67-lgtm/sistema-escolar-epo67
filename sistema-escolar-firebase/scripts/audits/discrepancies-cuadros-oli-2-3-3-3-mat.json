@@ -1,0 +1,62 @@
+[
+  {
+    "groupId": "MATUTINO_3-3",
+    "alumno": "BLANCAS REYES AVRIL LIZBETH",
+    "studentId": "Li6obePvLgA4bRqdFLgD",
+    "materia": "C.COM",
+    "subjectId": "G3_ciencias_de_la_comunicación_i",
+    "cuadroCal": 6,
+    "fsCal": 9,
+    "docId": "Li6obePvLgA4bRqdFLgD_G3_ciencias_de_la_comunicación_i_P1",
+    "existeEnFirestore": true,
+    "teacherName": "MELENDEZ ABAD CLAUDIA"
+  },
+  {
+    "groupId": "MATUTINO_3-3",
+    "alumno": "CRUZ VELAZQUEZ ANGEL ERNESTO",
+    "studentId": "dznviLt2KbVACvx9Tuqu",
+    "materia": "C.COM",
+    "subjectId": "G3_ciencias_de_la_comunicación_i",
+    "cuadroCal": 8,
+    "fsCal": 6,
+    "docId": "dznviLt2KbVACvx9Tuqu_G3_ciencias_de_la_comunicación_i_P1",
+    "existeEnFirestore": true,
+    "teacherName": "MELENDEZ ABAD CLAUDIA"
+  },
+  {
+    "groupId": "MATUTINO_3-3",
+    "alumno": "GONZALEZ RAMOS ANGEL DAVID",
+    "studentId": "woL96OhNlxJYctopGlNI",
+    "materia": "T.S.FILO",
+    "subjectId": "G3_temas_selectos_de_filosofía",
+    "cuadroCal": 5,
+    "fsCal": 9,
+    "docId": "woL96OhNlxJYctopGlNI_G3_temas_selectos_de_filosofía_P1",
+    "existeEnFirestore": true,
+    "teacherName": "MATA SOLIS NOHEMI BLANCA"
+  },
+  {
+    "groupId": "MATUTINO_3-3",
+    "alumno": "ZUÑIGA SOLORZANO CASTRO ENRIQUE SEBASTIAN",
+    "studentId": "DaczngOZu47OK2pF6eR0",
+    "materia": "C.COM",
+    "subjectId": "G3_ciencias_de_la_comunicación_i",
+    "cuadroCal": 9,
+    "fsCal": 10,
+    "docId": "DaczngOZu47OK2pF6eR0_G3_ciencias_de_la_comunicación_i_P1",
+    "existeEnFirestore": true,
+    "teacherName": "MELENDEZ ABAD CLAUDIA"
+  },
+  {
+    "groupId": "MATUTINO_2-3",
+    "alumno": "ALEMAN GONZALEZ JAIME",
+    "studentId": "sUKAlpCOsSyzthjD2aLC",
+    "materia": "T.S.IGUAL",
+    "subjectId": "G2_temas_selectos_de_igualdad_y_derechos_hu",
+    "cuadroCal": 10,
+    "fsCal": 9,
+    "docId": "sUKAlpCOsSyzthjD2aLC_G2_temas_selectos_de_igualdad_y_derechos_hu_P1",
+    "existeEnFirestore": true,
+    "teacherName": "GONZALEZ CORTES ALEJANDRA"
+  }
+]

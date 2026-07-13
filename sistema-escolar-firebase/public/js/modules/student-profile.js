@@ -608,8 +608,19 @@ const StudentProfileModule = (() => {
   }
 
   // ─── PRINT TIRA DE MATERIAS (formato simple para papás) ──
-  function _printTira() {
+  async function _printTira() {
     if (!_selectedStudent) return;
+
+    // v9.06: releer calificaciones FRESCAS antes de imprimir la tira, para que
+    // una corrección recién aplicada (cotejo MIGE / manual) se refleje aunque el
+    // perfil ya estuviera abierto. force=true ignora el TTL y el caché ya se
+    // invalidó al aplicar. Si falla la lectura, se usa lo que había en memoria.
+    try {
+      if (_filters.grupo) {
+        const fresh = await Store.getGradesByGroup(_filters.grupo, true);
+        _studentGrades = fresh.filter(g => g.studentId === _selectedStudent.id);
+      }
+    } catch (e) { console.warn('[student-profile] no se pudo refrescar grades para la tira:', e); }
 
     const s = _selectedStudent;
     const isTraslado = !!s.bajaPendiente;

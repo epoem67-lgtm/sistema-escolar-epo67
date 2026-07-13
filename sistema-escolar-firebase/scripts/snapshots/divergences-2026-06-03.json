@@ -1,0 +1,28 @@
+[
+  {
+    "snapshotId": "VESPERTINO_1-3_P1_20260603",
+    "divergences": [
+      {
+        "docId": "8K8sYsXEj4L2e9Y107jo_G1_actividades_f��sicas_y_deportivas_ii_P1",
+        "type": "BORRADO",
+        "original": {
+          "value": 10,
+          "subjectId": "G1_actividades_físicas_y_deportivas_ii",
+          "tr": 1.8,
+          "teacherName": "GOMEZ GUZMAN MICHAEL",
+          "studentName": "GALVAN GONZALEZ KAREN DANNAE",
+          "ec": 8,
+          "suma": 9.8,
+          "pe": 0,
+          "teacherId": "s21iGWqgtNQMEZjwJFdZ",
+          "faltas": 0,
+          "cal": 10,
+          "studentId": "8K8sYsXEj4L2e9Y107jo",
+          "subjectName": "actividades físicas y deportivas ii",
+          "docId": "8K8sYsXEj4L2e9Y107jo_G1_actividades_f��sicas_y_deportivas_ii_P1"
+        },
+        "current": null
+      }
+    ]
+  }
+]

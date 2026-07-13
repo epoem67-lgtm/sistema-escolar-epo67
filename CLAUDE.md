@@ -41,8 +41,12 @@ Cambio del director = solo actualizar el documento Firestore.
 - **Service Worker** activo (`public/sw.js`) con `SW_VERSION` — bumpear al cambiar JS/CSS.
 - **Despliegue:** `npx firebase-tools deploy --only hosting` desde `sistema-escolar-firebase/`
 
-⚠️ **Tras editar JS/CSS: bumpear `SW_VERSION` en `public/sw.js` Y los `?v=X.X` en `index.html`.**
-Sin esto, los usuarios siguen viendo codigo viejo (cache-first del SW para assets).
+⚠️ **Tras editar JS/CSS: bumpear los TRES juntos (mismo string):**
+1. `SW_VERSION` en `public/sw.js`
+2. `<meta name="app-version" content="...">` en `public/index.html` (~línea 8)
+3. Los `?v=X.X` de los scripts/CSS afectados en `public/index.html`
+
+Sin **(1)+(2) sincronizados** el auto-clean de [index.html:38-100](sistema-escolar-firebase/public/index.html) NO dispara (compara meta local vs `localStorage.epo67_app_version` — si el meta no bumpea, cree que ya está actualizado). Ese fue el bug jul-2026 del F1 con horas 162/228 fantasmas — SW_VERSION iba en v9.14 pero meta seguía en v8.27. Cache-guard periódico en [index.html:704+](sistema-escolar-firebase/public/index.html) chequea el meta remoto cada 2 min como red de seguridad.
 
 ## Arquitectura del codigo
 
@@ -213,7 +217,25 @@ npx firebase-tools deploy --only hosting
 
 ## Documentacion adicional
 
+- `README.md` (raiz) — **Guia cold-start**: que es el proyecto, como deployar, mapa del repo. Leer primero si retomas el proyecto desde cero.
 - `AGENTS.md` (raiz) — Reglas inviolables para agentes IA
 - `ESTADO_DE_PROYECTO.md` — Estado completo del proyecto, historia de versiones
-- `_AGENTE/ARQUITECTURA_ORQUESTADOR.md` — Sistema de agentes IA
 - `sistema-escolar-firebase/scripts/README.md` — Scripts administrativos
+- `_archivo/README.md` — Indice del material legacy (HTMLs viejos, datos fuente xlsx, agentes antiguos). **NO** contiene codigo activo.
+
+## Estructura del repo (tras reorganizacion 2026-06-01)
+
+```
+ADMINISTRACION ESCOLAR EPO 67/
+├── README.md                   ← cold-start
+├── CLAUDE.md                   ← este archivo (reglas para agentes/devs)
+├── AGENTS.md
+├── ESTADO_DE_PROYECTO.md
+├── .claude/                    ← config Claude Code + skill epo67-sistema
+├── sistema-escolar-firebase/   ← CODIGO ACTIVO (lo unico que se despliega)
+└── _archivo/                   ← legacy (5 subcarpetas con README propio)
+```
+
+Antes habia 10+ carpetas legacy dispersas en raiz (`_AGENTE`, `_PROYECTO`, `_MEMORIA`,
+`_RESPALDOS`, `_ENTREGABLE`, `_SOFTWARE_CONTEXTO`, `SISTEMA`, `Calificaciones`,
+`TURNO MATUTINO`, `TURNO VESPERTINO`, `.agents`) + xlsx sueltos. Todo consolidado en `_archivo/`.

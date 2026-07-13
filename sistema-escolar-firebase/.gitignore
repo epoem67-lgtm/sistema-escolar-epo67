@@ -34,3 +34,8 @@ REPORTE_*.xlsx
 .DS_Store
 Thumbs.db
 grades-backup-*.json
+
+# Credenciales en texto plano — NUNCA commitear (ampliado 2026-07-13)
+credenciales-*.csv
+cartas-demo-*/
+cartas-individuales-*/

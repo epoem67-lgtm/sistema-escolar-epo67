@@ -186,7 +186,7 @@ const AuditData = (() => {
 
       if (onlyDuplicates) {
         _setProgress(100, `Análisis rápido completo: ${duplicates.length} duplicados`);
-        return _renderResults({ duplicates, calVsValue: [], orphanSubjects: [], wrongGroup: [], promedioCheck: [] }, allGrades.length, activeStudents.length);
+        return _renderResults({ duplicates, calVsValue: [], orphanSubjects: [], wrongGroup: [], promedioCheck: [], inconsistentCal: [], rubroRango: [] }, allGrades.length, activeStudents.length);
       }
 
       _setProgress(55, 'Verificando integridad cal vs value, materias huérfanas, groupIds…');
@@ -197,6 +197,14 @@ const AuditData = (() => {
       const orphanSubjects = [];
       // 6) groupId desactualizado
       const wrongGroup = [];
+      // 6b) INTEGRIDAD (blindaje): la cal final NO cuadra con su propia suma.
+      //     Regla EPO67: cal = K.calcCal(suma). Si difiere, la calificación mostrada
+      //     no corresponde al desglose → dato inconsistente que hay que revisar.
+      const inconsistentCal = [];
+      // 6c) RUBROS fuera de rango (tr>2, ec>max del turno, ex>3). NO se corrigen
+      //     solos (las hojas mandan / cada maestro sabe su materia), solo se marcan
+      //     para revisión — casi siempre son errores de dedo (ej. tr=7).
+      const rubroRango = [];
 
       for (const g of allGrades) {
         const st = activeStudents.find(s => s.id === g.studentId);
@@ -239,6 +247,46 @@ const AuditData = (() => {
             subjectId: g.subjectId,
             partial: g.partial,
             cal: g.cal,
+            docId: g.id || g.docId
+          });
+        }
+
+        // INTEGRIDAD E1: cal ≠ K.calcCal(suma). La cal mostrada no corresponde a
+        // su propia suma. Definitivo (no depende de rúbricas ni turno).
+        const _cal = (g.cal !== undefined && g.cal !== null && g.cal !== '') ? Number(g.cal) : null;
+        const _suma = (g.suma !== undefined && g.suma !== null && g.suma !== '') ? Number(g.suma) : null;
+        if (_cal !== null && !isNaN(_cal) && _suma !== null && !isNaN(_suma)) {
+          const expCal = Number(K.calcCal(_suma));
+          if (!isNaN(expCal) && _cal !== expCal) {
+            inconsistentCal.push({
+              studentId: g.studentId,
+              studentName: st.nombreCompleto,
+              groupId: g.groupId || st.groupId || '',
+              subjectId: g.subjectId,
+              subjectName: subjectsById.get(g.subjectId)?.nombre || g.subjectId,
+              partial: g.partial,
+              suma: _suma, cal: _cal, expectedCal: expCal,
+              docId: g.id || g.docId
+            });
+          }
+        }
+
+        // RUBROS fuera de rango: tr>2, ec>max del turno, ex>3. Solo marca (no fix).
+        const _turno = String(g.groupId || st.groupId || '').startsWith('VESPERTINO') ? 'VESPERTINO' : 'MATUTINO';
+        const _ecMax = _turno === 'VESPERTINO' ? 5 : 8;
+        const _rangeProblems = [];
+        if (g.tr != null && g.tr !== '' && Number(g.tr) > 2.001) _rangeProblems.push('tr=' + g.tr + ' (máx 2)');
+        if (g.ec != null && g.ec !== '' && Number(g.ec) > _ecMax + 0.001) _rangeProblems.push('ec=' + g.ec + ' (máx ' + _ecMax + ')');
+        if (g.ex != null && g.ex !== '' && Number(g.ex) > 3.001) _rangeProblems.push('ex=' + g.ex + ' (máx 3)');
+        if (_rangeProblems.length) {
+          rubroRango.push({
+            studentId: g.studentId,
+            studentName: st.nombreCompleto,
+            groupId: g.groupId || st.groupId || '',
+            subjectId: g.subjectId,
+            subjectName: subjectsById.get(g.subjectId)?.nombre || g.subjectId,
+            partial: g.partial,
+            detalle: _rangeProblems.join('; '),
             docId: g.id || g.docId
           });
         }
@@ -310,7 +358,7 @@ const AuditData = (() => {
       }
 
       // 9) Renderizar resumen + botón de descarga CSV
-      _renderResults({ duplicates, calVsValue, orphanSubjects, wrongGroup, promedioCheck }, allGrades.length, activeStudents.length);
+      _renderResults({ duplicates, calVsValue, orphanSubjects, wrongGroup, promedioCheck, inconsistentCal, rubroRango }, allGrades.length, activeStudents.length);
       _setProgress(100, '✓ Auditoría completa');
 
     } catch (err) {
@@ -323,10 +371,14 @@ const AuditData = (() => {
   function _renderResults(r, totalGrades, totalStudents) {
     _lastResults = r;  // cache para los botones de Reparar
     const div = document.getElementById('audit-results');
-    const totalIssues = r.duplicates.length + r.calVsValue.length + r.orphanSubjects.length + r.wrongGroup.length;
+    const nIncons = r.inconsistentCal?.length || 0;
+    const nRango = r.rubroRango?.length || 0;
+    const totalIssues = r.duplicates.length + r.calVsValue.length + r.orphanSubjects.length + r.wrongGroup.length + nIncons;
     const statusBg = totalIssues === 0 ? '#dcfce7' : '#fee2e2';
     const statusBorder = totalIssues === 0 ? '#16a34a' : '#dc2626';
-    const statusText = totalIssues === 0 ? '✓ Sistema limpio — sin inconsistencias' : `⚠️ ${totalIssues} inconsistencias detectadas`;
+    const statusText = totalIssues === 0
+      ? (nRango > 0 ? `✓ Sin inconsistencias duras — ${nRango} rubros por revisar` : '✓ Sistema limpio — sin inconsistencias')
+      : `⚠️ ${totalIssues} inconsistencias detectadas`;
     const statusColor = totalIssues === 0 ? '#14532d' : '#7f1d1d';
 
     div.innerHTML = `
@@ -335,12 +387,14 @@ const AuditData = (() => {
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;font-size:13px;color:${statusColor};">
           <div><strong>${totalStudents}</strong> alumnos activos auditados</div>
           <div><strong>${totalGrades.toLocaleString()}</strong> grades revisados</div>
+          <div><strong style="color:${nIncons > 0 ? '#dc2626' : '#16a34a'};">${nIncons}</strong> cal≠suma (integridad)</div>
           <div><strong style="color:${r.duplicates.length > 0 ? '#dc2626' : '#16a34a'};">${r.duplicates.length}</strong> duplicados</div>
           <div><strong style="color:${r.calVsValue.length > 0 ? '#dc2626' : '#16a34a'};">${r.calVsValue.length}</strong> cal≠value</div>
+          <div><strong style="color:${nRango > 0 ? '#d97706' : '#16a34a'};">${nRango}</strong> rubros fuera de rango</div>
           <div><strong style="color:${r.wrongGroup.length > 0 ? '#d97706' : '#16a34a'};">${r.wrongGroup.length}</strong> grupo desactualizado</div>
           <div><strong style="color:${r.orphanSubjects.length > 0 ? '#d97706' : '#16a34a'};">${r.orphanSubjects.length}</strong> materias huérfanas</div>
         </div>
-        ${totalIssues > 0 ? `
+        ${(totalIssues > 0 || nRango > 0) ? `
           <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn btn-primary" id="audit-download-csv">
               <span class="material-icons-round" style="vertical-align:middle;">download</span>
@@ -362,6 +416,38 @@ const AuditData = (() => {
   function _showDetailsInline(r) {
     const div = document.getElementById('audit-details');
     let html = '';
+
+    if ((r.inconsistentCal?.length || 0) > 0) {
+      html += `<div class="card">
+        <h4 style="margin:0 0 6px;color:#dc2626;">🔴 Integridad: cal ≠ su propia suma (${r.inconsistentCal.length})</h4>
+        <p style="font-size:12px;color:#666;margin:0 0 8px;">La calificación mostrada NO corresponde a su suma según la regla EPO67 (cal = redondeo de la suma). Revisar contra la hoja firmada de ese parcial — <strong>no se corrige en automático</strong>.</p>
+        <table class="table-light" style="font-size:11px;">
+          <thead><tr><th>Alumno</th><th>Grupo</th><th>Materia</th><th>Parcial</th><th>Suma</th><th>Cal actual</th><th>Cal esperada</th></tr></thead>
+          <tbody>${r.inconsistentCal.slice(0, 200).map(d =>
+            `<tr><td>${Utils.sanitize(d.studentName)}</td><td>${Utils.sanitize(d.groupId)}</td>
+             <td>${Utils.sanitize(d.subjectName)}</td><td>${d.partial}</td>
+             <td>${d.suma}</td><td style="color:#dc2626;font-weight:700;">${d.cal}</td><td style="color:#16a34a;font-weight:700;">${d.expectedCal}</td></tr>`).join('')}
+          </tbody>
+        </table>
+        ${r.inconsistentCal.length > 200 ? `<p style="text-align:center;color:#666;margin:8px 0 0;">…y ${r.inconsistentCal.length - 200} más en el CSV</p>` : ''}
+      </div>`;
+    }
+
+    if ((r.rubroRango?.length || 0) > 0) {
+      html += `<div class="card" style="margin-top:12px;">
+        <h4 style="margin:0 0 6px;color:#d97706;">🟠 Rubros fuera de rango (${r.rubroRango.length})</h4>
+        <p style="font-size:12px;color:#666;margin:0 0 8px;">Transversal &gt; 2, EC o Examen arriba del máximo del turno. Casi siempre error de dedo (ej. tr=7). Se marca para revisión — <strong>no se altera</strong>: las hojas mandan.</p>
+        <table class="table-light" style="font-size:11px;">
+          <thead><tr><th>Alumno</th><th>Grupo</th><th>Materia</th><th>Parcial</th><th>Detalle</th></tr></thead>
+          <tbody>${r.rubroRango.slice(0, 200).map(d =>
+            `<tr><td>${Utils.sanitize(d.studentName)}</td><td>${Utils.sanitize(d.groupId)}</td>
+             <td>${Utils.sanitize(d.subjectName)}</td><td>${d.partial}</td>
+             <td style="font-family:monospace;">${Utils.sanitize(d.detalle)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+        ${r.rubroRango.length > 200 ? `<p style="text-align:center;color:#666;margin:8px 0 0;">…y ${r.rubroRango.length - 200} más en el CSV</p>` : ''}
+      </div>`;
+    }
 
     if (r.duplicates.length > 0) {
       html += `<div class="card">
@@ -471,6 +557,12 @@ const AuditData = (() => {
       return str;
     };
 
+    for (const d of (r.inconsistentCal || [])) {
+      lines.push(`CAL_NO_CUADRA_SUMA,${esc(d.studentName)},${esc(d.groupId)},${esc(d.subjectId)},${esc(d.subjectName)},${d.partial},${esc('suma=' + d.suma + ' cal=' + d.cal)},${esc('cal_esperada=' + d.expectedCal)},${esc(d.docId)}`);
+    }
+    for (const d of (r.rubroRango || [])) {
+      lines.push(`RUBRO_FUERA_RANGO,${esc(d.studentName)},${esc(d.groupId)},${esc(d.subjectId)},${esc(d.subjectName)},${d.partial},${esc(d.detalle)},,${esc(d.docId)}`);
+    }
     for (const d of r.duplicates) {
       lines.push(`DUPLICADO,${esc(d.studentName)},${esc(d.groupId)},${esc(d.subjectId)},${esc(d.subjectName)},${d.partial},${esc('count=' + d.count)},${esc('cals=' + d.cals)},${esc(d.docIds)}`);
     }

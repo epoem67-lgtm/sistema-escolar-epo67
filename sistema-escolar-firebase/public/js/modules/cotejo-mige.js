@@ -37,9 +37,20 @@ const CotejoMige = (() => {
   let _lastResult = null;    // último resultado de cotejo (para recomputar acciones)
   let _lastCorrectedAsgs = []; // assignment ids de materias corregidas (para reimprimir F1 de golpe)
   let _lastCorrectedMats = []; // nombres de materias corregidas
+  let _correctedSubjIds = new Set(); // subjectIds con cotejoFix — persiste entre recargas (badge + leyenda F1)
   let _progressDecisions = {}; // avance guardado: { key -> valor hoja } por grupo
   let _saveTimer = null;       // debounce del auto-guardado
   let _lastConcentrado = null; // snapshot de lo aplicado (para la constancia PDF)
+  let _lastFolio = '';         // folio del último lote aplicado (COT-...) — liga Acta ↔ panel Correcciones
+
+  // Folio único del lote de cotejo: COT-{yyyymmdd}-{hhmmss}-{uid4}.
+  // Distinto de los folios de solicitudes de maestros y de ADM- (dirección),
+  // para identificar en el panel de Correcciones que vino del Cotejo MIGE.
+  function _cotejoFolio() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    const uid4 = ((auth.currentUser && auth.currentUser.uid) || 'xxxx').slice(-4);
+    return `COT-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${uid4}`;
+  }
 
   // ── Normalización ──
   function _norm(s) {
@@ -278,6 +289,12 @@ const CotejoMige = (() => {
       if (f1) { _reprintF1(f1.dataset.asg, f1.dataset.partial, f1); return; }
       const cons = e.target.closest('[data-action="cm-consulta"]');
       if (cons) { _downloadConsulta(cons.dataset.asg); return; }
+      if (e.target.id === 'cm-f1-all') { // marcar/desmarcar todas
+        const on = e.target.checked;
+        document.querySelectorAll('#cm-subjects .cm-f1-chk').forEach(c => { c.checked = on; });
+        return;
+      }
+      if (e.target.closest('[data-action="cm-print-selected"]')) { _reprintF1Bulk(false); return; }
       const pick = e.target.closest('[data-action="cm-pick"]');
       if (pick && _lastResult) {
         const i = Number(pick.dataset.fi);
@@ -289,15 +306,17 @@ const CotejoMige = (() => {
         _recordDecision(f); _renderActions(); _renderCorreccion();
         return;
       }
+      if (e.target.closest('[data-action="cm-print-mige"]')) { _printConcentrado(null, { soloMige: true }); return; }
       if (e.target.closest('[data-action="cm-print-concentrado"]')) { _printConcentrado(); return; }
       if (e.target.closest('[data-action="cm-print-constancia"]')) { _printConcentrado(_lastConcentrado); return; }
       if (e.target.closest('[data-action="cm-apply-sys"]')) { _applyCorrections(_corrList()); return; }
       if (e.target.closest('[data-action="cm-reprint-affected"]')) {
         if (!_lastCorrectedAsgs.length) { Toast.show('No hay materias corregidas por reimprimir', 'info'); return; }
-        if (typeof GradesModule === 'undefined' || typeof GradesModule.printMultipleAssignments !== 'function') {
-          Toast.show('El módulo de calificaciones no está disponible para imprimir el F1.', 'error'); return;
+        if (typeof MyF1Module === 'undefined' || typeof MyF1Module.printConcentrados !== 'function') {
+          Toast.show('El módulo de Concentrado F1 no está disponible.', 'error'); return;
         }
-        GradesModule.printMultipleAssignments(_lastCorrectedAsgs, _lastPartialId());
+        const _cLeg = 'COTEJADO Y CORREGIDO CON MIGE · ' + new Date().toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) + (_lastFolio ? ' · Folio ' + _lastFolio : '');
+        MyF1Module.printConcentrados(_lastCorrectedAsgs, { legend: _cLeg }); // Concentrado F1 (3 parciales) de lo corregido, 1 documento
         return;
       }
     });
@@ -444,6 +463,8 @@ const CotejoMige = (() => {
   async function _onGroupSelected(groupId) {
     _selectedGroupId = groupId || null;
     _migeSubjects = []; _migeMeta = null; _progressDecisions = {};
+    // Reset del estado por-grupo para no arrastrar badges/leyendas del grupo anterior.
+    _correctedSubjIds = new Set(); _lastCorrectedAsgs = []; _lastCorrectedMats = []; _lastConcentrado = null; _lastFolio = '';
     document.getElementById('cm-results') && (document.getElementById('cm-results').innerHTML = '');
     _renderSubjectsList();
     if (!_selectedGroupId) { _setMigeStatus(''); _updateRunBtn(); return; }
@@ -544,6 +565,10 @@ const CotejoMige = (() => {
       ]);
       students.forEach(s => { s._words = _nameWords(s.nombreCompleto || ''); });
       const gradesByPartial = { P1: gP1, P2: gP2, P3: gP3 };
+      // Materias YA corregidas por cotejo (grades con marcador cotejoFix). Persiste
+      // aunque recargues la página → alimenta el badge y la leyenda del F1 oficial.
+      _correctedSubjIds = new Set();
+      [gP1, gP2, gP3].forEach(arr => arr.forEach(g => { if (g && g.cotejoFix && g.subjectId) _correctedSubjIds.add(g.subjectId); }));
       const subjectsById = new Map(_subjects.map(s => [s.id, s]));
       const subjIds = new Set();
       PARTIALS.forEach(p => gradesByPartial[p].forEach(g => g.subjectId && subjIds.add(g.subjectId)));
@@ -607,6 +632,7 @@ const CotejoMige = (() => {
         materiasMatched: _migeSubjects.length - unmatchedSubjects.length,
         materiasTotal: _migeSubjects.length,
       });
+      _renderSubjectsList(); // re-render con badges "✓ Cotejada y corregida" (ya se construyó _correctedSubjIds)
     } catch (err) {
       console.error('[cotejo-mige] error en cotejo:', err);
       _setProgress(false);
@@ -922,7 +948,8 @@ const CotejoMige = (() => {
     el.innerHTML = `<div class="card" style="margin-top:12px;border:2px solid #334155;">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <h4 style="margin:0;color:#1e293b;">🗂️ Concentrado de ajustes del grupo</h4>
-          <button class="btn btn-outline btn-sm" data-action="cm-print-concentrado"><span class="material-icons-round" style="vertical-align:middle;font-size:16px;">picture_as_pdf</span> Descargar concentrado (PDF)</button>
+          <button class="btn btn-outline btn-sm" data-action="cm-print-mige"><span class="material-icons-round" style="vertical-align:middle;font-size:16px;">upload_file</span> Reporte para MIGE (Dirección)</button>
+          <button class="btn btn-outline btn-sm" data-action="cm-print-concentrado"><span class="material-icons-round" style="vertical-align:middle;font-size:16px;">picture_as_pdf</span> Reporte completo (MIGE + Sistema)</button>
         </div>
         <p style="font-size:12px;color:#475569;margin:6px 0 4px;">Todo lo que se tuvo que mover en este grupo, en un solo documento: lo que va a <strong>MIGE</strong> y lo que va al <strong>Sistema</strong>. La hoja física firmada es la fuente de verdad.</p>
         ${migeBlock}${sysBlock}</div>`;
@@ -930,13 +957,15 @@ const CotejoMige = (() => {
 
   // Concentrado de ajustes (PDF): Parte A = ajustes en MIGE (por capturar);
   // Parte B = correcciones al Sistema (constancia con firmas). Un solo documento.
-  function _printConcentrado(snap) {
+  function _printConcentrado(snap, opts = {}) {
+    const soloMige = !!(opts && opts.soloMige);
     const migeL = (snap && snap.mige) ? snap.mige : _migeList();
-    const sysList = (snap && snap.sys) ? snap.sys : _corrList();
-    if (!migeL.length && !sysList.length) { Toast.show('No hay ajustes que reportar todavía (captura la hoja primero)', 'info'); return; }
+    const sysList = soloMige ? [] : ((snap && snap.sys) ? snap.sys : _corrList());
+    if (!migeL.length && !sysList.length) { Toast.show(soloMige ? 'No hay ajustes de MIGE que reportar' : 'No hay ajustes que reportar todavía (captura la hoja primero)', 'info'); return; }
     const g = snap ? snap.group : (_lastResult && _lastResult.group);
     const hoy = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
     const quien = App.currentUser?.nombre ? Utils.displayName(App.currentUser.nombre) : (App.currentUser?.displayName || '________________________');
+    const folio = (snap && snap.folio) ? snap.folio : '';
     const dir = (App.staffName && App.staffName('director')) || 'Dirección Escolar';
     const esc = s => Utils.sanitize(String(s == null ? '' : s));
     const tabla = (list, actualKey, actualLabel) => {
@@ -959,13 +988,13 @@ const CotejoMige = (() => {
       </style></head><body>
       <h1>ESCUELA PREPARATORIA OFICIAL NÚM. 67</h1>
       <p class="sub">C.C.T. 15EBH0134D · Ciclo 2025-2026</p>
-      <p class="sub"><strong>CONCENTRADO DE AJUSTES POR COTEJO CON MIGE</strong></p>
-      <div class="meta"><b>Grupo:</b> ${esc((g && g.nombre) || '')} &nbsp; <b>Turno:</b> ${esc((g && g.turno) || '')} &nbsp; <b>Fecha:</b> ${esc(hoy)}</div>
+      <p class="sub"><strong>${soloMige ? 'AJUSTES A CAPTURAR EN MIGE — PARA DIRECCIÓN' : 'CONCENTRADO DE AJUSTES POR COTEJO CON MIGE'}</strong></p>
+      <div class="meta"><b>Grupo:</b> ${esc((g && g.nombre) || '')} &nbsp; <b>Turno:</b> ${esc((g && g.turno) || '')} &nbsp; <b>Fecha:</b> ${esc(hoy)}${folio ? ` &nbsp; <b>Folio:</b> ${esc(folio)}` : ''}</div>
       <p class="intro">Resultado del cotejo entre el Sistema Escolar EPO 67 y la plataforma MIGE, verificado contra las <strong>hojas oficiales firmadas</strong> por los docentes (fuente de verdad). Se detallan los ajustes a realizar en cada plataforma.</p>
-      <h3>PARTE A — Ajustes a capturar en MIGE (${migeL.length})</h3>
+      <h3>${soloMige ? 'Ajustes a capturar en MIGE' : 'PARTE A — Ajustes a capturar en MIGE'} (${migeL.length})</h3>
       ${migeL.length ? `<p class="intro">En la plataforma MIGE, cambiar cada celda al valor de la columna "Debe decir".</p>${tabla(migeL, 'mige', 'MIGE tiene')}` : '<p class="intro">Sin ajustes en MIGE.</p>'}
-      <h3>PARTE B — Correcciones aplicadas al Sistema EPO 67 (${sysList.length})</h3>
-      ${sysList.length ? `<p class="intro">Corregidas en el sistema conforme a la hoja firmada (quedan registradas en la Bitácora).</p>${tabla(sysList, 'sistema', 'Sistema tenía')}` : '<p class="intro">Sin correcciones al sistema.</p>'}
+      ${soloMige ? '' : `<h3>PARTE B — Correcciones aplicadas al Sistema EPO 67 (${sysList.length})</h3>
+      ${sysList.length ? `<p class="intro">Corregidas en el Sistema conforme a la hoja firmada. Quedan registradas en la <strong>Bitácora de Cambios</strong>; las de calificación además en el panel <strong>Correcciones → Aplicadas</strong>${folio ? ` (folio ${esc(folio)})` : ''}.</p>${tabla(sysList, 'sistema', 'Sistema tenía')}` : '<p class="intro">Sin correcciones al sistema.</p>'}`}
       <div class="firmas"><div>${esc(quien)}<br>Cotejó — Orientación</div><div>${esc(dir)}<br>Vo. Bo. Dirección</div></div>
       </body></html>`);
     w.document.close(); w.focus();
@@ -975,9 +1004,19 @@ const CotejoMige = (() => {
   async function _applyCorrections(list) {
     if (!_canApply) { Toast.show('Solo Dirección (admin/subdirección) puede aplicar', 'error'); return; }
     if (!list.length) return;
-    if (!window.confirm(`Vas a aplicar ${list.length} corrección(es) al Sistema EPO 67 (según las hojas firmadas). Cada cambio quedará en la Bitácora a tu nombre. ¿Continuar?`)) return;
+    if (!window.confirm(`Vas a aplicar ${list.length} corrección(es) al Sistema EPO 67 (según las hojas firmadas). Cada cambio queda en la Bitácora a tu nombre; las de calificación también en el panel de Correcciones (Aplicadas). ¿Continuar?`)) return;
     _setProgress(true, 'Aplicando correcciones al sistema…');
-    let okN = 0, errN = 0;
+
+    // Folio único del lote (liga el Acta con el panel de Correcciones).
+    const _folio = _cotejoFolio();
+    const _role = App.currentUser && App.currentUser.role;
+    const _canWriteCorr = (_role === 'admin' || _role === 'subdirector'); // rules FLUJO 2: 'applied' solo admin/subdir
+    const _userName = (App.currentUser && App.currentUser.nombre && Utils.displayName)
+      ? Utils.displayName(App.currentUser.nombre)
+      : ((App.currentUser && (App.currentUser.displayName || App.currentUser.email)) || '');
+    const _g = _lastResult && _lastResult.group;
+
+    let okN = 0, errN = 0, corrN = 0;
     for (const f of list) {
       try {
         const gradeDocId = `${f.studentId}_${f.subjectId}_${f.parcial}`;
@@ -994,6 +1033,33 @@ const CotejoMige = (() => {
           extra: { before: f.sistema, after: nuevo, mige: f.mige, group: _selectedGroupId, campo: f.campo },
         });
         okN++;
+
+        // Registrar la corrección de CALIFICACIÓN en el panel de Correcciones
+        // (pestaña "Aplicadas"). Solo calif 5–10 y solo admin/subdirección
+        // (firestore.rules FLUJO 2). Las FALTAS no caben ahí (la regla exige
+        // newGrade 5–10) → quedan en la Bitácora + el Acta. Best-effort: si la
+        // regla rechaza, se registra el aviso pero no rompe la aplicación.
+        if (_canWriteCorr && f.campo === 'Calif' && Number.isFinite(nuevo) && nuevo >= 5 && nuevo <= 10) {
+          try {
+            const _cur = Number(f.sistema);
+            const _curNum = Number.isFinite(_cur) ? _cur : null;
+            const _ts = new Date();
+            await db.collection('gradeCorrections').add({
+              studentId: f.studentId, subjectId: f.subjectId, partial: f.parcial,
+              newGrade: nuevo, reason: `Cotejo MIGE (hoja firmada): ${f.sistema} → ${nuevo}`,
+              folio: _folio, status: 'applied',
+              currentGrade: _curNum, oldCal: _curNum, newCal: nuevo, motivo: 'Cotejo MIGE',
+              studentName: f.alumno, subjectName: f.materia,
+              groupId: _selectedGroupId, groupName: (_g && _g.nombre) || '',
+              turno: (_g && _g.turno) || '', grado: (_g && _g.grado) || null,
+              appliedBy: auth.currentUser.uid, appliedByName: _userName, appliedAt: _ts,
+              correctedBy: auth.currentUser.uid, correctedByName: _userName, correctedAt: _ts,
+              requestedBy: auth.currentUser.uid, requestedByName: _userName, requestedAt: _ts,
+              source: 'cotejo_mige',
+            });
+            corrN++;
+          } catch (ce) { console.warn('[cotejo-mige] no se registró en panel Correcciones', f, ce); }
+        }
       } catch (err) { console.error('[cotejo-mige] error aplicando', f, err); errN++; }
     }
     if (Store.invalidateGradesForGroup) Store.invalidateGradesForGroup(_selectedGroupId);
@@ -1006,30 +1072,58 @@ const CotejoMige = (() => {
       .map(sid => _assignments.find(a => a.groupId === _selectedGroupId && a.subjectId === sid))
       .filter(Boolean).map(a => a.id);
 
-    // Snapshot para la CONSTANCIA (lo que se aplicó + lo que queda en MIGE),
-    // capturado ANTES del re-cotejo (que borra los focos ya resueltos).
-    _lastConcentrado = { group: _lastResult.group, sys: list.slice(), mige: _migeList().slice(), when: new Date().toISOString() };
+    _lastFolio = _folio;
 
-    Toast.show(`${okN} corrección(es) aplicadas${errN ? ', ' + errN + ' con error' : ''}.`, errN ? 'warning' : 'success');
+    // Snapshot para el ACTA (lo aplicado al Sistema + lo que queda en MIGE),
+    // capturado ANTES del re-cotejo (que borra los focos ya resueltos).
+    _lastConcentrado = {
+      group: _lastResult.group, sys: list.slice(), mige: _migeList().slice(),
+      when: new Date().toISOString(), folio: _folio, aplicadoPor: _userName, panelCorrN: corrN,
+    };
+
+    const _corrMsg = corrN ? ` · ${corrN} en el panel de Correcciones` : '';
+    Toast.show(`${okN} corrección(es) aplicadas${_corrMsg}${errN ? ', ' + errN + ' con error' : ''}.`, errN ? 'warning' : 'success');
     await _runCotejo();       // recotejar para reflejar el estado ya corregido
-    _prependReprintBanner();  // banner arriba con botón "Imprimir F1 de lo corregido" + constancia
+    _prependReprintBanner();  // banner con Acta + panel Correcciones + "Imprimir F1 de lo corregido"
   }
 
   // Banner tras aplicar: reimprime de UN clic el F1 de todas las materias corregidas.
   function _prependReprintBanner() {
-    if (!_lastCorrectedAsgs.length) return;
     const div = document.getElementById('cm-results');
     if (!div) return;
+    const snap = _lastConcentrado;
+    const sysN = (snap && snap.sys) ? snap.sys.length : 0;
+    if (!sysN) return; // no se aplicó nada al Sistema
+    const panelN = (snap && snap.panelCorrN) || 0;
+    const faltasN = (snap && snap.sys) ? snap.sys.filter(f => f.campo !== 'Calif').length : 0;
     const mats = _lastCorrectedMats.map(m => Utils.sanitize(m)).join(', ');
+    const folio = (snap && snap.folio) ? Utils.sanitize(snap.folio) : '';
+
+    // Desglose de dónde quedó registrado cada cambio (certeza para Olivia)
+    const panelLine = panelN
+      ? `<li><strong>${panelN}</strong> de calificación → panel <strong>Correcciones → Aplicadas</strong>${folio ? ` (folio ${folio})` : ''}.</li>`
+      : '';
+    const faltasLine = faltasN
+      ? `<li><strong>${faltasN}</strong> de faltas → <strong>Bitácora</strong> y el Acta (el panel de Correcciones solo admite calificaciones).</li>`
+      : '';
+
+    const f1Btn = _lastCorrectedAsgs.length
+      ? `<button class="btn btn-primary" data-action="cm-reprint-affected"><span class="material-icons-round" style="vertical-align:middle;font-size:18px;">print</span> Reimprimir F1 de lo corregido — 1 documento (${_lastCorrectedAsgs.length})</button>`
+      : `<span style="font-size:12px;color:#166534;align-self:center;">Reimprime el F1 desde la lista de materias (abajo).</span>`;
+
     const banner = document.createElement('div');
     banner.className = 'card';
     banner.setAttribute('style', 'background:#ecfdf5;border-left:5px solid #16a34a;margin-bottom:12px;');
     banner.innerHTML = `
-      <h4 style="margin:0 0 6px;color:#14532d;">✓ Guardado en el sistema y en la Bitácora</h4>
-      <p style="margin:0 0 10px;font-size:12.5px;color:#166534;line-height:1.5;">Se corrigió el Sistema en <strong>${_lastCorrectedMats.length} materia(s)</strong>: ${mats}. <strong>Ya quedó guardado permanentemente</strong> — puedes comprobarlo en <strong>Bitácora de Cambios</strong> (menú izquierdo), con quién y cuándo. Ahora reimprime su F1 (los 3 parciales) con un clic:</p>
+      <h4 style="margin:0 0 6px;color:#14532d;">✓ Aplicado y registrado — ${sysN} corrección(es) al Sistema</h4>
+      <p style="margin:0 0 6px;font-size:12.5px;color:#166534;line-height:1.5;">Materia(s): <strong>${mats}</strong>. Quedó registrado en:</p>
+      <ul style="margin:0 0 10px;padding-left:18px;font-size:12.5px;color:#166534;line-height:1.6;">
+        <li>Todas en <strong>Bitácora de Cambios</strong> (menú izquierdo), con quién y cuándo.</li>
+        ${panelLine}${faltasLine}
+      </ul>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-outline" data-action="cm-print-constancia"><span class="material-icons-round" style="vertical-align:middle;font-size:18px;">picture_as_pdf</span> Descargar constancia (PDF)</button>
-        <button class="btn btn-primary" data-action="cm-reprint-affected"><span class="material-icons-round" style="vertical-align:middle;font-size:18px;">print</span> Imprimir F1 de lo corregido (${_lastCorrectedAsgs.length})</button>
+        <button class="btn btn-outline" data-action="cm-print-constancia"><span class="material-icons-round" style="vertical-align:middle;font-size:18px;">picture_as_pdf</span> Descargar Acta de lo aplicado (PDF)</button>
+        ${f1Btn}
       </div>`;
     div.insertBefore(banner, div.firstChild);
   }
@@ -1055,28 +1149,50 @@ const CotejoMige = (() => {
     const div = document.getElementById('cm-subjects');
     if (!div) return;
     if (!_selectedGroupId) { div.innerHTML = ''; return; }
-    const asgs = _assignments.filter(a => a.groupId === _selectedGroupId)
+    // SOLO materias CORREGIDAS por cotejo (marcador cotejoFix → _correctedSubjIds).
+    // La reimpresión es para lo que se movió, NO para todo el grupo.
+    const asgs = _assignments.filter(a => a.groupId === _selectedGroupId && _correctedSubjIds.has(a.subjectId))
       .sort((a, b) => (K.getUACNombre(a.subjectName || a.subjectId || '') || '').localeCompare(K.getUACNombre(b.subjectName || b.subjectId || '') || ''));
     if (!asgs.length) {
-      div.innerHTML = `<div class="card">${UI.emptyState('menu_book', 'No hay materias/asignaciones registradas para este grupo (o no tienes asignaciones aquí).')}</div>`;
+      div.innerHTML = `<div class="card" style="border-left:4px solid #94a3b8;">
+        <h4 style="margin:0 0 4px;">🖨️ Reimprimir Concentrado F1 de lo corregido</h4>
+        <p style="font-size:12px;color:#64748b;margin:0;">Aquí aparecen <strong>solo las materias que corregiste</strong> en el cotejo, para reimprimir su Concentrado F1 (los 3 parciales) con el sello ✓. Todavía no hay correcciones en este grupo.</p></div>`;
       return;
     }
-    // Botón de CONSULTA (solo lectura, para todos): descarga PDF de las calificaciones
-    // de la materia (3 parciales + faltas), sin snapshot ni edición.
-    // El F1 OFICIAL (con sello) NO va aquí: se reimprime solo DESPUÉS de aplicar una
-    // corrección (banner verde), que es cuando tiene sentido.
-    const consultaBtn = (asgId) => `
-      <button class="btn btn-outline btn-sm" data-action="cm-consulta" data-asg="${asgId}">
-        <span class="material-icons-round" style="vertical-align:middle;font-size:16px;">visibility</span> Descargar (consulta)</button>`;
+    const partial = _lastPartialId();
+    const f1Btn = (asgId) => `<button class="btn btn-primary btn-sm" data-action="cm-print-f1" data-asg="${Utils.sanitize(asgId)}" data-partial="${partial}" title="Reimprime el Concentrado F1 (3 parciales) de esta materia"><span class="material-icons-round" style="vertical-align:middle;font-size:16px;">print</span> Reimprimir F1</button>`;
+    const consultaBtn = (asgId) => `<button class="btn btn-outline btn-sm" data-action="cm-consulta" data-asg="${Utils.sanitize(asgId)}" title="Copia de consulta (no oficial): 3 parciales + faltas"><span class="material-icons-round" style="vertical-align:middle;font-size:16px;">visibility</span> Consulta</button>`;
+    const corrBadge = `<span style="display:inline-block;background:#dcfce7;color:#166534;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:20px;white-space:nowrap;">✓ Cotejada y corregida</span>`;
     div.innerHTML = `
       <div class="card">
-        <h4 style="margin:0 0 6px;">📂 Consulta de listas del grupo (solo lectura)</h4>
-        <p style="font-size:12px;color:#64748b;margin:0 0 12px;">Descarga en PDF la lista de calificaciones y faltas de cada materia (los <strong>3 parciales</strong>) para tenerla a la mano. Es una <strong>copia de consulta</strong>, no editable. El <strong>F1 oficial</strong> se reimprime automáticamente cuando aplicas una corrección (arriba).</p>
-        <table class="table-light" style="font-size:13px;"><thead><tr><th>Materia</th><th>Docente</th><th style="text-align:right;">Consulta</th></tr></thead>
-          <tbody>${asgs.map(a => `<tr>
-            <td>${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId || ''))}</td>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <h4 style="margin:0;">🖨️ Reimprimir Concentrado F1 de lo corregido <span style="font-weight:400;color:#64748b;font-size:13px;">(${asgs.length})</span></h4>
+          <button class="btn btn-primary btn-sm" data-action="cm-print-selected"><span class="material-icons-round" style="vertical-align:middle;font-size:16px;">print</span> Reimprimir seleccionados (1 archivo)</button>
+        </div>
+        <p style="font-size:12px;color:#64748b;margin:6px 0 12px;">Aquí <strong>solo</strong> están las materias que <strong>cotejaste y corregiste</strong>. Vienen todas marcadas; desmarca las que no quieras e imprímelas <strong>juntas en un solo documento</strong> (Concentrado F1, 3 parciales, con el sello <strong style="color:#166534;">✓ Cotejada y corregida</strong>). La <strong>Consulta</strong> es copia no oficial.</p>
+        <table class="table-light" style="font-size:13px;"><thead><tr>
+          <th style="width:34px;text-align:center;"><input type="checkbox" id="cm-f1-all" title="Marcar / desmarcar todas" checked></th>
+          <th>Materia</th><th>Docente</th><th style="text-align:right;">Individual</th></tr></thead>
+          <tbody>${asgs.map(a => `<tr style="background:#f0fdf4;">
+            <td style="text-align:center;"><input type="checkbox" class="cm-f1-chk" data-asg="${Utils.sanitize(a.id)}" data-subj="${Utils.sanitize(a.subjectId || '')}" checked></td>
+            <td>${Utils.sanitize(K.getUACNombre(a.subjectName || a.subjectId || ''))} &nbsp;${corrBadge}</td>
             <td style="color:#64748b;">${Utils.sanitize(Utils.displayName(a.teacherName || '') || '—')}</td>
-            <td style="text-align:right;white-space:nowrap;">${consultaBtn(a.id)}</td></tr>`).join('')}</tbody></table></div>`;
+            <td style="text-align:right;white-space:nowrap;">${f1Btn(a.id)} ${consultaBtn(a.id)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // Reimprime en 1 solo documento el Concentrado F1 de varias materias.
+  // all=true → todas del grupo; all=false → solo las marcadas. El sello
+  // "cotejado y corregido" se pone SOLO en las corregidas (leyenda por-materia).
+  function _reprintF1Bulk(all) {
+    if (typeof MyF1Module === 'undefined' || typeof MyF1Module.printConcentrados !== 'function') {
+      Toast.show('El módulo de Concentrado F1 no está disponible.', 'error'); return;
+    }
+    const rows = [...document.querySelectorAll('#cm-subjects .cm-f1-chk')];
+    const chosen = all ? rows : rows.filter(c => c.checked);
+    if (!chosen.length) { Toast.show(all ? 'No hay materias en el grupo' : 'Marca al menos una materia', 'info'); return; }
+    const leg = 'COTEJADO Y CORREGIDO CON MIGE · ' + new Date().toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) + (_lastFolio ? ' · Folio ' + _lastFolio : '');
+    const items = chosen.map(c => ({ id: c.dataset.asg, legend: _correctedSubjIds.has(c.dataset.subj) ? leg : '' }));
+    MyF1Module.printConcentrados(items, {});
   }
 
   // Descarga read-only (PDF vía print) de las calificaciones de una materia:
@@ -1136,14 +1252,20 @@ const CotejoMige = (() => {
   }
 
   async function _reprintF1(asgId, partial, btn) {
-    if (!asgId || !partial) return;
-    if (typeof GradesModule === 'undefined' || typeof GradesModule.printMultipleAssignments !== 'function') {
-      Toast.show('El módulo de calificaciones no está disponible para imprimir el F1.', 'error'); return;
+    if (!asgId) return;
+    if (typeof MyF1Module === 'undefined' || typeof MyF1Module.printConcentrados !== 'function') {
+      Toast.show('El módulo de Concentrado F1 no está disponible.', 'error'); return;
     }
     const orig = btn ? btn.innerHTML : '';
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="material-icons-round loading-spinner" style="font-size:16px;">autorenew</span>'; }
-    try { await GradesModule.printMultipleAssignments([asgId], partial); }
-    catch (e) { console.error('[cotejo-mige] error reimprimiendo F1:', e); Toast.show('No se pudo reimprimir el F1: ' + (e.message || ''), 'error'); }
+    // Leyenda "cotejado y corregido" si esa materia se corrigió — en esta sesión
+    // (_lastCorrectedAsgs) o en cualquier cotejo previo (marcador cotejoFix → _correctedSubjIds).
+    const _asg = _assignments.find(a => a.id === asgId);
+    const _wasCorr = (Array.isArray(_lastCorrectedAsgs) && _lastCorrectedAsgs.includes(asgId)) ||
+      !!(_asg && _correctedSubjIds && _correctedSubjIds.has(_asg.subjectId));
+    const _leg = _wasCorr ? ('COTEJADO Y CORREGIDO CON MIGE · ' + new Date().toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) + (_lastFolio ? ' · Folio ' + _lastFolio : '')) : '';
+    try { await MyF1Module.printConcentrados([asgId], { legend: _leg }); } // Concentrado F1 (3 parciales) de la materia
+    catch (e) { console.error('[cotejo-mige] error reimprimiendo Concentrado F1:', e); Toast.show('No se pudo reimprimir el Concentrado F1: ' + (e.message || ''), 'error'); }
     finally { if (btn) { btn.disabled = false; btn.innerHTML = orig; } }
   }
 

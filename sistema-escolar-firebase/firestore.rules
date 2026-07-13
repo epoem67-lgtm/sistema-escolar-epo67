@@ -327,14 +327,19 @@ service cloud.firestore {
         isAdminOrSubdirector() ||
         (canMaestro()
           && teacherHasAssignment(request.resource.data.groupId, request.resource.data.subjectId)
-          && canMaestroWriteGradesForGroup(request.resource.data.partial, request.resource.data.groupId))
+          && canMaestroWriteGradesForGroup(request.resource.data.partial, request.resource.data.groupId)) ||
+        // Corrección posterior a COTEJO MIGE (Orientación aplica en el momento).
+        // Solo permitida si la escritura trae el marcador cotejoFix → queda trazada.
+        (canOrientador() && request.resource.data.cotejoFix != null)
       );
 
       allow update: if isAuthenticated() && (
         isAdminOrSubdirector() ||
         (canMaestro()
           && teacherHasAssignment(resource.data.groupId, resource.data.subjectId)
-          && canMaestroWriteGradesForGroup(resource.data.partial, resource.data.groupId))
+          && canMaestroWriteGradesForGroup(resource.data.partial, resource.data.groupId)) ||
+        // Corrección posterior a COTEJO MIGE (Orientación aplica en el momento).
+        (canOrientador() && request.resource.data.cotejoFix != null)
       );
 
       allow delete: if isAdminOrSubdirector();
@@ -440,6 +445,27 @@ service cloud.firestore {
         (canMaestro() && resource.data.teacherId == getTeacherId())
       );
       allow delete: if isAdminOrSubdirector();
+    }
+
+    // ─── MIGE DATA (cotejo con plataforma oficial) ──────────────────────
+    // El MIGE (calif+faltas capturadas en la plataforma DGB) lo CARGAN al
+    // sistema admin/subdirector/directiva (que tienen el archivo exportado);
+    // los orientadores solo lo CONSULTAN para cotejar sus grupos. Un doc por
+    // grupo: migeData/{groupId}. Solo lectura/comparación, no afecta grades.
+    match /migeData/{groupId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || isSubdirector() || canOrientador() || canReadAsDirectivo() || isAuditor()
+      );
+      allow write: if isAdmin() || isSubdirector() || isDirectivo();
+    }
+
+    // ─── COTEJO PROGRESS (borrador del cotejo, auto-guardado) ────────────
+    // Solo el AVANCE de decisiones "hoja dice" (borrador), NO calificaciones.
+    // Orientación puede escribirlo (es su trabajo de cotejo); no afecta grades.
+    match /cotejoProgress/{groupId} {
+      allow read, write: if isAuthenticated() && (
+        isAdmin() || isSubdirector() || isDirectivo() || canOrientador() || isAuditor()
+      );
     }
 
     // ─── ACTIVITY LOG ──────────────────────

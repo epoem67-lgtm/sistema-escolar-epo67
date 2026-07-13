@@ -1,0 +1,156 @@
+[
+  {
+    "num": 2,
+    "alumno": "AMBROSIO RAMIREZ ALEXANDRA",
+    "studentId": "e4Ks2cQmu2H9HhAeaaJo",
+    "cuadro": {
+      "ec": 8,
+      "tr": 2,
+      "pe": 0,
+      "suma": 10,
+      "cal": 10,
+      "faltas": 0
+    },
+    "firestore": {
+      "ec": 7,
+      "tr": 2,
+      "pe": 0,
+      "suma": 9,
+      "cal": 9,
+      "faltas": 0
+    },
+    "docId": "e4Ks2cQmu2H9HhAeaaJo_G1_ciencias_sociales_ii_P1"
+  },
+  {
+    "num": 6,
+    "alumno": "BECERRA FLORES HADE JETZABEL",
+    "studentId": "sXC4ZpNCIx142tR9MabM",
+    "cuadro": {
+      "ec": 8,
+      "tr": 2,
+      "pe": 1,
+      "suma": 11,
+      "cal": 10,
+      "faltas": 0
+    },
+    "firestore": {
+      "ec": 8,
+      "tr": 2,
+      "pe": 0,
+      "suma": 10,
+      "cal": 10,
+      "faltas": 0
+    },
+    "docId": "sXC4ZpNCIx142tR9MabM_G1_ciencias_sociales_ii_P1"
+  },
+  {
+    "num": 21,
+    "alumno": "GONZALEZ GONZALEZ ANGELA PAULINA",
+    "studentId": "EcHm7OScRj2o3uqMKLIF",
+    "cuadro": {
+      "ec": 8,
+      "tr": 2,
+      "pe": 1,
+      "suma": 11,
+      "cal": 10,
+      "faltas": 2
+    },
+    "firestore": {
+      "ec": 8,
+      "tr": 2,
+      "pe": 0,
+      "suma": 10,
+      "cal": 10,
+      "faltas": 0
+    },
+    "docId": "EcHm7OScRj2o3uqMKLIF_G1_ciencias_sociales_ii_P1"
+  },
+  {
+    "num": 27,
+    "alumno": "LEGORRETA HERNANDEZ LILIANA",
+    "studentId": "WBFhOvf5cIeVKcu6BQsj",
+    "cuadro": {
+      "ec": 7,
+      "tr": 2,
+      "pe": 0,
+      "suma": 9,
+      "cal": 9,
+      "faltas": 0
+    },
+    "firestore": {
+      "ec": 7,
+      "tr": 2,
+      "pe": 1,
+      "suma": 10,
+      "cal": 10,
+      "faltas": 0
+    },
+    "docId": "WBFhOvf5cIeVKcu6BQsj_G1_ciencias_sociales_ii_P1"
+  },
+  {
+    "num": 28,
+    "alumno": "LOPEZ HERNANDEZ KARINA",
+    "studentId": "As3pm3m4OyyYrBhYJxl8",
+    "cuadro": {
+      "ec": 7,
+      "tr": 2,
+      "pe": 0,
+      "suma": 9,
+      "cal": 9,
+      "faltas": 0
+    },
+    "firestore": {
+      "ec": 6,
+      "tr": 2,
+      "pe": 0,
+      "suma": 8,
+      "cal": 8,
+      "faltas": 0
+    },
+    "docId": "As3pm3m4OyyYrBhYJxl8_G1_ciencias_sociales_ii_P1"
+  },
+  {
+    "num": 31,
+    "alumno": "MARENTES ROBLES LUZ NATALIA",
+    "studentId": "vF7JLQ325QuCounrPEyE",
+    "cuadro": {
+      "ec": 8,
+      "tr": 2,
+      "pe": 0,
+      "suma": 10,
+      "cal": 10,
+      "faltas": 0
+    },
+    "firestore": {
+      "ec": 6,
+      "tr": 2,
+      "pe": 0,
+      "suma": 8,
+      "cal": 8,
+      "faltas": 0
+    },
+    "docId": "vF7JLQ325QuCounrPEyE_G1_ciencias_sociales_ii_P1"
+  },
+  {
+    "num": 33,
+    "alumno": "MARTINEZ IBARRA JOHAN ISAI",
+    "studentId": "JVCszIgEf7hhzDq9lISR",
+    "cuadro": {
+      "ec": 8,
+      "tr": 2,
+      "pe": 0,
+      "suma": 10,
+      "cal": 10,
+      "faltas": 0
+    },
+    "firestore": {
+      "ec": 7,
+      "tr": 2,
+      "pe": 0,
+      "suma": 9,
+      "cal": 9,
+      "faltas": 0
+    },
+    "docId": "JVCszIgEf7hhzDq9lISR_G1_ciencias_sociales_ii_P1"
+  }
+]

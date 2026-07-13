@@ -734,8 +734,12 @@ const MyF1Module = (() => {
   }
 
   function _renderAccumulatedRows(rows) {
-    return rows.map(row => `
-      <tr class="${row.status.label === 'EXTRA' ? 'f1-row-extra' : ''}">
+    return rows.map((row, idx) => {
+      const zebra = idx % 2 === 1 ? 'zebra' : '';
+      const extra = row.status.label === 'EXTRA' ? 'f1-row-extra' : '';
+      const cls = [zebra, extra].filter(Boolean).join(' ');
+      return `
+      <tr class="${cls}">
         <td>${row.num}</td>
         <td class="font-semibold">${Utils.sanitize(row.student.nombreCompleto || '')}</td>
         ${PARTIALS.map(p => `
@@ -747,19 +751,25 @@ const MyF1Module = (() => {
         <td>${_formatInt(row.totalPoints)}</td>
         <td class="${row.finalGrade !== null && row.finalGrade < K.THRESHOLDS.PASS_GRADE ? 'f1-cal-fail' : ''}">${_formatInt(row.finalGrade)}</td>
         <td><span class="f1-status ${row.status.className}" title="${Utils.sanitize(row.status.reason)}">${Utils.sanitize(row.status.label)}</span></td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
   }
 
   function _renderPartialRows(rows, partial) {
-    return rows.map(row => `
-      <tr class="${row.partialGrade !== null && row.partialGrade < K.THRESHOLDS.PASS_GRADE ? 'f1-row-extra' : ''}">
+    return rows.map((row, idx) => {
+      const zebra = idx % 2 === 1 ? 'zebra' : '';
+      const extra = row.partialGrade !== null && row.partialGrade < K.THRESHOLDS.PASS_GRADE ? 'f1-row-extra' : '';
+      const cls = [zebra, extra].filter(Boolean).join(' ');
+      return `
+      <tr class="${cls}">
         <td>${row.num}</td>
         <td class="font-semibold">${Utils.sanitize(row.student.nombreCompleto || '')}</td>
         <td>${_formatInt(row.byPartial[partial].faltas)}</td>
         <td class="${row.partialGrade !== null && row.partialGrade < K.THRESHOLDS.PASS_GRADE ? 'f1-cal-fail' : ''}">${_formatInt(row.partialGrade)}</td>
         <td>${row.absencePercent === null ? '-' : _formatNum(row.absencePercent, 1) + '%'}</td>
         <td><span class="f1-status ${row.status.className}" title="${Utils.sanitize(row.status.reason)}">${Utils.sanitize(row.status.label)}</span></td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
   }
 
   function exportReport() {
@@ -898,12 +908,11 @@ const MyF1Module = (() => {
     Utils.exportToExcel(data, filename);
   }
 
-  function printReport() {
-    if (!lastReport) {
-      Toast.show('Genera primero el concentrado F1', 'warning');
-      return;
-    }
-    const r = lastReport;
+  // Construye el HTML de UN Concentrado F1 a partir de un report (de _buildReport).
+  // opts.legend: leyenda opcional bajo el título (p.ej. "COTEJADO Y CORREGIDO…").
+  // Devuelve el string html (sin abrir ventana) para poder BUNDLEAR varios.
+  function _buildConcentradoHTML(r, opts = {}) {
+    if (!r) return '';
     const isAcum = r.mode === 'acumulado';
     const parcMap = { P1: 'PRIMER', P2: 'SEGUNDO', P3: 'TERCER' };
     const titulo = isAcum ? 'CONCENTRADO F1 — ACUMULADO' : `CONCENTRADO F1 — ${parcMap[r.mode] || ''} PARCIAL`;
@@ -1125,7 +1134,18 @@ html, body { margin:0; padding:0; }
     background:#000; color:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact;
     line-height:1; vertical-align:middle; overflow:hidden; }
 .MT td { border:0.4pt solid #000; font-size:${fs}; line-height:0.95;
-    padding:0.1mm 0.3mm; overflow:hidden; white-space:nowrap; vertical-align:middle; }
+    padding:0.1mm 0.3mm; overflow:hidden; white-space:nowrap; vertical-align:middle;
+    -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+/* Zebra striping: filas alternas en gris #cccccc (~80% brillo). Suficientemente
+   visible aún en impresoras láser gastadas o inkjet con toner bajo. La clase se
+   asigna DIRECTAMENTE en el renderer (idx % 2 === 1) — no depende de nth-child
+   para evitar problemas si el navegador ignora el pseudo-selector en el modo
+   print. !important gana sobre otras reglas de fila (f1-row-extra, etc.) */
+.MT tr.zebra td {
+    background:#cccccc !important;
+    -webkit-print-color-adjust:exact !important;
+    print-color-adjust:exact !important;
+}
 .MT .c { text-align:center; padding:0.1mm 0; }
 /* La celda del nombre del alumno NUNCA corta el texto: el script de print
    reduce el font solo de esta celda hasta que el nombre completo quepa. */
@@ -1163,6 +1183,7 @@ html, body { margin:0; padding:0; }
 <div class="PG-ttl">
 <div class="ttl-esc">ESCUELA PREPARATORIA OFICIAL NÚM. 67</div>
 <div class="ttl-ctrl">${Utils.sanitize(titulo)}</div>
+${opts.legend ? `<div style="text-align:center;margin:0.6mm 0 0;"><span style="font-size:7pt;font-weight:bold;color:#0a5c2e;border:1pt solid #0a5c2e;border-radius:1.5mm;padding:0.5mm 3mm;letter-spacing:0.3px;-webkit-print-color-adjust:exact;print-color-adjust:exact;">✓ ${Utils.sanitize(opts.legend)}</span></div>` : ''}
 </div>
 
 <div class="PG-nfo">
@@ -1227,21 +1248,87 @@ html, body { margin:0; padding:0; }
 
 </div>`;
 
-    const docTitle = Utils.fileName({
-      tipo: 'F1',
-      turno: r.turno,
-      grupo: r.groupName,
-      materia: r.subjectName,
-      maestro: profesor,
-      parcial: isAcum ? 'ACUMULADO' : r.mode
-    });
-    // Script: shrink-to-fit en celdas de nombre + print. Bajo NINGUNA
-    // circunstancia se corta un nombre de alumno (regla del usuario 2026-05-11).
+    return html;
+  }
+
+  // Abre UNA ventana con uno o varios Concentrados F1 (page-break entre cada uno).
+  function _openF1Print(htmls, docTitle) {
+    const arr = (htmls || []).filter(Boolean);
+    if (!arr.length) { Toast.show('No hay nada que imprimir', 'warning'); return; }
+    // Script: shrink-to-fit en celdas de nombre + print. NUNCA se corta un nombre.
     const triggerScript = '<script>(function(){function shrinkNameCells(){document.querySelectorAll(".MT td.nm").forEach(function(td){if(td.scrollWidth<=td.clientWidth+1)return;var cur=parseFloat(getComputedStyle(td).fontSize);var min=5;var step=0.3;var guard=80;while(td.scrollWidth>td.clientWidth+1&&cur>min&&guard-->0){cur-=step;td.style.fontSize=cur+"px";}if(td.scrollWidth>td.clientWidth+1)td.style.overflow="visible";});}window.addEventListener("load",function(){setTimeout(function(){shrinkNameCells();window.print();},300);});})();<\/script>';
+    const body = arr.join('<div style="page-break-after:always;"></div>');
     const win = window.open('', '_blank');
+    if (!win) { Toast.show('Permite ventanas emergentes para imprimir', 'error'); return; }
     win.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>' +
-      Utils.sanitize(docTitle) + '</title></head><body>' + html + triggerScript + '</body></html>');
+      Utils.sanitize(docTitle || 'Concentrado F1') + '</title></head><body>' + body + triggerScript + '</body></html>');
     win.document.close();
+  }
+
+  // Impresión estándar (maestro): el Concentrado F1 de la lista seleccionada.
+  function printReport() {
+    if (!lastReport) { Toast.show('Genera primero el concentrado F1', 'warning'); return; }
+    const r = lastReport;
+    const teacher = teachers.find(t => t.id === r.assignment.teacherId);
+    const profesor = teacher ? Utils.displayName(teacher.nombre)
+      : Utils.displayName(r.assignment.teacherName || App.currentUser?.displayName || App.currentUser?.email || '');
+    const docTitle = Utils.fileName({
+      tipo: 'F1', turno: r.turno, grupo: r.groupName, materia: r.subjectName,
+      maestro: profesor, parcial: r.mode === 'acumulado' ? 'ACUMULADO' : r.mode
+    });
+    _openF1Print([_buildConcentradoHTML(r, {})], docTitle);
+  }
+
+  // Reimpresión del Concentrado F1 (ACUMULADO, 3 parciales) para una o varias
+  // assignments — usado por el Cotejo MIGE. Carga sus propios datos (rol-aware,
+  // NO depende del estado teacher-scoped de _loadData) y bundlea en 1 documento.
+  // opts.legend: leyenda "COTEJADO Y CORREGIDO…" bajo el título.
+  async function printConcentrados(assignmentIds, opts = {}) {
+    if (!Array.isArray(assignmentIds) || !assignmentIds.length) { Toast.show('No hay materias para reimprimir', 'warning'); return; }
+    // Cada elemento puede ser un id (string) o { id, legend } — así, al imprimir
+    // TODO el grupo, el sello "cotejado y corregido" sale SOLO en las corregidas.
+    const items = assignmentIds.map(x => (x && typeof x === 'object') ? { id: x.id, legend: x.legend || '' } : { id: x, legend: opts.legend || '' });
+    Toast.show('Generando Concentrado(s) F1…', 'info');
+    try {
+      // Resolver assignments con alcance por rol (admin/subdir todas; orientador sus grupos)
+      const role = App.currentUser?.role;
+      const isAdminLike = role === 'admin' || role === 'subdirector';
+      const canOrient = !!(App.canActAs && App.canActAs('orientador'));
+      let allAsg;
+      if (isAdminLike) allAsg = await Store.getAssignments();
+      else if (canOrient) {
+        const all = await Store.getAssignments();
+        const og = await Store.getOrientadorGroups();
+        allAsg = (og === null) ? all : all.filter(a => og.includes(a.groupId));
+      } else allAsg = await Store.getOwnAssignments();
+      const targets = items.map(it => ({ asg: allAsg.find(a => a.id === it.id), legend: it.legend })).filter(t => t.asg);
+      if (!targets.length) { Toast.show('No se encontraron las materias solicitadas', 'error'); return; }
+
+      // Datos frescos (rol-aware, por grupo) al estado del módulo. Se sobrescribe
+      // el de my-f1: inofensivo, se recarga solo al abrir el módulo Mi F1.
+      const groupIds = [...new Set(targets.map(t => t.asg.groupId).filter(Boolean))];
+      const [studentsData, gradesData, groupsData, teachersData] = await Promise.all([
+        Store.getStudentsByGroups(groupIds, true),
+        Promise.all(groupIds.map(gid => Store.getSealedGradesByGroup(gid, { force: true }).catch(() => []))).then(a => a.flat()),
+        Store.getGroups(),
+        Store.getTeachers().catch(() => []),
+      ]);
+      students = (studentsData || []).filter(s => s && s.id && s.estatus !== 'BAJA' && s.estatus !== 'baja' && s.estatus !== 'EGRESADO');
+      grades = gradesData || [];
+      groups = groupsData || [];
+      teachers = teachersData || [];
+
+      const htmls = [];
+      for (const t of targets) {
+        await _loadHoursForAssignment(t.asg);        // pobla `hours` para esta materia
+        const report = _buildReport(t.asg, 'acumulado');
+        htmls.push(_buildConcentradoHTML(report, { legend: t.legend || '' }));
+      }
+      _openF1Print(htmls, 'Concentrado_F1' + (targets.some(t => t.legend) ? '_cotejado' : ''));
+    } catch (e) {
+      console.error('[my-f1] printConcentrados error:', e);
+      Toast.show('No se pudo generar el Concentrado F1: ' + (e.message || ''), 'error');
+    }
   }
 
   function _bindEvents(container) {
@@ -1261,7 +1348,7 @@ html, body { margin:0; padding:0; }
     });
   }
 
-  return { render };
+  return { render, printConcentrados };
 })();
 
 Router.modules['my-f1'] = () => MyF1Module.render();

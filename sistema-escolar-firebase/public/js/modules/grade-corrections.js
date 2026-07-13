@@ -705,10 +705,11 @@ const GradeCorrectionsModule = (function () {
       const partial = _el('gc-parcial').value;
       const groupId = _el('gc-grupo').value;
 
-      // Restore original grade
+      // Restore original grade. BLINDAJE: reponemos también `suma` para que el
+      // doc quede consistente (cal = calcCal(suma)) y no dispare el auditor.
       const gradeDocId = `${studentId}_${subjectId}_${partial}`;
       await db.collection('grades').doc(gradeDocId).set({
-        cal: oldCal, value: oldCal, updatedAt: new Date(), updatedBy: auth.currentUser.uid
+        cal: oldCal, value: oldCal, suma: oldCal, updatedAt: new Date(), updatedBy: auth.currentUser.uid
       }, { merge: true });
 
       // Delete correction record

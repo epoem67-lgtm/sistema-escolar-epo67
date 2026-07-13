@@ -1,0 +1,2 @@
+groupId,num,alumno,studentId,materia,subjectId,cuadroCal,cuadroFaltas,fsCal,fsFaltas,tipo,docId,existeEnFirestore
+VESPERTINO_1-1,4,"BRAVO VELA MARIA FERNANDA",5IfvElCTDwErq8qmV8rv,CULT.DIG,G1_cultura_digital_ii,6,0,10,0,SOLO_CAL,5IfvElCTDwErq8qmV8rv_G1_cultura_digital_ii_P1,sí

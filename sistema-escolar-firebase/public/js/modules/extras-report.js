@@ -279,9 +279,16 @@ const ExtrasReportModule = (() => {
           const grades3 = [sGrades.P1 || null, sGrades.P2 || null, sGrades.P3 || null];
           const hoursByPart = hoursBySubject[subj.id] || {};
 
-          // Faltas totales y horas
-          let faltasTotal = 0;
-          for (const g of grades3) if (g && g.faltas != null) faltasTotal += Number(g.faltas) || 0;
+          // Faltas totales y horas.
+          // Condonación por Dirección (jul-2026): resta las faltas condonadas
+          // (campo `faltasCondonadas`, normalmente en el doc P3). El bruto se
+          // conserva; solo el % del umbral usa el efectivo = brutas − condonadas.
+          let faltasTotal = 0, faltasCondonadas = 0;
+          for (const g of grades3) {
+            if (g && g.faltas != null) faltasTotal += Number(g.faltas) || 0;
+            if (g && g.faltasCondonadas != null) faltasCondonadas += Number(g.faltasCondonadas) || 0;
+          }
+          faltasTotal = Math.max(0, faltasTotal - faltasCondonadas);
           const MESES = ['febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio'];
           let horasTotal = 0;
           const hSem = hoursByPart.SEMESTRE || hoursByPart.P3 || hoursByPart.P2 || hoursByPart.P1;

@@ -618,6 +618,41 @@ const Store = (() => {
       }, force);
     },
 
+    // — MIGE (cotejo con plataforma oficial) —
+    // El admin/subdirector/directiva CARGAN el MIGE de cada grupo al sistema;
+    // los orientadores solo lo CONSULTAN (no suben archivos). Un doc por grupo
+    // en migeData/{groupId} con las materias parseadas. Ver firestore.rules.
+
+    /** Lee el MIGE guardado de un grupo (o null si no se ha cargado). */
+    async getMigeData(groupId, force) {
+      if (!groupId) return null;
+      return get('migeData_' + groupId, async () => {
+        const doc = await db.collection('migeData').doc(groupId).get();
+        return doc.exists ? doc.data() : null;
+      }, force);
+    },
+
+    /** Guarda/reemplaza el MIGE de un grupo (solo admin/subdirector/directiva). */
+    async saveMigeData(groupId, payload) {
+      await db.collection('migeData').doc(groupId).set(payload);
+      this.invalidate('migeData_' + groupId);
+    },
+
+    /** Avance del cotejo (borrador de decisiones "hoja dice" por grupo). */
+    async getCotejoProgress(groupId, force) {
+      if (!groupId) return null;
+      return get('cotejoProg_' + groupId, async () => {
+        const doc = await db.collection('cotejoProgress').doc(groupId).get();
+        return doc.exists ? doc.data() : null;
+      }, force);
+    },
+    /** Guarda el avance del cotejo (auto-guardado; reemplaza el doc). */
+    async saveCotejoProgress(groupId, payload) {
+      await db.collection('cotejoProgress').doc(groupId).set(payload);
+      _cache['cotejoProg_' + groupId] = payload;
+      _timestamps['cotejoProg_' + groupId] = Date.now();
+    },
+
     // — Gestion de cache —
 
     /**

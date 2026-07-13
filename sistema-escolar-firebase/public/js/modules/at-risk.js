@@ -386,6 +386,7 @@ const AtRiskModule = (() => {
           subjectName,
           failedPartials: new Set(),
           faltas: 0,
+          condonadas: 0,
           hours: hoursBySubject[`${grade.groupId}_${grade.subjectId}`] || 0
         };
       }
@@ -398,6 +399,9 @@ const AtRiskModule = (() => {
         studentData[key].faltasDetail.push({ subject: subjectName, partial: grade.partial, faltas });
         studentData[key].bySubject[grade.subjectId].faltas += faltas;
       }
+      // Faltas condonadas por Dirección (jul-2026): restan al efectivo del umbral.
+      // Suele venir en el doc P3; se acumula aparte del bruto.
+      studentData[key].bySubject[grade.subjectId].condonadas += parseInt(grade.faltasCondonadas) || 0;
       studentData[key].gradeCount++;
       if (calValue !== null && !isNaN(calValue)) studentData[key].gradeValues.push(calValue);
 
@@ -420,14 +424,20 @@ const AtRiskModule = (() => {
         .filter(s => s.failedPartials.size >= 2)
         .map(s => ({ subjectId: s.subjectId, subjectName: s.subjectName, partials: [...s.failedPartials].filter(Boolean).sort() }));
       const attendanceSubjects = subjectEntries
-        .filter(s => s.hours > 0 && (s.faltas / s.hours) > 0.20)
-        .map(s => ({
-          subjectId: s.subjectId,
-          subjectName: s.subjectName,
-          faltas: s.faltas,
-          hours: s.hours,
-          percent: Math.round((s.faltas / s.hours) * 1000) / 10
-        }));
+        .map(s => {
+          // Faltas efectivas = brutas − condonadas por Dirección (nunca < 0).
+          const efectivas = Math.max(0, s.faltas - (s.condonadas || 0));
+          return {
+            subjectId: s.subjectId,
+            subjectName: s.subjectName,
+            faltas: efectivas,
+            faltasBrutas: s.faltas,
+            condonadas: s.condonadas || 0,
+            hours: s.hours,
+            percent: s.hours > 0 ? Math.round((efectivas / s.hours) * 1000) / 10 : 0
+          };
+        })
+        .filter(s => s.hours > 0 && (s.faltas / s.hours) > 0.20);
 
       // Determine risk level from grades
       let riskLevel = classifyRiskLevel(failingCount);
@@ -647,6 +657,24 @@ const AtRiskModule = (() => {
               else if (pct >= ALERTA_PCT) attendanceWarning = true;
             }
           });
+
+          // Condonación por Dirección (jul-2026): las faltas condonadas (guardadas
+          // en el doc del parcial, normalmente P3) restan al total efectivo de la
+          // materia. Solo afecta materias con condonación (condSubj > 0); el resto
+          // conserva su lógica por parcial intacta. Se re-evalúa el umbral con base
+          // semestral efectiva = brutas − condonadas.
+          const condSubj = myGrades.reduce((s, g) => s + (parseInt(g.faltasCondonadas) || 0), 0);
+          if (condSubj > 0) {
+            const semHoras = (detailByPartial.P3 && detailByPartial.P3.hours)
+              || (detailByPartial.P2 && detailByPartial.P2.hours)
+              || (detailByPartial.P1 && detailByPartial.P1.hours) || 0;
+            const efectivas = Math.max(0, totalFaltasSubj - condSubj);
+            const effPct = semHoras > 0 ? (efectivas * 100) / semHoras : 0;
+            attendanceTriggered = effPct > RIESGO_PCT;
+            attendanceWarning = !attendanceTriggered && effPct >= ALERTA_PCT;
+            detailByPartial.__condonadas = condSubj;
+            detailByPartial.__faltasEfectivas = efectivas;
+          }
 
           const hasAnyIssue = failingPartialsInThisSubject > 0 || attendanceTriggered || attendanceWarning;
           if (!hasAnyIssue) return;
