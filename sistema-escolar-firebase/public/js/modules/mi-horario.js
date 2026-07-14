@@ -83,7 +83,9 @@ const MiHorarioModule = (() => {
   // ─── Render ────────────────────────────────────────────────
   function _render(container) {
     if (!_teacherId) {
-      container.innerHTML = UI.moduleContainer(UI.emptyState('badge', 'Este panel es para docentes. Tu cuenta no está enlazada a un registro de maestro; si eres docente, avisa a Dirección para vincular tu cuenta.'));
+      container.innerHTML = UI.moduleContainer(UI.emptyState('badge',
+        'Este panel es para que cada DOCENTE marque su disponibilidad. Tu cuenta no está enlazada a un registro de maestro (por eso no hay horario que mostrar). ' +
+        'Si armas los horarios como Dirección, usa el módulo "Horarios". Si además impartes clases y quieres reportar tu disponibilidad, pide a Dirección que vincule tu cuenta a tu registro de docente.'));
       return;
     }
     const turnos = _turnos();
