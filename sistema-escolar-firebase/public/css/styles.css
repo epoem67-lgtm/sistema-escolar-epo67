@@ -4098,6 +4098,28 @@ body.role-secretario_admin:not(.module-school-config) input.horas-input:not([rea
 .sw-no { background: #f3f4f6; }
 .sw-place { background: #dcfce7; border: 2px dashed #16a34a; }
 
+/* Panel del docente — Mi Horario */
+.mh-doc-header {
+  border: 2px solid var(--color-border-dark); border-radius: var(--radius-lg);
+  padding: 14px 18px; margin-bottom: 16px; background: #f8fafc; text-align: center;
+}
+.mh-doc-title { font-size: 15px; font-weight: 800; letter-spacing: .04em; color: var(--color-text-dark); }
+.mh-doc-sub { font-size: 12px; color: var(--color-text-light); margin-top: 2px; }
+.mh-doc-name { font-size: 14px; color: var(--color-text-body); margin-top: 8px; }
+.mh-card { margin-bottom: 16px; }
+.mh-card-body { padding: 14px 18px; }
+.mh-asg-list { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 16px; }
+.mh-asg-list li { font-size: 13px; color: var(--color-text-body); padding: 4px 0; border-bottom: 1px solid var(--color-border); }
+.mh-asg-grp { display: inline-block; min-width: 34px; font-weight: 700; color: var(--color-primary); }
+.mh-asg-turno { font-size: 10.5px; color: var(--color-text-lighter); text-transform: uppercase; }
+.mh-turno-block { margin-bottom: 18px; }
+.mh-turno-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.mh-cell { padding: 3px; }
+.mh-cell .sch-disp-cell { min-height: 34px; }
+.mh-fields { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; max-width: 620px; }
+.mh-save { margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mh-saved { font-size: 12.5px; }
+
 @media (max-width: 640px) {
   .sch-select-wide { min-width: 100%; }
   .sch-tab { padding: 8px 11px; font-size: 13px; }

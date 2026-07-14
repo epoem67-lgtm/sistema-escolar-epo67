@@ -375,7 +375,7 @@ service cloud.firestore {
       allow create, update, delete: if canManageEnrollment();
     }
 
-    // ─── CALIFICACIONES ────────────────────
+    // ─── CALIFICACIONES ��───────────────────
     // C-2 FIX: maestro solo escribe grades si tiene assignment de ese grupo+materia.
     //
     // Lectura para Presidente/Secretario de Academia: el rol es ADITIVO — esos
@@ -439,7 +439,7 @@ service cloud.firestore {
       allow delete: if isAdminOrSubdirector();
     }
 
-    // ─── PARCIALES ─────────────────────────
+    // ─── PARCIALES ─────────��───────────────
     // Subdirector controla apertura/cierre de parciales (jefe academico)
     match /partials/{partialId} {
       allow read: if isAuthenticated();
@@ -864,17 +864,23 @@ service cloud.firestore {
       allow delete: if isAdminOrSubdirector();
     }
 
-    // teacherScheduleRequests: solicitud/preferencias de horario por maestro,
-    // capturadas por Dirección (qué horas no quiere, dos planteles, prioridad,
+    // teacherScheduleRequests: disponibilidad + preferencias de horario por
+    // maestro (Disponible/Talleres/No disponible, dos planteles, prioridad,
     // necesidades). docId = teacherId.
-    // Lectura: Dirección + el propio maestro (para futura vista de solo lectura).
-    // Escritura: SOLO Dirección.
+    // Lectura: Dirección + el propio maestro (panel "Mi Horario").
+    // Escritura: Dirección (cualquiera) O el PROPIO maestro sobre SU doc
+    //   (autoservicio: cada docente reporta su disponibilidad). Se valida que
+    //   el docId coincida con su teacherId y que updatedBy sea su uid.
+    //   Dirección conserva la prioridad porque el cliente escribe con merge:true.
     match /teacherScheduleRequests/{teacherId} {
       allow read: if isAuthenticated() && (
         isAdmin() || isSubdirector() || canReadAsDirectivo() ||
         getTeacherId() == teacherId
       );
-      allow create, update: if isAdminOrSubdirector()
+      allow create, update: if (
+          isAdminOrSubdirector()
+          || (canMaestro() && getTeacherId() == teacherId)
+        )
         && request.resource.data.teacherId == teacherId
         && request.resource.data.updatedBy == request.auth.uid;
       allow delete: if isAdminOrSubdirector();

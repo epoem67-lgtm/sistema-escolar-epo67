@@ -2184,6 +2184,8 @@ const Router = {
     'my-grades': ['admin', 'maestro', 'orientador_docente'],
     'grades-admin': ['admin', 'directivo', 'subdirector', 'orientador', 'maestro', 'auditor'],
     'my-lists': ['admin', 'directivo', 'subdirector', 'maestro'],
+    // Mi Horario: panel del docente para reportar su disponibilidad.
+    'mi-horario': ['maestro', 'orientador_docente', 'presidente_academia', 'admin'],
     'my-f1': ['admin', 'directivo', 'subdirector', 'maestro', 'orientador_docente', 'auditor'],
     'indicadores': ['admin', 'directivo', 'subdirector', 'orientador', 'maestro', 'auditor'],
     'attendance': ['admin', 'directivo', 'subdirector', 'maestro'],
