@@ -4037,6 +4037,67 @@ body.role-secretario_admin:not(.module-school-config) input.horas-input:not([rea
 .sch-jornada-actions { padding: 10px 14px; }
 .sch-jornada-save { margin-top: 16px; }
 
+/* Fila de receso (descanso) */
+.sch-receso-row td.sch-receso {
+  background: repeating-linear-gradient(45deg, #f1f5f9, #f1f5f9 8px, #e2e8f0 8px, #e2e8f0 16px);
+  color: var(--color-text-light); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-align: center; height: 24px;
+}
+.sch-receso-row .sch-modcol { background: #f8fafc; }
+
+/* Tinte de disponibilidad (editor por maestro) */
+.sch-cell.avail-disp { background: #ecfdf5; }
+.sch-cell.avail-taller { background: #fffbeb; }
+.sch-cell.avail-no { background: #f3f4f6; }
+.sch-cell.avail-unknown { background: var(--color-white); }
+.sch-cell-tag { font-size: 10px; color: #b45309; font-weight: 700; text-transform: uppercase; }
+
+/* Celda donde SÍ se puede colocar la clase seleccionada */
+.sch-cell.placeable { background: #dcfce7 !important; cursor: pointer; border: 2px dashed #16a34a; }
+.sch-cell.placeable:hover { background: #bbf7d0 !important; }
+.sch-cell-place { color: #15803d; font-size: 12px; font-weight: 700; }
+.sch-cell.blocked-opt { opacity: .55; }
+.sch-cell-x { color: var(--color-text-lighter); font-size: 14px; }
+.sch-cell.is-placing { outline: 2px solid #16a34a; outline-offset: -2px; }
+.sch-cell-rm { position: absolute; top: 2px; right: 4px; font-size: 11px; color: var(--color-danger); font-weight: 700; }
+
+/* Selector de clase a colocar (chips) */
+.sch-class-picker { margin: 4px 0 12px; }
+.sch-class-picker-label { font-size: 13px; color: var(--color-text-body); margin-bottom: 8px; font-weight: 600; }
+.sch-class-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.sch-class-chip {
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 7px 12px; border: 2px solid var(--color-border-dark); border-radius: var(--radius-md);
+  background: var(--color-white); cursor: pointer; text-align: left; transition: all var(--transition-fast);
+}
+.sch-class-chip:hover { border-color: var(--color-primary); }
+.sch-class-chip.active { border-color: #16a34a; background: #ecfdf5; box-shadow: 0 0 0 2px #bbf7d0; }
+.sch-class-name { font-size: 12.5px; font-weight: 700; color: var(--color-text-dark); }
+.sch-class-group { font-size: 11px; color: var(--color-text-light); }
+.sch-class-count { font-size: 10.5px; color: var(--color-primary); font-weight: 700; }
+
+/* Rejilla de disponibilidad (modal) — botones que ciclan estado */
+.sch-disp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sch-hrs { margin: 0; }
+.sch-hrs-input { width: 70px; padding: 5px 8px; border: 1px solid var(--color-border-dark); border-radius: var(--radius-sm); }
+.sch-disp-hint { font-size: 12px; color: var(--color-text-body); margin: 6px 0 10px; }
+.sch-dot { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: middle; margin: 0 1px; border: 1px solid rgba(0,0,0,.12); }
+.sch-dot.avail-disp { background: #16a34a; }
+.sch-dot.avail-taller { background: #d97706; }
+.sch-dot.avail-no { background: #9ca3af; }
+.sch-disp-cell {
+  width: 100%; min-height: 30px; border: 1px solid var(--color-border); border-radius: 4px;
+  cursor: pointer; font-size: 13px; font-weight: 700; padding: 3px;
+}
+.sch-disp-cell.avail-disp { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.sch-disp-cell.avail-taller { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
+.sch-disp-cell.avail-no { background: #f3f4f6; color: #9ca3af; }
+
+/* Swatches de leyenda nuevos */
+.sw-disp { background: #dcfce7; }
+.sw-taller { background: #fef3c7; }
+.sw-no { background: #f3f4f6; }
+.sw-place { background: #dcfce7; border: 2px dashed #16a34a; }
+
 @media (max-width: 640px) {
   .sch-select-wide { min-width: 100%; }
   .sch-tab { padding: 8px 11px; font-size: 13px; }

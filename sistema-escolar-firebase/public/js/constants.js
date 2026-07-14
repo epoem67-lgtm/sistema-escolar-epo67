@@ -36,24 +36,41 @@ const K = Object.freeze({
       { id: 'media', label: 'Media', color: '#d97706' },
       { id: 'baja',  label: 'Baja',  color: '#6b7280' },
     ]),
+    // Estados que un maestro reporta por celda en su propuesta de horario
+    // (documento oficial "PROPUESTA HORARIO PERSONAL"):
+    //   disp   = Disponibilidad (puede dar clase)
+    //   taller = TALLERES (bloque fijo, NO se le puede poner clase normal)
+    //   no     = celda vacía en la propuesta (no disponible)
+    ESTADOS_DISP: Object.freeze([
+      { id: 'disp',   label: 'Disponible',    color: '#16a34a' },
+      { id: 'taller', label: 'Talleres',      color: '#d97706' },
+      { id: 'no',     label: 'No disponible', color: '#9ca3af' },
+    ]),
+    // Jornada REAL EPO 67 (propuestas 2026-2027): 8 módulos de 50 min + receso.
+    // Matutino 07:00–14:00, Vespertino 13:10–20:10 (se traslapan 13:10–14:00).
+    // Los módulos con `receso:true` son filas no asignables (descanso).
     DEFAULT_MODULOS: Object.freeze({
       MATUTINO: Object.freeze([
         { n: 1, inicio: '07:00', fin: '07:50' },
         { n: 2, inicio: '07:50', fin: '08:40' },
         { n: 3, inicio: '08:40', fin: '09:30' },
         { n: 4, inicio: '09:30', fin: '10:20' },
-        { n: 5, inicio: '10:20', fin: '11:10' },
-        { n: 6, inicio: '11:10', fin: '12:00' },
-        { n: 7, inicio: '12:00', fin: '12:50' },
+        { receso: true, inicio: '10:20', fin: '10:40' },
+        { n: 5, inicio: '10:40', fin: '11:30' },
+        { n: 6, inicio: '11:30', fin: '12:20' },
+        { n: 7, inicio: '12:20', fin: '13:10' },
+        { n: 8, inicio: '13:10', fin: '14:00' },
       ]),
       VESPERTINO: Object.freeze([
-        { n: 1, inicio: '13:40', fin: '14:30' },
-        { n: 2, inicio: '14:30', fin: '15:20' },
-        { n: 3, inicio: '15:20', fin: '16:10' },
-        { n: 4, inicio: '16:10', fin: '17:00' },
-        { n: 5, inicio: '17:00', fin: '17:50' },
-        { n: 6, inicio: '17:50', fin: '18:40' },
-        { n: 7, inicio: '18:40', fin: '19:30' },
+        { n: 1, inicio: '13:10', fin: '14:00' },
+        { n: 2, inicio: '14:00', fin: '14:50' },
+        { n: 3, inicio: '14:50', fin: '15:40' },
+        { n: 4, inicio: '15:40', fin: '16:30' },
+        { n: 5, inicio: '16:30', fin: '17:20' },
+        { receso: true, inicio: '17:20', fin: '17:40' },
+        { n: 6, inicio: '17:40', fin: '18:30' },
+        { n: 7, inicio: '18:30', fin: '19:20' },
+        { n: 8, inicio: '19:20', fin: '20:10' },
       ]),
     }),
   }),
