@@ -4098,6 +4098,22 @@ body.role-secretario_admin:not(.module-school-config) input.horas-input:not([rea
 .sw-no { background: #f3f4f6; }
 .sw-place { background: #dcfce7; border: 2px dashed #16a34a; }
 
+/* Estado de horas en chips de clase (colocadas/objetivo) */
+.sch-class-count.under { color: #b45309; }
+.sch-class-count.ok { color: #15803d; }
+.sch-class-count.over { color: var(--color-danger); }
+
+/* Pestaña Revisión */
+.sch-rev-card { margin-top: 14px; }
+.sch-rev-danger { border-left: 4px solid var(--color-danger); }
+.sch-rev-warning { border-left: 4px solid #d97706; }
+.sch-rev-desc { padding: 4px 18px 10px; font-size: 12.5px; color: var(--color-text-light); }
+
+/* Editor de horas por materia */
+.sch-subjhrs-card { margin-top: 16px; }
+.sch-subjhrs-wrap { max-height: 340px; overflow-y: auto; }
+.sch-subjhrs-input { width: 68px; padding: 5px 8px; border: 1px solid var(--color-border-dark); border-radius: var(--radius-sm); }
+
 /* Panel del docente — Mi Horario */
 .mh-doc-header {
   border: 2px solid var(--color-border-dark); border-radius: var(--radius-lg);

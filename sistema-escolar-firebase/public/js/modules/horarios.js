@@ -49,6 +49,7 @@ const HorariosModule = (() => {
   let _byTeacherSlot = new Map();   // `${teacherId}|${dia}|${n}` -> [entries]
   let _reqByTeacher = new Map();    // teacherId -> request
   let _availByTeacher = new Map();  // teacherId -> Map(`${turno}|${dia}|${n}` -> 'disp'|'taller')
+  let _subjById = new Map();        // subjectId -> subject (para horas/semana)
 
   const _canEdit = () => App.canActAs('admin') || App.canActAs('subdirector');
 
@@ -61,6 +62,14 @@ const HorariosModule = (() => {
   function _teachingModulos(turno) { return _modulos(turno).filter(m => !m.receso); }
   function _entryDocId(groupId, dia, n) { return `${groupId}__${dia}__M${n}`; }
   function _diaLabel(id) { const d = _dias().find(x => x.id === id); return d ? d.label : id; }
+  // Horas/semana que necesita una materia (del plan de estudios). 0 si no está definida.
+  function _targetHours(subjectId) {
+    const s = _subjById.get(subjectId);
+    return (s && s.horasSemana != null) ? (Number(s.horasSemana) || 0) : 0;
+  }
+  function _placedHours(groupId, subjectId) {
+    return _entries.filter(e => e.groupId === groupId && e.subjectId === subjectId).length;
+  }
 
   // ─── Carga de datos ────────────────────────────────────────
   async function _loadData(force) {
@@ -76,6 +85,7 @@ const HorariosModule = (() => {
 
     _groups = (groups || []).filter(g => (g.status || 'active') === 'active');
     _subjects = subjects || [];
+    _subjById = new Map(_subjects.map(s => [s.id, s]));
     _teachers = (teachers || []).filter(t => (t.status || 'active') === 'active');
     _assignments = assignments || [];
     _entries = entries || [];
@@ -154,6 +164,7 @@ const HorariosModule = (() => {
     const tabs = [
       { id: 'maestro', icon: 'person_pin', label: 'Asignar por maestro' },
       { id: 'grupo', icon: 'grid_on', label: 'Horario por grupo' },
+      { id: 'revision', icon: 'fact_check', label: 'Revisión' },
       { id: 'disponibilidad', icon: 'event_available', label: 'Disponibilidad' },
       { id: 'jornada', icon: 'schedule', label: 'Configurar jornada' },
     ];
@@ -171,6 +182,7 @@ const HorariosModule = (() => {
     let body = '';
     if (_state.tab === 'maestro') body = _renderTeacherEditor();
     else if (_state.tab === 'grupo') body = _renderGroupTab();
+    else if (_state.tab === 'revision') body = _renderRevisionTab();
     else if (_state.tab === 'disponibilidad') body = _renderDispTab();
     else if (_state.tab === 'jornada') body = _renderJornadaTab();
 
@@ -212,11 +224,19 @@ const HorariosModule = (() => {
       const chips = myAsg.map(a => {
         const key = `${a.groupId}||${a.subjectId}`;
         const puestas = mine.filter(e => e.groupId === a.groupId && e.subjectId === a.subjectId).length;
+        const target = _targetHours(a.subjectId);
         const active = _state.placingKey === key ? 'active' : '';
+        let countHtml, countCls = '';
+        if (target > 0) {
+          countCls = puestas === target ? 'ok' : (puestas > target ? 'over' : 'under');
+          countHtml = `${puestas}/${target} h`;
+        } else {
+          countHtml = `${puestas} h`;
+        }
         return `<button class="sch-class-chip ${active}" data-action="pick-class" data-key="${key}">
           <span class="sch-class-name">${Utils.sanitize(a.subjectName || a.subjectId)}</span>
           <span class="sch-class-group">${Utils.sanitize(a.groupName || a.groupId)}</span>
-          <span class="sch-class-count">${puestas} h</span>
+          <span class="sch-class-count ${countCls}">${countHtml}</span>
         </button>`;
       }).join('');
       clasesHTML = `
@@ -403,18 +423,112 @@ const HorariosModule = (() => {
   }
 
   function _renderGroupSummary(groupId) {
-    const rows = _entries.filter(e => e.groupId === groupId);
-    if (!rows.length) return '';
-    const byAsg = new Map();
-    for (const e of rows) {
-      const k = `${e.subjectId}|${e.teacherId}`;
-      if (!byAsg.has(k)) byAsg.set(k, { subjectName: e.subjectName, teacherName: e.teacherName, horas: 0 });
-      byAsg.get(k).horas++;
+    // Base en las ASIGNACIONES del grupo (muestra también las materias con 0
+    // colocadas) con objetivo (horas/semana de la materia) y faltante.
+    const asgs = _assignments.filter(a => a.groupId === groupId)
+      .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
+    if (!asgs.length) return '';
+    let totalPlaced = 0, totalTarget = 0, anyTarget = false;
+    const items = asgs.map(a => {
+      const placed = _placedHours(groupId, a.subjectId);
+      const target = _targetHours(a.subjectId);
+      totalPlaced += placed; totalTarget += target; if (target > 0) anyTarget = true;
+      let estado;
+      if (target === 0) estado = '<span class="sch-muted">sin horas definidas</span>';
+      else if (placed === target) estado = '<span class="badge badge-success">completo</span>';
+      else if (placed > target) estado = `<span class="badge badge-danger">sobran ${placed - target}</span>`;
+      else estado = `<span class="badge badge-warning">faltan ${target - placed}</span>`;
+      return `<tr>
+        <td>${Utils.sanitize(a.subjectName || a.subjectId)}</td>
+        <td>${Utils.sanitize(Utils.displayName(a.teacherName))}</td>
+        <td class="sch-num">${placed}</td>
+        <td class="sch-num">${target || '—'}</td>
+        <td>${estado}</td></tr>`;
+    }).join('');
+    const totalLbl = anyTarget ? `${totalPlaced}/${totalTarget} h` : `${totalPlaced} h`;
+    return `<div class="card sch-summary"><div class="card-header"><h3 class="card-title">Cobertura del grupo — ${totalLbl}</h3></div>
+      <table class="data-table"><thead><tr><th>Materia</th><th>Maestro</th><th>Colocadas</th><th>Objetivo</th><th>Estado</th></tr></thead><tbody>${items}</tbody></table>
+      ${!anyTarget ? '<div class="sch-hint" style="margin:12px 14px 4px;">Define las <strong>horas por materia</strong> en la pestaña <strong>Configurar jornada</strong> para ver cuánto falta por colocar.</div>' : ''}</div>`;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // TAB — REVISIÓN (faltantes y conflictos antes de publicar)
+  // ═══════════════════════════════════════════════════════════
+  function _renderRevisionTab() {
+    // 1. Choques de maestro (mismo docente en 2 grupos a la misma hora).
+    const conflicts = [];
+    for (const [k, arr] of _byTeacherSlot) {
+      if (new Set(arr.map(e => e.groupId)).size > 1) {
+        const parts = k.split('|');
+        conflicts.push({ teacherName: arr[0].teacherName, dia: parts[1], n: parts[2], grupos: arr.map(e => e.groupName || e.groupId) });
+      }
     }
-    const items = [...byAsg.values()].sort((a, b) => b.horas - a.horas).map(x => `<tr>
-      <td>${Utils.sanitize(x.subjectName || '')}</td><td>${Utils.sanitize(Utils.displayName(x.teacherName))}</td><td class="sch-num">${x.horas}</td></tr>`).join('');
-    return `<div class="card sch-summary"><div class="card-header"><h3 class="card-title">Horas colocadas en este grupo — total ${rows.length}</h3></div>
-      <table class="data-table"><thead><tr><th>Materia</th><th>Maestro</th><th>Horas/semana</th></tr></thead><tbody>${items}</tbody></table></div>`;
+    // 2. Cobertura por grupo+materia (faltan / sobran) — requiere horas por materia.
+    const anyTarget = _assignments.some(a => _targetHours(a.subjectId) > 0);
+    const groupGaps = [];
+    for (const a of _assignments) {
+      const target = _targetHours(a.subjectId);
+      if (target <= 0) continue;
+      const placed = _placedHours(a.groupId, a.subjectId);
+      if (placed !== target) groupGaps.push({ groupName: a.groupName || a.groupId, subjectName: a.subjectName || a.subjectId, teacherName: a.teacherName, placed, target, diff: placed - target });
+    }
+    // 3. Maestros con horas sin colocar (respecto al total de sus materias).
+    const byTeacher = new Map();
+    for (const a of _assignments) {
+      if (!byTeacher.has(a.teacherId)) byTeacher.set(a.teacherId, { name: a.teacherName, target: 0 });
+      byTeacher.get(a.teacherId).target += _targetHours(a.subjectId);
+    }
+    const teacherGaps = [];
+    for (const [tid, o] of byTeacher) {
+      const placed = _entries.filter(e => e.teacherId === tid).length;
+      if (o.target > 0 && placed !== o.target) teacherGaps.push({ name: o.name, placed, target: o.target, diff: placed - o.target });
+    }
+    // 4. Clases colocadas en horas que el maestro NO reportó disponible.
+    const outOfAvail = [];
+    for (const e of _entries) {
+      const av = _teacherAvail(e.teacherId, e.turno, e.dia, e.modulo);
+      if (av === 'no' || av === 'taller') outOfAvail.push({ ...e, av });
+    }
+
+    const stats = UI.statsGrid([
+      { label: 'Choques de maestro', value: conflicts.length, icon: 'error', colorClass: conflicts.length ? 'danger' : 'success' },
+      { label: 'Grupos·materia incompletos', value: anyTarget ? groupGaps.length : '—', icon: 'grid_off', colorClass: groupGaps.length ? 'warning' : 'success' },
+      { label: 'Maestros con horas pend.', value: anyTarget ? teacherGaps.length : '—', icon: 'person_off', colorClass: teacherGaps.length ? 'warning' : 'success' },
+      { label: 'Fuera de disponibilidad', value: outOfAvail.length, icon: 'block', colorClass: outOfAvail.length ? 'danger' : 'success' },
+    ]);
+
+    const okMsg = (!conflicts.length && !groupGaps.length && !teacherGaps.length && !outOfAvail.length && anyTarget)
+      ? `<div class="card sch-summary"><div class="mh-card-body"><span class="badge badge-success">✓ Todo en orden</span> No hay choques, todo está cubierto y nadie quedó fuera de su disponibilidad. Listo para publicar.</div></div>` : '';
+
+    const noTargetHint = !anyTarget
+      ? `<div class="sch-hint">Aún no defines <strong>horas por materia</strong>, así que no puedo calcular faltantes de cobertura. Defínelas en <strong>Configurar jornada → Horas por materia</strong>. Los choques y las clases fuera de disponibilidad sí se revisan.</div>` : '';
+
+    const secConflicts = _revSection('Choques de maestro', 'El docente está en dos grupos a la misma hora — hay que reubicar uno.', conflicts.length,
+      conflicts.map(c => `<tr><td>${Utils.sanitize(Utils.displayName(c.teacherName))}</td><td>${Utils.sanitize(_diaLabel(c.dia))} · M${c.n}</td><td>${c.grupos.map(g => Utils.sanitize(g)).join(' y ')}</td></tr>`).join(''),
+      ['Maestro', 'Cuándo', 'Grupos en choque'], 'danger');
+
+    const secGroups = anyTarget ? _revSection('Cobertura por grupo y materia', 'Materias con horas de más o de menos según el plan de estudios.', groupGaps.length,
+      groupGaps.sort((a, b) => a.diff - b.diff).map(g => `<tr><td>${Utils.sanitize(g.groupName)}</td><td>${Utils.sanitize(g.subjectName)}</td><td>${Utils.sanitize(Utils.displayName(g.teacherName))}</td><td class="sch-num">${g.placed}/${g.target}</td><td>${g.diff < 0 ? `<span class="badge badge-warning">faltan ${-g.diff}</span>` : `<span class="badge badge-danger">sobran ${g.diff}</span>`}</td></tr>`).join(''),
+      ['Grupo', 'Materia', 'Maestro', 'Col/Obj', 'Estado'], 'warning') : '';
+
+    const secTeachers = anyTarget ? _revSection('Maestros con horas pendientes', 'Docentes cuyo total de horas colocadas no coincide con la carga de sus materias.', teacherGaps.length,
+      teacherGaps.sort((a, b) => a.diff - b.diff).map(t => `<tr><td>${Utils.sanitize(Utils.displayName(t.name))}</td><td class="sch-num">${t.placed}/${t.target}</td><td>${t.diff < 0 ? `<span class="badge badge-warning">faltan ${-t.diff}</span>` : `<span class="badge badge-danger">sobran ${t.diff}</span>`}</td></tr>`).join(''),
+      ['Maestro', 'Col/Obj', 'Estado'], 'warning') : '';
+
+    const secAvail = _revSection('Clases fuera de disponibilidad', 'Clases puestas en horas que el maestro marcó No disponible o Talleres.', outOfAvail.length,
+      outOfAvail.map(e => `<tr><td>${Utils.sanitize(Utils.displayName(e.teacherName))}</td><td>${Utils.sanitize(e.groupName || e.groupId)} · ${Utils.sanitize(e.subjectName || '')}</td><td>${Utils.sanitize(_diaLabel(e.dia))} · M${e.modulo}</td><td>${e.av === 'no' ? '<span class="badge badge-danger">No disponible</span>' : '<span class="badge badge-warning">Talleres</span>'}</td></tr>`).join(''),
+      ['Maestro', 'Clase', 'Cuándo', 'Marcó'], 'danger');
+
+    return `<div class="sch-hint">Revisa aquí antes de publicar: choques, huecos de cobertura y clases fuera de la disponibilidad reportada.</div>
+      ${stats}${noTargetHint}${okMsg}${secConflicts}${secGroups}${secTeachers}${secAvail}`;
+  }
+
+  function _revSection(title, desc, count, rowsHtml, headers, tone) {
+    if (!count) return '';
+    return `<div class="card sch-summary sch-rev-card sch-rev-${tone}">
+      <div class="card-header"><h3 class="card-title">${title} <span class="badge badge-${tone}">${count}</span></h3></div>
+      <div class="sch-rev-desc">${desc}</div>
+      <div class="sch-grid-wrap"><table class="data-table"><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rowsHtml}</tbody></table></div></div>`;
   }
 
   // ─── Modal: asignar / vaciar una celda (vista por grupo) ───
@@ -667,7 +781,49 @@ const HorariosModule = (() => {
     }).join('');
     return `<div class="sch-hint">Define los módulos de cada turno (Lun–Vie). Marca "Receso" en las filas de descanso. Los cambios afectan la rejilla de todos los grupos y maestros.</div>
       <div class="sch-jornada-grid">${turnoBlocks}</div>
-      <div class="sch-jornada-save"><button class="btn btn-success" data-action="jornada-save"><span class="material-icons-round">save</span> Guardar jornada</button></div>`;
+      <div class="sch-jornada-save"><button class="btn btn-success" data-action="jornada-save"><span class="material-icons-round">save</span> Guardar jornada</button></div>
+      ${_renderSubjectHoursCard()}`;
+  }
+
+  // Editor de horas/semana por materia (plan de estudios). Alimenta el cálculo
+  // de faltantes de cobertura en la pestaña Revisión y en el resumen de grupo.
+  function _renderSubjectHoursCard() {
+    const subs = _subjects.slice().sort((a, b) => (Number(a.grado) || 0) - (Number(b.grado) || 0) || (a.nombre || '').localeCompare(b.nombre || ''));
+    if (!subs.length) return '';
+    const rows = subs.map(s => `<tr>
+      <td>${Utils.sanitize((s.grado ? ('G' + s.grado + ' · ') : '') + (s.nombre || s.id))}</td>
+      <td><input type="number" min="0" max="20" class="sch-subjhrs-input" data-subj="${s.id}" value="${s.horasSemana != null ? s.horasSemana : ''}"></td></tr>`).join('');
+    return `<div class="card sch-jornada-card sch-subjhrs-card">
+      <div class="card-header"><h3 class="card-title">Horas por materia (plan de estudios)</h3></div>
+      <div class="sch-rev-desc">Cuántas horas/semana necesita cada materia. Se usa para calcular cuánto falta por colocar en cada grupo (pestaña Revisión).</div>
+      <div class="sch-subjhrs-wrap"><table class="data-table"><thead><tr><th>Materia</th><th>Horas/sem</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="sch-jornada-actions"><button class="btn btn-success btn-sm" data-action="subj-hours-save"><span class="material-icons-round">save</span> Guardar horas por materia</button></div></div>`;
+  }
+
+  async function _saveSubjectHours() {
+    const inputs = [...document.querySelectorAll('#moduleContainer .sch-subjhrs-input')];
+    const changed = [];
+    inputs.forEach(inp => {
+      const id = inp.dataset.subj;
+      const cur = _subjById.get(id);
+      const curVal = (cur && cur.horasSemana != null) ? Number(cur.horasSemana) : null;
+      const newVal = inp.value === '' ? null : (Number(inp.value) || 0);
+      if (newVal !== curVal) changed.push({ id, val: newVal });
+    });
+    if (!changed.length) { Toast.show('No hay cambios en horas por materia', 'info'); return; }
+    try {
+      await Promise.all(changed.map(c => DB.doc('subjects', c.id).set(
+        { horasSemana: c.val === null ? firebase.firestore.FieldValue.delete() : c.val }, { merge: true }
+      )));
+      DB.audit('editar', 'configuración', 'subjects/horasSemana', { description: `Horas por materia actualizadas: ${changed.length} materia(s)` });
+      changed.forEach(c => { const s = _subjById.get(c.id); if (s) s.horasSemana = c.val; });
+      Store.invalidate('subjects');
+      Toast.show(`✓ Horas por materia guardadas (${changed.length})`, 'success');
+      _renderBody();
+    } catch (e) {
+      console.error('[horarios] guardar horas materia:', e);
+      Toast.show('Error al guardar horas: ' + (e.message || e), 'error');
+    }
   }
 
   function _readJornadaFromDOM() {
@@ -754,6 +910,7 @@ const HorariosModule = (() => {
       else if (a === 'jornada-save') { _saveJornada(); }
       else if (a === 'jornada-add') { _jornadaAdd(el.dataset.turno); }
       else if (a === 'jornada-del') { _jornadaDel(el.dataset.turno, el.dataset.idx); }
+      else if (a === 'subj-hours-save') { _saveSubjectHours(); }
     });
     root.addEventListener('change', (e) => {
       if (e.target.id === 'sch-group') { _state.groupId = e.target.value; _renderBody(); }
