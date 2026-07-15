@@ -130,6 +130,7 @@ const MiHorarioModule = (() => {
             <span class="sch-dot avail-no"></span> No disponible</p>
           ${grids}
           <div class="mh-fields">
+            ${_renderPrefsBlock(turnos, horas)}
             <label class="sch-check"><input type="checkbox" id="mh-dos" ${_req && _req.dosPlanteles ? 'checked' : ''}> Trabajo en dos planteles</label>
             <div class="form-group" id="mh-otro-wrap" style="${_req && _req.dosPlanteles ? '' : 'display:none;'}">
               <label for="mh-otro">Otro plantel (nombre y días/horario allá)</label>
@@ -193,6 +194,26 @@ const MiHorarioModule = (() => {
 
   function _dispLabel(est) { return est === 'disp' ? '✓' : (est === 'taller' ? '🛠' : '·'); }
 
+  // Bloque de PREFERENCIAS suaves (no obligan; orientan al sistema al colocar).
+  function _renderPrefsBlock(turnos, horas) {
+    const p = (_req && _req.preferencias) || {};
+    const entrada = p.entrada || 'indistinto';
+    const entradaOpts = K.HORARIOS.PREF_ENTRADA.map(o =>
+      `<label class="sch-check"><input type="radio" name="mh-entrada" value="${o.id}" ${entrada === o.id ? 'checked' : ''}> ${o.label}</label>`).join('');
+    const diasHint = turnos.map(t => {
+      const d = K.diasSugeridos(horas[t]);
+      return d ? `<div class="mh-dias-hint">Con ${horas[t]} h en ${t}, se sugiere concentrar en <strong>${d} día${d > 1 ? 's' : ''}</strong>.</div>` : '';
+    }).join('');
+    return `
+      <div class="mh-pref">
+        <div class="mh-pref-title">Preferencias <span class="sch-muted">(opcional — el sistema las respeta cuando se puede)</span></div>
+        <div class="form-group"><label>Prefiero entrar…</label><div class="mh-radio-row">${entradaOpts}</div></div>
+        <label class="sch-check"><input type="checkbox" id="mh-huecos" ${p.evitarHuecos ? 'checked' : ''}> Evitar horas muertas (que mi día quede compacto)</label>
+        <label class="sch-check"><input type="checkbox" id="mh-concentrar" ${p.concentrarDias ? 'checked' : ''}> Concentrar mis clases en pocos días</label>
+        ${diasHint}
+      </div>`;
+  }
+
   // ─── Guardar ───────────────────────────────────────────────
   async function _save() {
     const disponibilidad = [...document.querySelectorAll('#moduleContainer .sch-disp-cell')]
@@ -201,10 +222,16 @@ const MiHorarioModule = (() => {
     const horasTurno = {};
     document.querySelectorAll('#moduleContainer .sch-hrs-input').forEach(inp => { if (inp.value !== '') horasTurno[inp.dataset.turno] = Number(inp.value) || 0; });
     const dosPlanteles = !!document.getElementById('mh-dos')?.checked;
+    const entradaEl = document.querySelector('#moduleContainer input[name="mh-entrada"]:checked');
+    const preferencias = {
+      entrada: entradaEl ? entradaEl.value : 'indistinto',
+      evitarHuecos: !!document.getElementById('mh-huecos')?.checked,
+      concentrarDias: !!document.getElementById('mh-concentrar')?.checked,
+    };
     const payload = {
       teacherId: _teacherId,
       teacherName: _teacher.nombre || App.currentUser?.displayName || '',
-      disponibilidad, horasTurno,
+      disponibilidad, horasTurno, preferencias,
       dosPlanteles,
       otroPlantel: dosPlanteles ? (document.getElementById('mh-otro')?.value || '').trim() : '',
       necesidades: (document.getElementById('mh-nec')?.value || '').trim(),

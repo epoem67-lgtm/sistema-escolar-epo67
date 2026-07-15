@@ -270,9 +270,25 @@ const HorariosModule = (() => {
       ${stats}
       ${clasesHTML}
       ${availWarn}
+      ${_prefsSummary(req, turnos)}
       ${_renderLegend(true)}
       ${grids}
     `;
+  }
+
+  // Resumen de preferencias del maestro (se muestra al armar su horario).
+  function _prefsSummary(req, turnos) {
+    const p = (req && req.preferencias) || {};
+    const parts = [];
+    if (p.entrada === 'temprano') parts.push('entrar temprano');
+    else if (p.entrada === 'tarde') parts.push('entrar tarde');
+    if (p.evitarHuecos) parts.push('sin horas muertas');
+    if (p.concentrarDias) {
+      const ds = (turnos || []).map(t => K.diasSugeridos((req && req.horasTurno || {})[t])).filter(Boolean);
+      parts.push('pocos días' + (ds.length ? ` (máx ${Math.max(...ds)})` : ''));
+    }
+    if (!parts.length) return '';
+    return `<div class="sch-pref-summary"><span class="material-icons-round">tips_and_updates</span> <strong>Preferencias del maestro:</strong> ${parts.map(Utils.sanitize).join(' · ')}. Las celdas con ★ son las recomendadas para cumplirlas.</div>`;
   }
 
   function _teacherTurnos(teacherId, teacher) {
@@ -300,13 +316,14 @@ const HorariosModule = (() => {
     const mods = _modulos(turno);
     const placing = _placingInfo();
     const placingHere = placing && placing.turno === turno;
+    const recSet = placingHere ? _recommendedSet(teacherId, turno, placing) : null;
 
     const head = `<tr><th class="sch-modcol">Módulo</th>${dias.map(d => `<th>${Utils.sanitize(d.label)}</th>`).join('')}</tr>`;
     const rows = mods.map(m => {
       if (m.receso) {
         return `<tr class="sch-receso-row"><th class="sch-modcol"><div class="sch-mod-time">${m.inicio}–${m.fin}</div></th><td class="sch-receso" colspan="${dias.length}">RECESO</td></tr>`;
       }
-      const cells = dias.map(d => _teacherCell(teacherId, turno, d.id, m.n, placingHere ? placing : null)).join('');
+      const cells = dias.map(d => _teacherCell(teacherId, turno, d.id, m.n, placingHere ? placing : null, recSet)).join('');
       return `<tr><th class="sch-modcol"><div class="sch-mod-n">Módulo ${m.n}</div><div class="sch-mod-time">${m.inicio}–${m.fin}</div></th>${cells}</tr>`;
     }).join('');
 
@@ -324,7 +341,42 @@ const HorariosModule = (() => {
     return { asg: a, groupId, subjectId, turno: (g && g.turno) || a.turno };
   }
 
-  function _teacherCell(teacherId, turno, dia, n, placing) {
+  // Celdas RECOMENDADAS: entre las válidas para colocar, las mejores según las
+  // preferencias del maestro (entrar temprano/tarde, evitar huecos, concentrar
+  // días). Devuelve un Set de `${dia}|${n}` o null si no hay preferencias.
+  function _recommendedSet(teacherId, turno, placing) {
+    const p = (_reqByTeacher.get(teacherId) || {}).preferencias || {};
+    const active = (p.entrada && p.entrada !== 'indistinto') || p.evitarHuecos || p.concentrarDias;
+    if (!active) return null;
+    const mods = _teachingModulos(turno);
+    if (!mods.length) return null;
+    const maxN = Math.max(...mods.map(m => m.n));
+    const dias = _dias();
+    const mineTurno = _entries.filter(e => e.teacherId === teacherId && e.turno === turno);
+    const daysUsed = new Set(mineTurno.map(e => e.dia));
+    const slotHas = (d, num) => mineTurno.some(e => e.dia === d && Number(e.modulo) === Number(num));
+    let best = -Infinity;
+    const scored = [];
+    for (const m of mods) {
+      for (const d of dias) {
+        if (slotHas(d.id, m.n)) continue;
+        const av = _teacherAvail(teacherId, turno, d.id, m.n);
+        if (av === 'no' || av === 'taller') continue;
+        if (_byGroupSlot.get(`${placing.groupId}|${d.id}|${m.n}`)) continue;
+        let s = 0;
+        if (p.entrada === 'temprano') s += (maxN - m.n);
+        else if (p.entrada === 'tarde') s += m.n;
+        if (p.concentrarDias && daysUsed.has(d.id)) s += 20;
+        if (p.evitarHuecos && (slotHas(d.id, m.n - 1) || slotHas(d.id, m.n + 1))) s += 10;
+        scored.push({ key: `${d.id}|${m.n}`, s });
+        if (s > best) best = s;
+      }
+    }
+    if (!scored.length || best <= 0) return null; // nada que destacar
+    return new Set(scored.filter(x => x.s === best).map(x => x.key));
+  }
+
+  function _teacherCell(teacherId, turno, dia, n, placing, recSet) {
     const avail = _teacherAvail(teacherId, turno, dia, n);
     const mineHere = (_byTeacherSlot.get(`${teacherId}|${dia}|${n}`) || []).filter(e => e.turno === turno);
     const availCls = `avail-${avail}`;
@@ -351,7 +403,8 @@ const HorariosModule = (() => {
       if (avail === 'taller') reasons.push('talleres');
       if (groupBusy) reasons.push(`${placing.groupName || placing.groupId} ocupado`);
       if (!reasons.length) {
-        return `<td class="sch-cell empty placeable ${availCls}" data-action="tcell-place" data-dia="${dia}" data-n="${n}" title="Colocar ${Utils.sanitize(placing.asg.subjectName || '')} aquí"><span class="sch-cell-place">colocar</span></td>`;
+        const isRec = recSet && recSet.has(`${dia}|${n}`);
+        return `<td class="sch-cell empty placeable ${isRec ? 'recomendada' : ''} ${availCls}" data-action="tcell-place" data-dia="${dia}" data-n="${n}" title="${isRec ? 'Recomendada por las preferencias del maestro. ' : ''}Colocar ${Utils.sanitize(placing.asg.subjectName || '')} aquí">${isRec ? '<span class="sch-cell-rec">★</span>' : ''}<span class="sch-cell-place">colocar</span></td>`;
       }
       return `<td class="sch-cell empty blocked-opt ${availCls}" title="${Utils.sanitize(reasons.join(' · '))}"><span class="sch-cell-x">✕</span></td>`;
     }
@@ -490,6 +543,29 @@ const HorariosModule = (() => {
       if (av === 'no' || av === 'taller') outOfAvail.push({ ...e, av });
     }
 
+    // 5. Preferencias no cumplidas: días de más (vs regla Gaceta) y horas muertas.
+    const dayOveruse = [];
+    const gaps = [];
+    const esByTeacher = new Map();
+    for (const e of _entries) { if (!esByTeacher.has(e.teacherId)) esByTeacher.set(e.teacherId, []); esByTeacher.get(e.teacherId).push(e); }
+    for (const [tid, es] of esByTeacher) {
+      const r = _reqByTeacher.get(tid);
+      const name = es[0].teacherName;
+      const horasTurno = (r && r.horasTurno) || {};
+      const pref = (r && r.preferencias) || {};
+      for (const turno of [...new Set(es.map(e => e.turno))]) {
+        const te = es.filter(e => e.turno === turno);
+        const daysUsed = new Set(te.map(e => e.dia));
+        const sug = K.diasSugeridos(horasTurno[turno]);
+        if (sug && daysUsed.size > sug) dayOveruse.push({ name, turno, usados: daysUsed.size, sug, pref: !!pref.concentrarDias });
+        for (const dia of daysUsed) {
+          const nums = te.filter(e => e.dia === dia).map(e => Number(e.modulo)).sort((a, b) => a - b);
+          const gap = (nums[nums.length - 1] - nums[0] + 1) - nums.length;
+          if (gap > 0) gaps.push({ name, turno, dia, gap, pref: !!pref.evitarHuecos });
+        }
+      }
+    }
+
     const stats = UI.statsGrid([
       { label: 'Choques de maestro', value: conflicts.length, icon: 'error', colorClass: conflicts.length ? 'danger' : 'success' },
       { label: 'Grupos·materia incompletos', value: anyTarget ? groupGaps.length : '—', icon: 'grid_off', colorClass: groupGaps.length ? 'warning' : 'success' },
@@ -519,8 +595,16 @@ const HorariosModule = (() => {
       outOfAvail.map(e => `<tr><td>${Utils.sanitize(Utils.displayName(e.teacherName))}</td><td>${Utils.sanitize(e.groupName || e.groupId)} · ${Utils.sanitize(e.subjectName || '')}</td><td>${Utils.sanitize(_diaLabel(e.dia))} · M${e.modulo}</td><td>${e.av === 'no' ? '<span class="badge badge-danger">No disponible</span>' : '<span class="badge badge-warning">Talleres</span>'}</td></tr>`).join(''),
       ['Maestro', 'Clase', 'Cuándo', 'Marcó'], 'danger');
 
-    return `<div class="sch-hint">Revisa aquí antes de publicar: choques, huecos de cobertura y clases fuera de la disponibilidad reportada.</div>
-      ${stats}${noTargetHint}${okMsg}${secConflicts}${secGroups}${secTeachers}${secAvail}`;
+    const secDays = _revSection('Concentración de días', 'Docentes que usan más días de los sugeridos por sus horas (regla de la Gaceta). Podrían concentrarse en menos días.', dayOveruse.length,
+      dayOveruse.sort((a, b) => (b.usados - b.sug) - (a.usados - a.sug)).map(x => `<tr><td>${Utils.sanitize(Utils.displayName(x.name))}</td><td>${x.turno}</td><td class="sch-num">${x.usados} / ${x.sug}</td><td>${x.pref ? '<span class="badge badge-warning">lo pidió</span>' : '<span class="sch-muted">—</span>'}</td></tr>`).join(''),
+      ['Maestro', 'Turno', 'Días usa / sugeridos', 'Lo pidió'], 'warning');
+
+    const secGaps = _revSection('Horas muertas', 'Días con huecos entre las clases del maestro (podría compactarse).', gaps.length,
+      gaps.map(x => `<tr><td>${Utils.sanitize(Utils.displayName(x.name))}</td><td>${x.turno} · ${Utils.sanitize(_diaLabel(x.dia))}</td><td class="sch-num">${x.gap}</td><td>${x.pref ? '<span class="badge badge-warning">pidió evitarlas</span>' : '<span class="sch-muted">—</span>'}</td></tr>`).join(''),
+      ['Maestro', 'Cuándo', 'Huecos', 'Preferencia'], 'warning');
+
+    return `<div class="sch-hint">Revisa aquí antes de publicar: choques, huecos de cobertura, clases fuera de disponibilidad y preferencias no cumplidas.</div>
+      ${stats}${noTargetHint}${okMsg}${secConflicts}${secGroups}${secTeachers}${secAvail}${secDays}${secGaps}`;
   }
 
   function _revSection(title, desc, count, rowsHtml, headers, tone) {
@@ -698,6 +782,7 @@ const HorariosModule = (() => {
       <p class="sch-modal-slot"><strong>${Utils.sanitize(Utils.displayName(teacher.nombre))}</strong> · ${Utils.sanitize(teacher.turno || '')}</p>
       <p class="sch-disp-hint">Haz clic en cada celda para cambiar: <span class="sch-dot avail-disp"></span> Disponible → <span class="sch-dot avail-taller"></span> Talleres → <span class="sch-dot avail-no"></span> No disponible</p>
       ${grids}
+      ${_dispPrefsBlock(r, turnos, horas)}
       <div class="sch-req-row">
         <div class="form-group"><label for="sch-prio">Prioridad</label><select id="sch-prio">${prioOpts}</select></div>
         <div class="form-group sch-check-inline"><label class="sch-check"><input type="checkbox" id="sch-dos" ${r.dosPlanteles ? 'checked' : ''}> Trabaja en dos planteles</label></div>
@@ -726,6 +811,21 @@ const HorariosModule = (() => {
 
   function _dispCellLabel(est) { return est === 'disp' ? '✓' : (est === 'taller' ? '🛠' : '·'); }
 
+  // Bloque de preferencias suaves en el modal (Dirección captura lo que el
+  // maestro pidió). Mismos campos que el panel del docente.
+  function _dispPrefsBlock(r, turnos, horas) {
+    const p = (r && r.preferencias) || {};
+    const entrada = p.entrada || 'indistinto';
+    const entradaOpts = K.HORARIOS.PREF_ENTRADA.map(o =>
+      `<label class="sch-check"><input type="radio" name="sch-entrada" value="${o.id}" ${entrada === o.id ? 'checked' : ''}> ${o.label}</label>`).join('');
+    const diasHint = turnos.map(t => { const d = K.diasSugeridos(horas[t]); return d ? `<div class="mh-dias-hint">Con ${horas[t]} h en ${t}: máx. ${d} día(s).</div>` : ''; }).join('');
+    return `<div class="mh-pref"><div class="mh-pref-title">Preferencias (suaves)</div>
+      <div class="form-group"><label>Prefiere entrar…</label><div class="mh-radio-row">${entradaOpts}</div></div>
+      <label class="sch-check"><input type="checkbox" id="sch-huecos" ${p.evitarHuecos ? 'checked' : ''}> Evitar horas muertas (día compacto)</label>
+      <label class="sch-check"><input type="checkbox" id="sch-concentrar" ${p.concentrarDias ? 'checked' : ''}> Concentrar en pocos días</label>
+      ${diasHint}</div>`;
+  }
+
   async function _saveDisp(teacher) {
     // Disponibilidad: solo guardamos celdas 'disp' y 'taller' (ausencia = no).
     const disponibilidad = [...document.querySelectorAll('.sch-disp-cell')]
@@ -734,9 +834,15 @@ const HorariosModule = (() => {
     const horasTurno = {};
     document.querySelectorAll('.sch-hrs-input').forEach(inp => { if (inp.value !== '') horasTurno[inp.dataset.turno] = Number(inp.value) || 0; });
     const dosPlanteles = !!document.getElementById('sch-dos')?.checked;
+    const entradaEl = document.querySelector('input[name="sch-entrada"]:checked');
+    const preferencias = {
+      entrada: entradaEl ? entradaEl.value : 'indistinto',
+      evitarHuecos: !!document.getElementById('sch-huecos')?.checked,
+      concentrarDias: !!document.getElementById('sch-concentrar')?.checked,
+    };
     const payload = {
       teacherId: teacher.id, teacherName: teacher.nombre || '',
-      disponibilidad, horasTurno,
+      disponibilidad, horasTurno, preferencias,
       prioridad: document.getElementById('sch-prio')?.value || 'media',
       dosPlanteles, otroPlantel: dosPlanteles ? (document.getElementById('sch-otro')?.value || '').trim() : '',
       necesidades: (document.getElementById('sch-nec')?.value || '').trim(),

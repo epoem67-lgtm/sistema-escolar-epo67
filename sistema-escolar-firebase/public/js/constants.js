@@ -36,6 +36,13 @@ const K = Object.freeze({
       { id: 'media', label: 'Media', color: '#d97706' },
       { id: 'baja',  label: 'Baja',  color: '#6b7280' },
     ]),
+    // Preferencia SUAVE de a qué hora entrar (no obliga, solo orienta las
+    // sugerencias del sistema al colocar clases).
+    PREF_ENTRADA: Object.freeze([
+      { id: 'temprano',   label: 'Entrar temprano' },
+      { id: 'tarde',      label: 'Entrar tarde' },
+      { id: 'indistinto', label: 'Indistinto' },
+    ]),
     // Estados que un maestro reporta por celda en su propuesta de horario
     // (documento oficial "PROPUESTA HORARIO PERSONAL"):
     //   disp   = Disponibilidad (puede dar clase)
@@ -314,6 +321,22 @@ const K = Object.freeze({
   /** Retorna rubros según el turno */
   getRubros(turno) {
     return turno === 'VESPERTINO' ? this.RUBROS_VESPERTINO : this.RUBROS_MATUTINO;
+  },
+
+  /** Días sugeridos que un docente debería cubrir según sus horas/turno.
+   *  Regla de la Gaceta EPO 67 (viene impresa en la Propuesta de Horario):
+   *    >18 h → 5 días · 15–17 → 4 · 10–14 → 3 · 4–9 → 2 · 1–3 → 1.
+   *  Se usa para concentrar la carga (ej. 8 h ⇒ 2 días) y avisar si el
+   *  horario se dispersa en más días de lo necesario. Retorna null si no hay
+   *  horas capturadas. */
+  diasSugeridos(horas) {
+    const h = Number(horas);
+    if (horas == null || isNaN(h) || h <= 0) return null;
+    if (h > 18) return 5;
+    if (h >= 15) return 4;
+    if (h >= 10) return 3;
+    if (h >= 4) return 2;
+    return 1;
   },
 
   /** Calcula SUMA con regla EPO67 del Punto Extra:
