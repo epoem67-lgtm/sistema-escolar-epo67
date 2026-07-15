@@ -202,7 +202,7 @@ const MiHorarioModule = (() => {
       `<label class="sch-check"><input type="radio" name="mh-entrada" value="${o.id}" ${entrada === o.id ? 'checked' : ''}> ${o.label}</label>`).join('');
     const diasHint = turnos.map(t => {
       const d = K.diasSugeridos(horas[t]);
-      return d ? `<div class="mh-dias-hint">Con ${horas[t]} h en ${t}, se sugiere concentrar en <strong>${d} día${d > 1 ? 's' : ''}</strong>.</div>` : '';
+      return d ? `<div class="mh-dias-hint">Referencia (Gaceta): con ${horas[t]} h en ${t}, alrededor de <strong>${d} día${d > 1 ? 's' : ''}</strong>. Es solo un punto de partida — el acomodo final busca la mayor eficiencia según tus necesidades.</div>` : '';
     }).join('');
     return `
       <div class="mh-pref">

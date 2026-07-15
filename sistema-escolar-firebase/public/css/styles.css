@@ -4078,7 +4078,12 @@ body.role-secretario_admin:not(.module-school-config) input.horas-input:not([rea
 /* Rejilla de disponibilidad (modal) — botones que ciclan estado */
 .sch-disp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .sch-hrs { margin: 0; }
-.sch-hrs-input { width: 70px; padding: 5px 8px; border: 1px solid var(--color-border-dark); border-radius: var(--radius-sm); }
+/* input.<clase> para GANAR en especificidad al input[type=number] base
+   (que fuerza padding 16px 24px y cortaba el número). box-sizing + centrado. */
+input.sch-hrs-input {
+  width: 80px; padding: 7px 10px; text-align: center; box-sizing: border-box;
+  font-size: 14px; border: 1px solid var(--color-border-dark); border-radius: var(--radius-sm);
+}
 .sch-disp-hint { font-size: 12px; color: var(--color-text-body); margin: 6px 0 10px; }
 .sch-dot { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: middle; margin: 0 1px; border: 1px solid rgba(0,0,0,.12); }
 .sch-dot.avail-disp { background: #16a34a; }
@@ -4126,7 +4131,7 @@ body.role-secretario_admin:not(.module-school-config) input.horas-input:not([rea
 /* Editor de horas por materia */
 .sch-subjhrs-card { margin-top: 16px; }
 .sch-subjhrs-wrap { max-height: 340px; overflow-y: auto; }
-.sch-subjhrs-input { width: 68px; padding: 5px 8px; border: 1px solid var(--color-border-dark); border-radius: var(--radius-sm); }
+input.sch-subjhrs-input { width: 80px; padding: 7px 10px; text-align: center; box-sizing: border-box; font-size: 14px; border: 1px solid var(--color-border-dark); border-radius: var(--radius-sm); }
 
 /* Panel del docente — Mi Horario */
 .mh-doc-header {

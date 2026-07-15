@@ -285,7 +285,7 @@ const HorariosModule = (() => {
     if (p.evitarHuecos) parts.push('sin horas muertas');
     if (p.concentrarDias) {
       const ds = (turnos || []).map(t => K.diasSugeridos((req && req.horasTurno || {})[t])).filter(Boolean);
-      parts.push('pocos días' + (ds.length ? ` (máx ${Math.max(...ds)})` : ''));
+      parts.push('pocos días' + (ds.length ? ` (ref. ${Math.max(...ds)})` : ''));
     }
     if (!parts.length) return '';
     return `<div class="sch-pref-summary"><span class="material-icons-round">tips_and_updates</span> <strong>Preferencias del maestro:</strong> ${parts.map(Utils.sanitize).join(' · ')}. Las celdas con ★ son las recomendadas para cumplirlas.</div>`;
@@ -595,7 +595,7 @@ const HorariosModule = (() => {
       outOfAvail.map(e => `<tr><td>${Utils.sanitize(Utils.displayName(e.teacherName))}</td><td>${Utils.sanitize(e.groupName || e.groupId)} · ${Utils.sanitize(e.subjectName || '')}</td><td>${Utils.sanitize(_diaLabel(e.dia))} · M${e.modulo}</td><td>${e.av === 'no' ? '<span class="badge badge-danger">No disponible</span>' : '<span class="badge badge-warning">Talleres</span>'}</td></tr>`).join(''),
       ['Maestro', 'Clase', 'Cuándo', 'Marcó'], 'danger');
 
-    const secDays = _revSection('Concentración de días', 'Docentes que usan más días de los sugeridos por sus horas (regla de la Gaceta). Podrían concentrarse en menos días.', dayOveruse.length,
+    const secDays = _revSection('Concentración de días', 'Referencia (Gaceta): docentes que usan más días que el punto de partida por sus horas. No es una regla dura — revisa si conviene concentrarlos, según sus necesidades y la eficiencia del acomodo.', dayOveruse.length,
       dayOveruse.sort((a, b) => (b.usados - b.sug) - (a.usados - a.sug)).map(x => `<tr><td>${Utils.sanitize(Utils.displayName(x.name))}</td><td>${x.turno}</td><td class="sch-num">${x.usados} / ${x.sug}</td><td>${x.pref ? '<span class="badge badge-warning">lo pidió</span>' : '<span class="sch-muted">—</span>'}</td></tr>`).join(''),
       ['Maestro', 'Turno', 'Días usa / sugeridos', 'Lo pidió'], 'warning');
 
@@ -818,7 +818,7 @@ const HorariosModule = (() => {
     const entrada = p.entrada || 'indistinto';
     const entradaOpts = K.HORARIOS.PREF_ENTRADA.map(o =>
       `<label class="sch-check"><input type="radio" name="sch-entrada" value="${o.id}" ${entrada === o.id ? 'checked' : ''}> ${o.label}</label>`).join('');
-    const diasHint = turnos.map(t => { const d = K.diasSugeridos(horas[t]); return d ? `<div class="mh-dias-hint">Con ${horas[t]} h en ${t}: máx. ${d} día(s).</div>` : ''; }).join('');
+    const diasHint = turnos.map(t => { const d = K.diasSugeridos(horas[t]); return d ? `<div class="mh-dias-hint">Referencia Gaceta: con ${horas[t]} h en ${t} ≈ ${d} día(s). Solo un punto de partida — ajústalo según las necesidades del maestro para el acomodo más eficiente.</div>` : ''; }).join('');
     return `<div class="mh-pref"><div class="mh-pref-title">Preferencias (suaves)</div>
       <div class="form-group"><label>Prefiere entrar…</label><div class="mh-radio-row">${entradaOpts}</div></div>
       <label class="sch-check"><input type="checkbox" id="sch-huecos" ${p.evitarHuecos ? 'checked' : ''}> Evitar horas muertas (día compacto)</label>
