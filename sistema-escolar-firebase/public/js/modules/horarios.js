@@ -50,6 +50,7 @@ const HorariosModule = (() => {
   let _reqByTeacher = new Map();    // teacherId -> request
   let _availByTeacher = new Map();  // teacherId -> Map(`${turno}|${dia}|${n}` -> 'disp'|'taller')
   let _subjById = new Map();        // subjectId -> subject (para horas/semana)
+  let _lastAutoPlan = null;         // último plan del generador automático
 
   const _canEdit = () => App.canActAs('admin') || App.canActAs('subdirector');
 
@@ -173,10 +174,12 @@ const HorariosModule = (() => {
         <span class="material-icons-round">${t.icon}</span>${t.label}
       </button>`).join('');
 
+    const genBtn = _canEdit() ? `<button class="btn btn-primary sch-gen-btn" data-action="auto-generate" title="Arma los horarios automáticamente según disponibilidad y preferencias"><span class="material-icons-round">bolt</span> Generar horarios</button>` : '';
+    const badge = conflicts > 0 ? `<span class="badge badge-danger" title="Maestros en dos lugares a la vez">${conflicts} choque(s)</span>` : `<span class="badge badge-success">Sin choques</span>`;
     const header = UI.pageHeader(
       'Horarios',
-      'Captura la disponibilidad de cada maestro y coloca sus clases: el sistema te muestra en verde las horas donde SÍ puede ir, sin chocar con otros grupos.',
-      conflicts > 0 ? `<span class="badge badge-danger" title="Maestros en dos lugares a la vez">${conflicts} choque(s)</span>` : `<span class="badge badge-success">Sin choques</span>`
+      'El sistema puede armar los horarios solo (botón «Generar»), o los colocas a mano. Respeta la disponibilidad y las necesidades de cada maestro, sin choques.',
+      `${genBtn} ${badge}`
     );
 
     let body = '';
@@ -615,6 +618,189 @@ const HorariosModule = (() => {
       <div class="sch-grid-wrap"><table class="data-table"><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rowsHtml}</tbody></table></div></div>`;
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // GENERADOR AUTOMÁTICO (greedy: más restringido primero)
+  // ═══════════════════════════════════════════════════════════
+  // Reparte las clases que faltan respetando lo DURO (disponibilidad, sin
+  // choque de maestro ni de grupo, horas por materia) y optimizando lo SUAVE
+  // (entrar temprano/tarde, sin horas muertas, concentrar días). No es un
+  // óptimo global garantizado — es un heurístico rápido y transparente cuyo
+  // resultado se revisa y se puede editar a mano.
+
+  // Cuántas horas "disp" tiene un maestro (o todos los módulos si no capturó
+  // disponibilidad) — para medir qué tan apretado está.
+  function _availCountForAuto(teacherId, turnos) {
+    const hasRec = _availByTeacher.has(teacherId);
+    const dias = _dias();
+    let count = 0;
+    for (const turno of turnos) {
+      for (const m of _teachingModulos(turno)) {
+        for (const d of dias) {
+          if (!hasRec) { count++; continue; }
+          if (_teacherAvail(teacherId, turno, d.id, m.n) === 'disp') count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  // Mejor celda para una asignación dado el estado de ocupación en construcción.
+  function _bestSlotFor(a, turno, prefs, groupOcc, teacherOcc) {
+    const mods = _teachingModulos(turno);
+    if (!mods.length) return null;
+    const maxN = Math.max(...mods.map(m => m.n));
+    const dias = _dias();
+    const daysUsed = new Set();
+    for (const key of teacherOcc.keys()) if (key.indexOf(a.teacherId + '|') === 0) daysUsed.add(key.split('|')[1]);
+    const hasSlot = (dia, num) => teacherOcc.has(`${a.teacherId}|${dia}|${num}`);
+    let best = null, bestScore = -Infinity;
+    for (const m of mods) {
+      for (let di = 0; di < dias.length; di++) {
+        const d = dias[di];
+        if (groupOcc.has(`${a.groupId}|${d.id}|${m.n}`)) continue;
+        if (teacherOcc.has(`${a.teacherId}|${d.id}|${m.n}`)) continue;
+        const av = _teacherAvail(a.teacherId, turno, d.id, m.n);
+        if (av === 'no' || av === 'taller') continue;
+        let s = 0;
+        if (prefs.entrada === 'temprano') s += (maxN - m.n);
+        else if (prefs.entrada === 'tarde') s += m.n;
+        else s += (maxN - m.n) * 0.1;                       // por defecto: compactar desde temprano
+        if (daysUsed.has(d.id)) s += prefs.concentrarDias ? 20 : 4;   // concentrar en días ya usados
+        if (hasSlot(d.id, m.n - 1) || hasSlot(d.id, m.n + 1)) s += prefs.evitarHuecos ? 12 : 5; // sin huecos
+        s -= di * 0.001 + m.n * 0.0001;                     // desempate determinista (antes/arriba)
+        if (s > bestScore) { bestScore = s; best = { dia: d.id, n: m.n }; }
+      }
+    }
+    return best;
+  }
+
+  function _computeAutoPlan(fromScratch) {
+    const groupOcc = new Map(), teacherOcc = new Map();
+    if (!fromScratch) {
+      for (const e of _entries) {
+        groupOcc.set(`${e.groupId}|${e.dia}|${e.modulo}`, true);
+        teacherOcc.set(`${e.teacherId}|${e.dia}|${e.modulo}`, true);
+      }
+    }
+    // Demandas: horas que faltan por colocar de cada asignación.
+    const demands = [];
+    for (const a of _assignments) {
+      const target = _targetHours(a.subjectId);
+      if (target <= 0) continue;
+      const placed = fromScratch ? 0 : _placedHours(a.groupId, a.subjectId);
+      const remaining = target - placed;
+      if (remaining > 0) demands.push({ a, remaining });
+    }
+    // Presión por maestro (más apretado = primero).
+    const turnosByT = new Map();
+    for (const a of _assignments) { if (!turnosByT.has(a.teacherId)) turnosByT.set(a.teacherId, new Set()); if (a.turno) turnosByT.get(a.teacherId).add(a.turno); }
+    const demByT = new Map();
+    for (const d of demands) demByT.set(d.a.teacherId, (demByT.get(d.a.teacherId) || 0) + d.remaining);
+    const pressure = new Map();
+    for (const [tid, dem] of demByT) {
+      const turnos = [...(turnosByT.get(tid) || ['MATUTINO'])];
+      const req = _reqByTeacher.get(tid) || {};
+      let p = dem / Math.max(1, _availCountForAuto(tid, turnos));
+      if (req.dosPlanteles) p += 100;
+      if (req.prioridad === 'alta') p += 10; else if (req.prioridad === 'media') p += 3;
+      pressure.set(tid, p);
+    }
+    demands.sort((x, y) => {
+      const pd = (pressure.get(y.a.teacherId) || 0) - (pressure.get(x.a.teacherId) || 0);
+      if (pd) return pd > 0 ? 1 : -1;
+      if (y.remaining !== x.remaining) return y.remaining - x.remaining;
+      const g = (x.a.groupName || '').localeCompare(y.a.groupName || ''); if (g) return g;
+      return (x.a.subjectName || '').localeCompare(y.a.subjectName || '');
+    });
+
+    const toPlace = [], unplaceable = [];
+    for (const d of demands) {
+      const a = d.a;
+      const g = _groups.find(x => x.id === a.groupId);
+      const turno = (g && g.turno) || a.turno;
+      const prefs = (_reqByTeacher.get(a.teacherId) || {}).preferencias || {};
+      let done = 0;
+      for (let h = 0; h < d.remaining; h++) {
+        const slot = _bestSlotFor(a, turno, prefs, groupOcc, teacherOcc);
+        if (!slot) break;
+        toPlace.push({ turno, groupId: a.groupId, groupName: a.groupName || a.groupId, grado: Number(g && g.grado) || null, dia: slot.dia, modulo: slot.n, teacherId: a.teacherId, teacherName: a.teacherName || '', subjectId: a.subjectId, subjectName: a.subjectName || '' });
+        groupOcc.set(`${a.groupId}|${slot.dia}|${slot.n}`, true);
+        teacherOcc.set(`${a.teacherId}|${slot.dia}|${slot.n}`, true);
+        done++;
+      }
+      if (done < d.remaining) unplaceable.push({ a, faltan: d.remaining - done });
+    }
+    return { toPlace, unplaceable, fromScratch };
+  }
+
+  function _openAutoModal() {
+    if (!_canEdit()) return;
+    if (!_assignments.some(a => _targetHours(a.subjectId) > 0)) {
+      Modal.open('Falta definir horas por materia',
+        '<p>Para armar los horarios automáticamente primero define las <strong>horas por materia</strong> en <strong>Configurar jornada</strong>. Sin eso el sistema no sabe cuántas horas colocar de cada materia.</p>',
+        '<button class="btn btn-primary" id="sch-am-close">Entendido</button>');
+      document.getElementById('sch-am-close')?.addEventListener('click', () => Modal.close());
+      return;
+    }
+    let fromScratch = false;
+    const draw = () => {
+      const plan = _computeAutoPlan(fromScratch);
+      _lastAutoPlan = plan;
+      const faltan = plan.unplaceable.reduce((s, u) => s + u.faltan, 0);
+      const body = `<div class="sch-modal">
+        <p>El sistema colocará las clases automáticamente respetando la <strong>disponibilidad</strong> y las <strong>preferencias</strong> de cada maestro (entrar temprano, sin horas muertas, concentrar días), atendiendo primero a los más restringidos. Podrás ajustar a mano lo que quieras después.</p>
+        <label class="sch-check"><input type="checkbox" id="sch-am-scratch" ${fromScratch ? 'checked' : ''}> Empezar desde cero (borra el horario actual antes de generar)</label>
+        <div class="sch-am-summary">
+          <div class="sch-am-stat ok"><span class="material-icons-round">event_available</span> <strong>${plan.toPlace.length}</strong> clase(s) se colocarán</div>
+          ${faltan ? `<div class="sch-am-stat warn"><span class="material-icons-round">error_outline</span> <strong>${faltan}</strong> hora(s) sin ubicar (falta disponibilidad)</div>` : '<div class="sch-am-stat ok"><span class="material-icons-round">check_circle</span> Todo se puede ubicar</div>'}
+        </div>
+        ${plan.unplaceable.length ? `<details class="sch-am-details"><summary>Ver lo que no se pudo ubicar (${plan.unplaceable.length})</summary><ul>${plan.unplaceable.slice(0, 40).map(u => `<li>${Utils.sanitize(u.a.groupName || u.a.groupId)} · ${Utils.sanitize(u.a.subjectName || u.a.subjectId)} — ${Utils.sanitize(Utils.displayName(u.a.teacherName))}: faltan ${u.faltan} h</li>`).join('')}</ul></details>` : ''}
+      </div>`;
+      const footer = `<button class="btn btn-secondary" id="sch-am-cancel">Cancelar</button><button class="btn btn-primary" id="sch-am-go">${fromScratch ? 'Rehacer desde cero' : 'Generar (completar)'}</button>`;
+      Modal.open('Generar horarios automáticamente', body, footer);
+      document.getElementById('sch-am-scratch')?.addEventListener('change', (e) => { fromScratch = e.target.checked; draw(); });
+      document.getElementById('sch-am-cancel')?.addEventListener('click', () => Modal.close());
+      document.getElementById('sch-am-go')?.addEventListener('click', () => _applyAutoPlan(_lastAutoPlan));
+    };
+    draw();
+  }
+
+  async function _applyAutoPlan(plan) {
+    if (!plan || !_canEdit()) return;
+    const go = document.getElementById('sch-am-go');
+    if (go) { go.disabled = true; go.textContent = 'Generando…'; }
+    try {
+      if (plan.fromScratch && _entries.length) {
+        const dels = _entries.slice();
+        for (let i = 0; i < dels.length; i += 400) {
+          const b = DB.batch();
+          dels.slice(i, i + 400).forEach(e => b.delete(DB.doc('scheduleEntries', _entryDocId(e.groupId, e.dia, e.modulo))));
+          await b.commit();
+        }
+      }
+      for (let i = 0; i < plan.toPlace.length; i += 400) {
+        const b = DB.batch();
+        plan.toPlace.slice(i, i + 400).forEach(e => b.set(DB.doc('scheduleEntries', _entryDocId(e.groupId, e.dia, e.modulo)), {
+          turno: e.turno, groupId: e.groupId, groupName: e.groupName, grado: e.grado, dia: e.dia, modulo: Number(e.modulo),
+          teacherId: e.teacherId, teacherName: e.teacherName, subjectId: e.subjectId, subjectName: e.subjectName,
+          updatedAt: DB.timestamp(), updatedBy: auth.currentUser.uid,
+        }));
+        await b.commit();
+      }
+      DB.audit('editar', 'horario', 'auto', { description: `Generación automática: ${plan.toPlace.length} clases${plan.fromScratch ? ' (desde cero)' : ''}` });
+      Store.invalidateSchedule();
+      await _loadData(true);
+      Modal.close();
+      Toast.show(`✓ ${plan.toPlace.length} clases colocadas automáticamente`, 'success');
+      _state.tab = 'revision';
+      _renderBody();
+    } catch (e) {
+      console.error('[horarios] auto:', e);
+      Toast.show('Error al generar: ' + (e.message || e), 'error');
+      if (go) { go.disabled = false; go.textContent = 'Generar'; }
+    }
+  }
+
   // ─── Modal: asignar / vaciar una celda (vista por grupo) ───
   function _openCellModal(groupId, dia, n) {
     if (!_canEdit()) return;
@@ -1006,7 +1192,8 @@ const HorariosModule = (() => {
       const el = e.target.closest('[data-action]');
       if (!el) return;
       const a = el.dataset.action;
-      if (a === 'tab') { _state.tab = el.dataset.tab; _renderBody(); }
+      if (a === 'auto-generate') { _openAutoModal(); }
+      else if (a === 'tab') { _state.tab = el.dataset.tab; _renderBody(); }
       else if (a === 'turno') { _state.turno = el.dataset.turno; _state.groupId = null; _renderBody(); }
       else if (a === 'cell') { _openCellModal(_state.groupId, el.dataset.dia, Number(el.dataset.n)); }
       else if (a === 'pick-class') { _state.placingKey = (_state.placingKey === el.dataset.key) ? null : el.dataset.key; _renderBody(); }
