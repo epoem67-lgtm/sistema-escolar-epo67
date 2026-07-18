@@ -4103,6 +4103,18 @@ input.sch-hrs-input {
 .sw-no { background: #f3f4f6; }
 .sw-place { background: #dcfce7; border: 2px dashed #16a34a; }
 
+/* Talleres institucionales (celdas bloqueadas) */
+.sch-cell.taller-cell {
+  background: repeating-linear-gradient(45deg, #fef3c7, #fef3c7 6px, #fde68a 6px, #fde68a 12px);
+  color: #92400e; font-size: 10.5px; font-weight: 700; letter-spacing: .03em; cursor: not-allowed; text-align: center;
+}
+.sch-disp-taller {
+  display: flex; align-items: center; justify-content: center; min-height: 30px;
+  background: repeating-linear-gradient(45deg, #fef3c7, #fef3c7 5px, #fde68a 5px, #fde68a 10px);
+  border: 1px solid #fcd34d; border-radius: 4px; font-size: 14px; cursor: not-allowed;
+}
+.sch-taller-card .sch-req-grid td { padding: 2px; }
+
 /* Generador automático */
 .sch-gen-btn { background: #7c3aed; border-color: #7c3aed; }
 .sch-gen-btn:hover { background: #6d28d9; border-color: #6d28d9; }

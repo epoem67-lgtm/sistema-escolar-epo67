@@ -21,11 +21,13 @@ const MiHorarioModule = (() => {
   let _req = null;
   let _grid = null;
   let _myEntries = [];
-  let _avail = new Map();     // `${turno}|${dia}|${n}` -> 'disp'|'taller'
+  let _avail = new Map();     // `${turno}|${dia}|${n}` -> 'disp'
+  let _tallerSet = new Set(); // `${turno}|${dia}|${n}` de talleres institucionales
   let _bound = false;
 
   // ─── Helpers de jornada ────────────────────────────────────
   function _dias() { return (_grid && _grid.dias) || K.HORARIOS.DIAS; }
+  function _isTaller(turno, dia, n) { return _tallerSet.has(`${turno}|${dia}|${Number(n)}`); }
   function _modulos(turno) {
     if (_grid && _grid.turnos && Array.isArray(_grid.turnos[turno])) return _grid.turnos[turno];
     return K.HORARIOS.DEFAULT_MODULOS[turno] || K.HORARIOS.DEFAULT_MODULOS.MATUTINO;
@@ -73,9 +75,14 @@ const MiHorarioModule = (() => {
       };
     } else _grid = defGrid();
 
+    // Talleres institucionales (del config o la semilla).
+    const tsrc = (gridSnap.exists && gridSnap.data().talleres) ? gridSnap.data().talleres : K.HORARIOS.DEFAULT_TALLERES;
+    _tallerSet = new Set();
+    for (const turno of K.TURNOS) (tsrc[turno] || []).forEach(t => _tallerSet.add(`${turno}|${t.dia}|${Number(t.modulo)}`));
+
     _avail = new Map();
     if (_req && Array.isArray(_req.disponibilidad)) {
-      for (const s of _req.disponibilidad) _avail.set(`${s.turno}|${s.dia}|${Number(s.modulo)}`, s.estado || 'disp');
+      for (const s of _req.disponibilidad) if (s.estado === 'disp') _avail.set(`${s.turno}|${s.dia}|${Number(s.modulo)}`, 'disp');
     }
     return true;
   }
@@ -124,10 +131,10 @@ const MiHorarioModule = (() => {
       <div class="card mh-card">
         <div class="card-header"><h3 class="card-title">Mi disponibilidad</h3></div>
         <div class="mh-card-body">
-          <p class="sch-disp-hint">Haz clic en cada casilla para cambiar:
-            <span class="sch-dot avail-disp"></span> Disponible →
-            <span class="sch-dot avail-taller"></span> Talleres →
-            <span class="sch-dot avail-no"></span> No disponible</p>
+          <p class="sch-disp-hint">Haz clic en cada casilla para cambiar entre
+            <span class="sch-dot avail-disp"></span> Disponible ↔
+            <span class="sch-dot avail-no"></span> No disponible. Los
+            <span class="sch-dot avail-taller"></span> <strong>talleres (martes y jueves)</strong> son institucionales y ya vienen fijos — no se marcan.</p>
           ${grids}
           <div class="mh-fields">
             ${_renderPrefsBlock(turnos, horas)}
@@ -160,6 +167,7 @@ const MiHorarioModule = (() => {
     const rows = mods.map(m => {
       if (m.receso) return `<tr class="sch-receso-row"><th class="sch-modcol"><div class="sch-mod-time">${m.inicio}–${m.fin}</div></th><td class="sch-receso" colspan="${dias.length}">RECESO</td></tr>`;
       const cells = dias.map(d => {
+        if (_isTaller(turno, d.id, m.n)) return `<td class="mh-cell"><div class="sch-disp-taller" title="Taller institucional (fijo)">🛠</div></td>`;
         const est = _avail.get(`${turno}|${d.id}|${m.n}`) || 'no';
         return `<td class="mh-cell"><button type="button" class="sch-disp-cell avail-${est}" data-turno="${turno}" data-dia="${d.id}" data-n="${m.n}" data-est="${est}">${_dispLabel(est)}</button></td>`;
       }).join('');
@@ -217,8 +225,8 @@ const MiHorarioModule = (() => {
   // ─── Guardar ───────────────────────────────────────────────
   async function _save() {
     const disponibilidad = [...document.querySelectorAll('#moduleContainer .sch-disp-cell')]
-      .filter(c => c.dataset.est !== 'no')
-      .map(c => ({ turno: c.dataset.turno, dia: c.dataset.dia, modulo: Number(c.dataset.n), estado: c.dataset.est }));
+      .filter(c => c.dataset.est === 'disp')
+      .map(c => ({ turno: c.dataset.turno, dia: c.dataset.dia, modulo: Number(c.dataset.n), estado: 'disp' }));
     const horasTurno = {};
     document.querySelectorAll('#moduleContainer .sch-hrs-input').forEach(inp => { if (inp.value !== '') horasTurno[inp.dataset.turno] = Number(inp.value) || 0; });
     const dosPlanteles = !!document.getElementById('mh-dos')?.checked;
@@ -267,7 +275,7 @@ const MiHorarioModule = (() => {
     root.addEventListener('click', (e) => {
       const cell = e.target.closest('.sch-disp-cell');
       if (cell) {
-        const order = ['disp', 'taller', 'no'];
+        const order = ['disp', 'no'];
         const next = order[(order.indexOf(cell.dataset.est || 'no') + 1) % order.length];
         cell.dataset.est = next;
         cell.className = `sch-disp-cell avail-${next}`;

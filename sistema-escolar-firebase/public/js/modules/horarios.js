@@ -51,6 +51,7 @@ const HorariosModule = (() => {
   let _availByTeacher = new Map();  // teacherId -> Map(`${turno}|${dia}|${n}` -> 'disp'|'taller')
   let _subjById = new Map();        // subjectId -> subject (para horas/semana)
   let _lastAutoPlan = null;         // último plan del generador automático
+  let _tallerSet = new Set();       // `${turno}|${dia}|${n}` de talleres institucionales
 
   const _canEdit = () => App.canActAs('admin') || App.canActAs('subdirector');
 
@@ -112,8 +113,15 @@ const HorariosModule = (() => {
     } else {
       _grid = defGrid();
     }
+    // Talleres institucionales: del config si existe, si no la semilla.
+    const tsrc = (gridSnap && gridSnap.exists && gridSnap.data().talleres) ? gridSnap.data().talleres : K.HORARIOS.DEFAULT_TALLERES;
+    _grid.talleres = { MATUTINO: (tsrc.MATUTINO || []).map(t => ({ ...t })), VESPERTINO: (tsrc.VESPERTINO || []).map(t => ({ ...t })) };
+    _tallerSet = new Set();
+    for (const turno of K.TURNOS) (_grid.talleres[turno] || []).forEach(t => _tallerSet.add(`${turno}|${t.dia}|${Number(t.modulo)}`));
     _rebuildIndices();
   }
+
+  function _isTaller(turno, dia, n) { return _tallerSet.has(`${turno}|${dia}|${Number(n)}`); }
 
   function _rebuildIndices() {
     _byGroupSlot = new Map();
@@ -142,8 +150,10 @@ const HorariosModule = (() => {
     const arr = _byTeacherSlot.get(`${teacherId}|${dia}|${n}`) || [];
     return arr.find(e => e.groupId !== exceptGroupId) || null;
   }
-  // Estado de disponibilidad reportado: 'disp' | 'taller' | 'no' | 'unknown'.
+  // Estado de disponibilidad: 'disp' | 'taller' | 'no' | 'unknown'.
+  // Los TALLERES institucionales ganan siempre (nadie da clase ahí).
   function _teacherAvail(teacherId, turno, dia, n) {
+    if (_isTaller(turno, dia, n)) return 'taller';
     const m = _availByTeacher.get(teacherId);
     if (!m) return 'unknown';           // el maestro no ha reportado nada
     return m.get(`${turno}|${dia}|${n}`) || 'no'; // reportó, pero esta celda no está marcada = no disponible
@@ -463,6 +473,10 @@ const HorariosModule = (() => {
       if (m.receso) return `<tr class="sch-receso-row"><th class="sch-modcol"><div class="sch-mod-time">${m.inicio}–${m.fin}</div></th><td class="sch-receso" colspan="${dias.length}">RECESO</td></tr>`;
       const cells = dias.map(d => {
         const e = _byGroupSlot.get(`${groupId}|${d.id}|${m.n}`);
+        if (_isTaller(group.turno, d.id, m.n)) {
+          // Taller institucional: bloqueado, no asignable.
+          return `<td class="sch-cell taller-cell" title="Taller institucional (martes y jueves) — no se asignan clases">🛠 TALLERES${e ? '<div class="sch-cell-warn">⚠ hay clase aquí, quítala</div>' : ''}</td>`;
+        }
         if (e) {
           const conflict = _teacherConflict(e.teacherId, d.id, m.n, groupId);
           const cls = conflict ? 'sch-cell filled conflict' : 'sch-cell filled';
@@ -954,6 +968,7 @@ const HorariosModule = (() => {
       const mods = _teachingModulos(turno);
       const head = `<tr><th></th>${dias.map(d => `<th>${d.id}</th>`).join('')}</tr>`;
       const body = mods.map(m => `<tr><th class="sch-req-modh">M${m.n}<br><span class="sch-mod-time">${m.inicio}</span></th>${dias.map(d => {
+        if (_isTaller(turno, d.id, m.n)) return `<td><div class="sch-disp-taller" title="Taller institucional (fijo)">🛠</div></td>`;
         const est = availMap.get(`${turno}|${d.id}|${m.n}`) || 'no';
         return `<td><button type="button" class="sch-disp-cell avail-${est}" data-turno="${turno}" data-dia="${d.id}" data-n="${m.n}" data-est="${est}">${_dispCellLabel(est)}</button></td>`;
       }).join('')}</tr>`).join('');
@@ -966,7 +981,7 @@ const HorariosModule = (() => {
 
     const body = `<div class="sch-modal sch-req-modal">
       <p class="sch-modal-slot"><strong>${Utils.sanitize(Utils.displayName(teacher.nombre))}</strong> · ${Utils.sanitize(teacher.turno || '')}</p>
-      <p class="sch-disp-hint">Haz clic en cada celda para cambiar: <span class="sch-dot avail-disp"></span> Disponible → <span class="sch-dot avail-taller"></span> Talleres → <span class="sch-dot avail-no"></span> No disponible</p>
+      <p class="sch-disp-hint">Haz clic en cada celda: <span class="sch-dot avail-disp"></span> Disponible ↔ <span class="sch-dot avail-no"></span> No disponible. Los <span class="sch-dot avail-taller"></span> <strong>talleres (mar/jue)</strong> son institucionales y fijos — no se editan.</p>
       ${grids}
       ${_dispPrefsBlock(r, turnos, horas)}
       <div class="sch-req-row">
@@ -979,10 +994,10 @@ const HorariosModule = (() => {
     const footer = `<button class="btn btn-secondary" id="sch-req-cancel">Cancelar</button><button class="btn btn-primary" id="sch-req-save">Guardar disponibilidad</button>`;
     Modal.open('Disponibilidad del maestro', body, footer);
 
-    // Ciclado de celdas disp→taller→no.
+    // Ciclado de celdas: solo Disponible ↔ No disponible (taller es fijo).
     document.querySelectorAll('.sch-disp-cell').forEach(btn => {
       btn.addEventListener('click', () => {
-        const order = ['disp', 'taller', 'no'];
+        const order = ['disp', 'no'];
         const cur = btn.dataset.est || 'no';
         const next = order[(order.indexOf(cur) + 1) % order.length];
         btn.dataset.est = next;
@@ -1013,10 +1028,11 @@ const HorariosModule = (() => {
   }
 
   async function _saveDisp(teacher) {
-    // Disponibilidad: solo guardamos celdas 'disp' y 'taller' (ausencia = no).
+    // Disponibilidad del maestro: solo celdas 'disp' (los talleres son fijos y
+    // no se guardan aquí). Ausencia = no disponible.
     const disponibilidad = [...document.querySelectorAll('.sch-disp-cell')]
-      .filter(c => c.dataset.est !== 'no')
-      .map(c => ({ turno: c.dataset.turno, dia: c.dataset.dia, modulo: Number(c.dataset.n), estado: c.dataset.est }));
+      .filter(c => c.dataset.est === 'disp')
+      .map(c => ({ turno: c.dataset.turno, dia: c.dataset.dia, modulo: Number(c.dataset.n), estado: 'disp' }));
     const horasTurno = {};
     document.querySelectorAll('.sch-hrs-input').forEach(inp => { if (inp.value !== '') horasTurno[inp.dataset.turno] = Number(inp.value) || 0; });
     const dosPlanteles = !!document.getElementById('sch-dos')?.checked;
@@ -1073,8 +1089,25 @@ const HorariosModule = (() => {
     }).join('');
     return `<div class="sch-hint">Define los módulos de cada turno (Lun–Vie). Marca "Receso" en las filas de descanso. Los cambios afectan la rejilla de todos los grupos y maestros.</div>
       <div class="sch-jornada-grid">${turnoBlocks}</div>
-      <div class="sch-jornada-save"><button class="btn btn-success" data-action="jornada-save"><span class="material-icons-round">save</span> Guardar jornada</button></div>
+      ${_renderTalleresCard()}
+      <div class="sch-jornada-save"><button class="btn btn-success" data-action="jornada-save"><span class="material-icons-round">save</span> Guardar jornada y talleres</button></div>
       ${_renderSubjectHoursCard()}`;
+  }
+
+  // Editor de TALLERES institucionales (fijos para todos). Se guardan junto con
+  // la jornada. Por defecto: martes y jueves 12:20–14:00.
+  function _renderTalleresCard() {
+    const blocks = K.TURNOS.map(turno => {
+      const dias = _dias();
+      const mods = _teachingModulos(turno);
+      const head = `<tr><th></th>${dias.map(d => `<th>${d.id}</th>`).join('')}</tr>`;
+      const body = mods.map(m => `<tr><th class="sch-req-modh">M${m.n}<br><span class="sch-mod-time">${m.inicio}</span></th>${dias.map(d => `<td><label class="sch-check"><input type="checkbox" class="sch-taller-cb" data-turno="${turno}" data-dia="${d.id}" data-n="${m.n}" ${_isTaller(turno, d.id, m.n) ? 'checked' : ''}></label></td>`).join('')}</tr>`).join('');
+      return `<div class="sch-req-blockwrap"><h5>${turno}</h5><table class="sch-req-grid"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+    }).join('');
+    return `<div class="card sch-jornada-card sch-taller-card">
+      <div class="card-header"><h3 class="card-title">🛠 Talleres institucionales (fijos)</h3></div>
+      <div class="sch-rev-desc">Módulos de taller para TODOS (martes y jueves, 12:20–14:00 por defecto). Ahí no se asignan clases ni se captura disponibilidad. Marca/desmarca y guarda con el botón de abajo.</div>
+      <div class="sch-jornada-grid">${blocks}</div></div>`;
   }
 
   // Editor de horas/semana por materia (plan de estudios). Alimenta el cálculo
@@ -1137,11 +1170,18 @@ const HorariosModule = (() => {
     const turnos = _readJornadaFromDOM();
     if (!turnos.MATUTINO.length && !turnos.VESPERTINO.length) { Toast.show('Debe haber al menos un módulo', 'warning'); return; }
     const dias = _dias().map(d => ({ id: d.id, label: d.label }));
+    // Talleres institucionales marcados en el editor.
+    const talleres = { MATUTINO: [], VESPERTINO: [] };
+    document.querySelectorAll('#moduleContainer .sch-taller-cb').forEach(cb => {
+      if (cb.checked && talleres[cb.dataset.turno]) talleres[cb.dataset.turno].push({ dia: cb.dataset.dia, modulo: Number(cb.dataset.n) });
+    });
     try {
-      await DB.doc('config', 'scheduleGrid').set({ dias, turnos, updatedAt: DB.timestamp(), updatedBy: auth.currentUser.uid }, { merge: true });
-      DB.audit('editar', 'configuración', 'scheduleGrid', { description: `Jornada actualizada: ${turnos.MATUTINO.filter(m => !m.receso).length} módulos matutino, ${turnos.VESPERTINO.filter(m => !m.receso).length} vespertino` });
-      _grid = { dias, turnos };
-      Toast.show('✓ Jornada guardada', 'success');
+      await DB.doc('config', 'scheduleGrid').set({ dias, turnos, talleres, updatedAt: DB.timestamp(), updatedBy: auth.currentUser.uid }, { merge: true });
+      DB.audit('editar', 'configuración', 'scheduleGrid', { description: `Jornada actualizada: ${turnos.MATUTINO.filter(m => !m.receso).length} mód. mat, ${turnos.VESPERTINO.filter(m => !m.receso).length} vesp; ${talleres.MATUTINO.length + talleres.VESPERTINO.length} talleres` });
+      _grid = { dias, turnos, talleres };
+      _tallerSet = new Set();
+      for (const t of K.TURNOS) (talleres[t] || []).forEach(x => _tallerSet.add(`${t}|${x.dia}|${Number(x.modulo)}`));
+      Toast.show('✓ Jornada y talleres guardados', 'success');
       _renderBody();
     } catch (e) {
       console.error('[horarios] guardar jornada:', e);

@@ -80,6 +80,19 @@ const K = Object.freeze({
         { n: 8, inicio: '19:20', fin: '20:10' },
       ]),
     }),
+    // TALLERES INSTITUCIONALES (fijos, iguales para todos): martes y jueves
+    // 12:20–14:00. Nadie los elige y NO se pueden asignar clases ahí.
+    // Matutino: módulos 7 (12:20–13:10) y 8 (13:10–14:00). Vespertino: módulo
+    // 1 (13:10–14:00, único bloque que traslapa). Editable en Configurar jornada.
+    DEFAULT_TALLERES: Object.freeze({
+      MATUTINO: Object.freeze([
+        { dia: 'MAR', modulo: 7 }, { dia: 'MAR', modulo: 8 },
+        { dia: 'JUE', modulo: 7 }, { dia: 'JUE', modulo: 8 },
+      ]),
+      VESPERTINO: Object.freeze([
+        { dia: 'MAR', modulo: 1 }, { dia: 'JUE', modulo: 1 },
+      ]),
+    }),
   }),
 
   // ─── Roles del sistema ─────────────────────────────────────
